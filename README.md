@@ -43,6 +43,8 @@ for chunk in result.chunks:
   - `SourceInfo`
   - `SourceEvidence`
 - Supports UTF-8 text/Markdown parsing as the first contract fixture.
+- Selects a parser backend by suffix; `.md`, `.markdown`, and `.txt` are
+  currently backed by the built-in Markdown backend.
 - Requires an LLM configuration and fails parsing when chunk enrichment is
   missing or invalid.
 - Converts simple Markdown tables into table evidence units with:

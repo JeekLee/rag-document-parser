@@ -178,3 +178,88 @@ def test_parse_fails_when_llm_enrichment_is_invalid(monkeypatch):
         assert "LLM enrichment failed" in str(exc)
     else:
         raise AssertionError("expected ValueError")
+
+
+def test_custom_backend_can_be_registered_for_suffix(monkeypatch):
+    from rag_document_parser import (
+        Evidence,
+        LlmConfig,
+        RagChunk,
+        RagDocumentParser,
+        SourceEvidence,
+    )
+    from rag_document_parser.backends import ParsedDocument
+
+    monkeypatch.setattr(
+        "rag_document_parser.parser._chat_json",
+        lambda prompt, cfg: {
+            "summary": "Custom backend summary.",
+            "keywords": ["custom"],
+            "questions": ["What did the custom backend parse?"],
+        },
+    )
+
+    class CustomBackend:
+        calls: list[tuple[bytes, str]]
+
+        def __init__(self) -> None:
+            self.calls = []
+
+        def parse(self, data: bytes, suffix: str) -> ParsedDocument:
+            self.calls.append((data, suffix))
+            return ParsedDocument(
+                chunks=[
+                    RagChunk(
+                        id="c1",
+                        type="text",
+                        source=SourceEvidence(kind="text", text="custom text"),
+                        evidence=Evidence(kind="text", format="plain", content="custom text"),
+                        summary="",
+                    )
+                ],
+                quality_warnings=[
+                    {
+                        "type": "custom_warning",
+                        "severity": "low",
+                        "message": "backend warning",
+                    }
+                ],
+            )
+
+    backend = CustomBackend()
+    result = RagDocumentParser(
+        llm=LlmConfig(url="http://llm.test/v1", api_key="test", model="test-model"),
+        backends={".custom": backend},
+    ).parse(b"custom bytes", suffix=".CUSTOM")
+
+    assert backend.calls == [(b"custom bytes", ".custom")]
+    assert result.source.suffix == ".custom"
+    assert result.chunks[0].source.text == "custom text"
+    assert result.chunks[0].summary == "Custom backend summary."
+    assert result.quality_warnings == [
+        {
+            "type": "custom_warning",
+            "severity": "low",
+            "message": "backend warning",
+        }
+    ]
+
+
+def test_unsupported_suffix_fails_before_llm_call(monkeypatch):
+    from rag_document_parser import LlmConfig, RagDocumentParser
+
+    def fail_chat_json(prompt, cfg):
+        raise AssertionError("LLM should not be called for unsupported formats")
+
+    monkeypatch.setattr("rag_document_parser.parser._chat_json", fail_chat_json)
+
+    parser = RagDocumentParser(
+        llm=LlmConfig(url="http://llm.test/v1", api_key="test", model="test-model")
+    )
+    try:
+        parser.parse(b"not supported", suffix=".docx")
+    except ValueError as exc:
+        assert "Unsupported format" in str(exc)
+        assert ".docx" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
