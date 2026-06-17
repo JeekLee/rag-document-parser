@@ -182,6 +182,45 @@ def test_render_evidence_unit_prefers_direct_content_over_legacy_evidence():
     assert "legacy content" not in html
 
 
+def test_render_legacy_evidence_when_unit_only_has_top_level_type():
+    from rag_document_parser.evidence_html import render_evidence_units_html
+
+    html = render_evidence_units_html(
+        [
+            {
+                "id": "b1",
+                "type": "image",
+                "source": {"kind": "image", "text": "image: img-0001"},
+                "evidence": {
+                    "kind": "image",
+                    "format": "asset_ref",
+                    "content": {
+                        "asset_id": "img-0001",
+                        "caption": "legacy image",
+                    },
+                },
+                "metadata": {},
+            }
+        ],
+        title="legacy fallback",
+        assets=[
+            {
+                "id": "img-0001",
+                "uri": "s3://bucket/doc/img.png",
+                "public_url": "http://example.test/img.png",
+                "mime": "image/png",
+                "ext": "png",
+                "sha256": "abc",
+                "bytes": 3,
+            }
+        ],
+    )
+
+    assert "legacy image" in html
+    assert 'src="http://example.test/img.png"' in html
+    assert "None" not in html
+
+
 def test_render_evidence_image_uses_public_url_while_showing_source_uri():
     from rag_document_parser.evidence_html import render_evidence_units_html
 
