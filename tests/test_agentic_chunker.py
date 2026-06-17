@@ -152,6 +152,9 @@ def test_agentic_chunker_uses_rich_korean_llm_prompt_contract(monkeypatch):
     assert '"row_count": 2' in prompt
     assert '"항목"' in prompt
     assert '"내용"' in prompt
+    assert "{{" not in prompt
+    assert "}}" not in prompt
+    assert '    "unit_ids": ["b1"]' in prompt
     assert "evidence content는 작성하지 않습니다" in prompt
     assert "evidence content는 unit에서 복사됩니다" in prompt
     assert chunks[0].summary == "표 전체를 제공한다."

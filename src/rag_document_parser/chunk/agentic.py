@@ -32,16 +32,16 @@ Unit 목록:
 
 JSON 배열만 출력하세요:
 [
-  {{
+  {
     "unit_ids": ["b1"],
     "operations": [
-      {{"unit_id": "b1", "action": "include"}}
+      {"unit_id": "b1", "action": "include"}
     ],
     "title": "제목",
     "summary": "요약",
     "keywords": ["키워드"],
     "questions": ["이 chunk로 답할 수 있는 질문"]
-  }}
+  }
 ]
 """
 
