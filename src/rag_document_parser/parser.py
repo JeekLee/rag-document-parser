@@ -1,13 +1,22 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
+from typing import Any
 
+from .llm import LlmConfig, chat_json as _chat_json
 from .models import Evidence, ParseResult, RagChunk, SourceEvidence, SourceInfo
 
 
 @dataclass
 class RagDocumentParser:
+    llm: LlmConfig | None = None
+
+    def __post_init__(self) -> None:
+        if self.llm is None:
+            raise ValueError("llm is required")
+
     def parse(
         self,
         source: bytes | str,
@@ -31,7 +40,7 @@ class RagDocumentParser:
         )
         return ParseResult(
             source=source_info,
-            chunks=_chunks_from_markdown(markdown),
+            chunks=_enrich_chunks(_chunks_from_markdown(markdown), self.llm),
         )
 
 
@@ -61,8 +70,8 @@ def _chunks_from_markdown(markdown: str) -> list[RagChunk]:
                     text=text,
                     section_path=list(section_path),
                 ),
-                embedding_text=_with_section(section_path, text),
                 evidence=Evidence(kind="text", format="plain", content=text),
+                summary="",
                 metadata={
                     "common": {
                         "chunk_kind": "text",
@@ -96,12 +105,12 @@ def _chunks_from_markdown(markdown: str) -> list[RagChunk]:
                     headers=headers,
                     rows=_source_rows(headers, rows),
                 ),
-                embedding_text=_table_llm_text(lines, section_path),
                 evidence=Evidence(
                     kind="table",
                     format="markdown_table",
                     content="\n".join(lines),
                 ),
+                summary="",
                 metadata={
                     "common": {
                         "chunk_kind": "table",
@@ -142,29 +151,74 @@ def _chunks_from_markdown(markdown: str) -> list[RagChunk]:
     return chunks
 
 
-def _with_section(section_path: list[str], text: str) -> str:
-    if not section_path:
-        return text
-    return f"section: {' > '.join(section_path)}\n{text}"
+def _enrich_chunks(chunks: list[RagChunk], llm: LlmConfig | None) -> list[RagChunk]:
+    if llm is None:
+        raise ValueError("llm is required")
+
+    enriched: list[RagChunk] = []
+    for chunk in chunks:
+        enrichment = _chunk_enrichment(chunk, llm)
+        enriched.append(
+            RagChunk(
+                id=chunk.id,
+                type=chunk.type,
+                source=chunk.source,
+                evidence=chunk.evidence,
+                summary=enrichment["summary"],
+                keywords=enrichment["keywords"],
+                questions=enrichment["questions"],
+                metadata=chunk.metadata,
+            )
+        )
+    return enriched
 
 
-def _table_llm_text(lines: list[str], section_path: list[str]) -> str:
-    columns, body_rows = _table_parts(lines)
-    if not columns:
-        return _with_section(section_path, "table:\n" + "\n".join(lines))
+def _chunk_enrichment(chunk: RagChunk, llm: LlmConfig) -> dict[str, Any]:
+    prompt = _enrichment_prompt(chunk)
+    payload = _chat_json(prompt, llm)
+    enrichment = _normalize_enrichment(payload)
+    if enrichment is None:
+        raise ValueError(f"LLM enrichment failed for chunk {chunk.id}")
+    return enrichment
 
-    rendered_rows: list[str] = []
-    for index, row in enumerate(body_rows, start=1):
-        cells = []
-        for column, value in zip(columns, row, strict=False):
-            cells.append(f"{column}={value}")
-        rendered_rows.append(f"row {index}: {'; '.join(cells)}")
 
-    text = "table:\n"
-    text += f"columns: {' | '.join(columns)}"
-    if rendered_rows:
-        text += "\n" + "\n".join(rendered_rows)
-    return _with_section(section_path, text)
+def _enrichment_prompt(chunk: RagChunk) -> str:
+    payload = {
+        "id": chunk.id,
+        "type": chunk.type,
+        "source": chunk.source.to_dict(),
+        "evidence": chunk.evidence.to_dict(),
+        "metadata": chunk.metadata,
+    }
+    return (
+        "아래 문서 청크를 RAG 검색과 근거 제시에 사용할 수 있도록 보강해줘.\n"
+        "반드시 다음 JSON object만 반환해: "
+        '{"summary": string, "keywords": string[], "questions": string[]}.\n'
+        "summary는 청크 내용을 짧게 요약하고, keywords는 검색에 유용한 핵심어를 뽑고, "
+        "questions는 이 청크만으로 답변 가능한 질문을 작성해.\n\n"
+        f"{json.dumps(payload, ensure_ascii=False)}"
+    )
+
+
+def _normalize_enrichment(payload: Any) -> dict[str, Any] | None:
+    if not isinstance(payload, dict):
+        return None
+    summary = payload.get("summary")
+    keywords = payload.get("keywords")
+    questions = payload.get("questions")
+    if not isinstance(summary, str) or not summary.strip():
+        return None
+    if not _is_string_list(keywords) or not _is_string_list(questions):
+        return None
+    return {
+        "summary": summary.strip(),
+        "keywords": [item.strip() for item in keywords if item.strip()],
+        "questions": [item.strip() for item in questions if item.strip()],
+    }
+
+
+def _is_string_list(value: Any) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
 
 
 def _table_parts(lines: list[str]) -> tuple[list[str], list[list[str]]]:

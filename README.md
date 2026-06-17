@@ -1,19 +1,35 @@
 # rag-document-parser
 
-RAG-ready document parser for producing embedding text, source evidence, and
-user-facing evidence payloads from document formats such as HWP, HWPX, and PDF.
+RAG-ready document parser for producing source evidence, user-facing evidence
+payloads, and LLM-enriched chunk metadata from document formats such as HWP,
+HWPX, and PDF.
 
 The parser is not a Markdown converter. Its primary output is source-preserving
 evidence units for downstream agentic chunking, embedding, retrieval, LLM
 grounding, and user-facing evidence display.
 
 ```python
-from rag_document_parser import RagDocumentParser
+import os
 
-result = RagDocumentParser().parse(raw_bytes, suffix=".md")
+from rag_document_parser import LlmConfig, RagDocumentParser
+
+parser = RagDocumentParser(
+    llm=LlmConfig(
+        url="https://api.openai.com/v1",
+        api_key=os.environ["OPENAI_API_KEY"],
+        model="gpt-4.1-mini",
+    )
+)
+
+result = parser.parse(raw_bytes, suffix=".md")
 
 for chunk in result.chunks:
-    embed(chunk.embedding_text)
+    index_payload = {
+        "summary": chunk.summary,
+        "keywords": chunk.keywords,
+        "questions": chunk.questions,
+        "source": chunk.source,
+    }
     send_to_llm(chunk.source)
     store_evidence(chunk.evidence)
 ```
@@ -27,9 +43,11 @@ for chunk in result.chunks:
   - `SourceInfo`
   - `SourceEvidence`
 - Supports UTF-8 text/Markdown parsing as the first contract fixture.
+- Requires an LLM configuration and fails parsing when chunk enrichment is
+  missing or invalid.
 - Converts simple Markdown tables into table evidence units with:
   - structured source evidence for LLM context
-  - embedding-oriented text
+  - LLM-generated summaries, keywords, and answerable questions
   - user-facing evidence payloads
   - `agentic-chunker`-compatible metadata such as `common.chunk_kind`
 

@@ -73,8 +73,10 @@ class RagChunk:
     id: str
     type: str
     source: SourceEvidence
-    embedding_text: str
     evidence: Evidence
+    summary: str
+    keywords: list[str] = field(default_factory=list)
+    questions: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -82,8 +84,10 @@ class RagChunk:
             "id": self.id,
             "type": self.type,
             "source": self.source.to_dict(),
-            "embedding_text": self.embedding_text,
             "evidence": self.evidence.to_dict(),
+            "summary": self.summary,
+            "keywords": list(self.keywords),
+            "questions": list(self.questions),
             "metadata": dict(self.metadata),
         }
 
