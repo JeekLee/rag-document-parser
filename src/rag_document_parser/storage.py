@@ -98,6 +98,26 @@ def put_object(cfg: S3Config, key: str, data: bytes, content_type: str) -> str:
     return f"s3://{cfg.bucket}/{full_key}"
 
 
+def public_url_for_s3_uri(uri: str, endpoint: str) -> str:
+    bucket, key = _parse_s3_uri(uri)
+    parsed = urllib.parse.urlparse(endpoint)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError(f"public endpoint must be an HTTP(S) URL: {endpoint}")
+
+    path_prefix = parsed.path.rstrip("/")
+    bucket_path = urllib.parse.quote(bucket, safe="")
+    key_path = urllib.parse.quote(key, safe="/")
+    path = f"{path_prefix}/{bucket_path}/{key_path}" if path_prefix else f"/{bucket_path}/{key_path}"
+    return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
+
+
+def _parse_s3_uri(uri: str) -> tuple[str, str]:
+    parsed = urllib.parse.urlparse(uri)
+    if parsed.scheme != "s3" or not parsed.netloc or not parsed.path.strip("/"):
+        raise ValueError(f"expected s3://bucket/key URI: {uri}")
+    return parsed.netloc, parsed.path.lstrip("/")
+
+
 def _sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
