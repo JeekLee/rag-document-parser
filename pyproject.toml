@@ -1,7 +1,7 @@
 [project]
 name = "rag-document-parser"
 version = "0.1.0"
-description = "RAG-ready document parser with chunks, evidence, and source pointers"
+description = "RAG-ready document parser with source evidence and LLM-enriched chunks"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
