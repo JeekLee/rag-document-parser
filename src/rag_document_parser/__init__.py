@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .backends import DocumentBackend, MarkdownBackend, ParsedDocument
+from .hwpx import HwpxBackend
 from .llm import LlmConfig
 from .models import (
     DocumentAsset,
@@ -20,6 +21,7 @@ __all__ = [
     "DocumentAsset",
     "Evidence",
     "EvidenceUnit",
+    "HwpxBackend",
     "LlmConfig",
     "MarkdownBackend",
     "PendingAsset",

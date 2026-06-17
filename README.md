@@ -58,11 +58,14 @@ for asset in result.assets:
   - `S3Config`
 - Requires S3-compatible object storage; binary assets are uploaded and exposed
   as asset references instead of being embedded in source or evidence.
-- Supports UTF-8 text/Markdown parsing as the first contract fixture.
-- Selects a parser backend by suffix; `.md`, `.markdown`, and `.txt` are
-  currently backed by the built-in Markdown backend.
+- Supports UTF-8 text/Markdown parsing and HWPX parsing.
+- Selects a parser backend by suffix; `.md`, `.markdown`, `.txt`, and `.hwpx`
+  are currently backed by built-in backends.
 - Parser backends produce `EvidenceUnit` objects; the current default chunker
   preserves one unit as one `RagChunk` before LLM enrichment.
+- The HWPX backend extracts text, structured tables, nested tables, and image
+  assets. Images embedded in table cells are preserved as nested `asset_ref`
+  evidence and uploaded to S3-compatible object storage.
 - Requires an LLM configuration and fails parsing when chunk enrichment is
   missing or invalid.
 - Converts simple Markdown tables into table evidence units with:
@@ -74,7 +77,30 @@ for asset in result.assets:
 
 ## Next scope
 
-- Move HWP/HWPX/PDF parsing code in from `md-converter`.
-- Preserve table cell structure before evidence rendering.
-- Add rowspan, colspan, nested blocks, and nested-table support for complex tables.
+- Move HWP/PDF parsing code in from `md-converter`.
+- Improve HWPX complex table fidelity beyond the current rowspan, colspan,
+  nested table, and nested asset baseline.
 - Add optional source locators later only if product UX needs page/region jumps.
+
+## Validation
+
+When local `clic-minio` and `spark-inference-gateway` are running, the HWPX
+backend can be validated against a real HWPX file and upload the evidence
+outputs back to MinIO:
+
+```bash
+docker exec clic-minio sh -lc \
+  '/usr/bin/mc mb --ignore-existing local/rag-document-parser-test'
+
+RDP_LLM_API_KEY="$SPARK_GATEWAY_API_KEY" \
+uv run python scripts/validate_hwpx_clic_minio.py /path/to/sample.hwpx \
+  --source-name "sample.hwpx"
+```
+
+The script writes and uploads:
+
+- `evidence-units.json`
+- `evidence-units.html`
+- `parse-result.llm.json`
+- `metrics.json`
+- extracted image assets under `{document_sha256}/assets/`
