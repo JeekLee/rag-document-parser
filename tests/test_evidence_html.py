@@ -343,6 +343,184 @@ def test_render_structured_diagram_shows_nodes_edges_and_mermaid():
     assert 'class="diagram-shape">label</span>' not in html
 
 
+def test_render_structured_diagram_uses_bounding_boxes_for_positioned_layout():
+    from rag_document_parser.evidence_html import render_evidence_html
+
+    html = render_evidence_html(
+        {
+            "kind": "diagram",
+            "format": "structured_diagram",
+            "content": {
+                "caption": None,
+                "nodes": [
+                    {"id": "n1", "shape_type": "label", "text": "업무처리 흐름도"},
+                    {
+                        "id": "n2",
+                        "shape_type": "label",
+                        "text": "수급권자",
+                        "bbox": {
+                            "x": 100,
+                            "y": 200,
+                            "width": 300,
+                            "height": 100,
+                            "unit": "hwp",
+                        },
+                    },
+                    {
+                        "id": "n3",
+                        "shape_type": "label",
+                        "text": "심사평가원",
+                        "bbox": {
+                            "x": 700,
+                            "y": 200,
+                            "width": 300,
+                            "height": 100,
+                            "unit": "hwp",
+                        },
+                    },
+                ],
+                "edges": [],
+                "mermaid": None,
+            },
+        }
+    )
+
+    assert 'class="diagram-positioned"' in html
+    assert 'class="diagram-canvas"' in html
+    assert (
+        'style="left:0.000%;top:0.000%;width:33.333%;height:100.000%"'
+        in html
+    )
+    assert (
+        'style="left:66.667%;top:0.000%;width:33.333%;height:100.000%"'
+        in html
+    )
+    assert "업무처리 흐름도" in html
+    assert "수급권자" in html
+    assert "심사평가원" in html
+
+
+def test_render_structured_diagram_draws_positioned_connectors():
+    from rag_document_parser.evidence_html import render_evidence_html
+
+    html = render_evidence_html(
+        {
+            "kind": "diagram",
+            "format": "structured_diagram",
+            "content": {
+                "caption": None,
+                "nodes": [
+                    {
+                        "id": "n1",
+                        "shape_type": "label",
+                        "text": "수급권자",
+                        "bbox": {
+                            "x": 100,
+                            "y": 200,
+                            "width": 300,
+                            "height": 100,
+                            "unit": "hwp",
+                        },
+                    },
+                    {
+                        "id": "n2",
+                        "shape_type": "label",
+                        "text": "심사평가원",
+                        "bbox": {
+                            "x": 900,
+                            "y": 200,
+                            "width": 300,
+                            "height": 100,
+                            "unit": "hwp",
+                        },
+                    },
+                ],
+                "connectors": [
+                    {
+                        "id": "c1",
+                        "type": "line",
+                        "bbox": {
+                            "x": 400,
+                            "y": 250,
+                            "width": 500,
+                            "height": 0,
+                            "unit": "hwp",
+                        },
+                        "points": [
+                            {"x": 400, "y": 250},
+                            {"x": 900, "y": 250},
+                        ],
+                    }
+                ],
+                "edges": [],
+                "mermaid": None,
+            },
+        }
+    )
+
+    assert 'class="diagram-connectors"' in html
+    assert (
+        '<line x1="27.273%" y1="50.000%" x2="72.727%" y2="50.000%"></line>'
+        in html
+    )
+
+
+def test_render_structured_diagram_marks_arrow_connectors():
+    from rag_document_parser.evidence_html import render_evidence_html
+
+    html = render_evidence_html(
+        {
+            "kind": "diagram",
+            "format": "structured_diagram",
+            "content": {
+                "caption": None,
+                "nodes": [
+                    {
+                        "id": "n1",
+                        "shape_type": "label",
+                        "text": "공단",
+                        "bbox": {
+                            "x": 100,
+                            "y": 100,
+                            "width": 200,
+                            "height": 100,
+                            "unit": "hwp",
+                        },
+                    },
+                    {
+                        "id": "n2",
+                        "shape_type": "label",
+                        "text": "수급권자",
+                        "bbox": {
+                            "x": 500,
+                            "y": 100,
+                            "width": 200,
+                            "height": 100,
+                            "unit": "hwp",
+                        },
+                    },
+                ],
+                "connectors": [
+                    {
+                        "id": "c1",
+                        "type": "line",
+                        "arrow": True,
+                        "points": [
+                            {"x": 300, "y": 150},
+                            {"x": 500, "y": 150},
+                        ],
+                    }
+                ],
+                "edges": [],
+                "mermaid": None,
+            },
+        }
+    )
+
+    assert '<marker id="diagram-arrow"' in html
+    assert 'marker-end="url(#diagram-arrow)"' in html
+
+
 def test_render_label_only_diagram_as_original_like_flowchart():
     from rag_document_parser.evidence_html import render_evidence_html
 

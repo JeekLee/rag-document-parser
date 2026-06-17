@@ -140,6 +140,35 @@ def _gso_ctrl(level: int) -> bytes:
     return _make_record(0x47, level, b" osg" + b"\x00" * 8)
 
 
+def _gso_ctrl_with_bbox(
+    level: int,
+    *,
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+) -> bytes:
+    payload = b" osg" + struct.pack("<5I", 0, x, y, width, height)
+    return _make_record(0x47, level, payload)
+
+
+def _gso_line_with_bbox(
+    level: int,
+    *,
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+) -> bytes:
+    return b"".join(
+        [
+            _gso_ctrl_with_bbox(level, x=x, y=y, width=width, height=height),
+            _make_record(0x4C, level + 1, b"nil$"),
+            _make_record(0x4E, level + 1, struct.pack("<5i", 0, 0, 100, 100, 0)),
+        ]
+    )
+
+
 def test_hwp5_nested_table_is_structured_child_not_flattened_text():
     from rag_document_parser.extract.formats.hwp5.backend import _parse_section
 
@@ -455,6 +484,65 @@ def test_hwp5_groups_drawing_labels_with_interleaved_short_text():
     assert diagram.evidence.content["edges"] == []
     assert diagram.evidence.content["mermaid"] is None
     assert document.units[1].source.text == "< 붙임 1 >"
+
+
+def test_hwp5_diagram_nodes_keep_gso_bounding_boxes():
+    from rag_document_parser.extract.formats.hwp5.backend import _parse_section
+
+    records = b""
+    records += _make_record(0x43, 0, _u16("업무처리 흐름도"))
+    records += _gso_ctrl_with_bbox(0, x=100, y=200, width=300, height=120)
+    records += _make_record(0x43, 1, _u16("수급권자"))
+    records += _gso_ctrl_with_bbox(0, x=700, y=200, width=400, height=120)
+    records += _make_record(0x43, 1, _u16("심사평가원"))
+
+    document = _parse_section(records).to_document()
+    nodes = document.units[0].evidence.content["nodes"]
+
+    assert nodes[0]["bbox"] is None
+    assert nodes[1]["bbox"] == {
+        "x": 100,
+        "y": 200,
+        "width": 300,
+        "height": 120,
+        "unit": "hwp",
+    }
+    assert nodes[2]["bbox"] == {
+        "x": 700,
+        "y": 200,
+        "width": 400,
+        "height": 120,
+        "unit": "hwp",
+    }
+
+
+def test_hwp5_diagram_keeps_line_connectors_with_bounding_boxes():
+    from rag_document_parser.extract.formats.hwp5.backend import _parse_section
+
+    records = b""
+    records += _gso_ctrl_with_bbox(0, x=100, y=200, width=300, height=120)
+    records += _make_record(0x43, 1, _u16("수급권자"))
+    records += _gso_line_with_bbox(0, x=400, y=260, width=500, height=20)
+    records += _gso_ctrl_with_bbox(0, x=900, y=200, width=400, height=120)
+    records += _make_record(0x43, 1, _u16("심사평가원"))
+
+    document = _parse_section(records).to_document()
+    content = document.units[0].evidence.content
+
+    assert len(content["connectors"]) == 1
+    connector = content["connectors"][0]
+    assert connector["type"] == "line"
+    assert connector["bbox"] == {
+        "x": 400,
+        "y": 260,
+        "width": 500,
+        "height": 20,
+        "unit": "hwp",
+    }
+    assert connector["points"] == [
+        {"x": 400, "y": 270},
+        {"x": 900, "y": 270},
+    ]
 
 
 def test_hwp5_real_fixture_groups_flowchart_labels():

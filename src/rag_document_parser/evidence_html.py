@@ -136,7 +136,14 @@ def _render_structured_table(
 def _render_structured_diagram(diagram: dict[str, Any]) -> str:
     nodes = [node for node in diagram.get("nodes", []) if isinstance(node, dict)]
     edges = [edge for edge in diagram.get("edges", []) if isinstance(edge, dict)]
+    connectors = [
+        connector
+        for connector in diagram.get("connectors", [])
+        if isinstance(connector, dict)
+    ]
     mermaid = diagram.get("mermaid")
+    if _is_positionable_label_diagram(nodes, edges, mermaid, connectors):
+        return _render_positioned_label_diagram(nodes, connectors=connectors)
     if _is_label_only_diagram(nodes, edges, mermaid):
         return _render_label_flowchart_diagram(nodes)
 
@@ -201,6 +208,185 @@ def _is_label_only_diagram(
             for node in nodes
         )
     )
+
+
+def _is_positionable_label_diagram(
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    mermaid: Any,
+    connectors: list[dict[str, Any]],
+) -> bool:
+    return (
+        _is_label_only_diagram(nodes, edges, mermaid)
+        and (
+            sum(1 for node in nodes if _node_bbox(node) is not None) >= 2
+            or any(_connector_line(connector) is not None for connector in connectors)
+        )
+    )
+
+
+def _render_positioned_label_diagram(
+    nodes: list[dict[str, Any]],
+    *,
+    connectors: list[dict[str, Any]],
+) -> str:
+    positioned = [
+        (node, bbox)
+        for node in nodes
+        if (bbox := _node_bbox(node)) is not None
+    ]
+    connector_lines = [
+        line
+        for connector in connectors
+        if (line := _connector_line(connector)) is not None
+    ]
+    unpositioned = [
+        str(node.get("text", "")).strip()
+        for node in nodes
+        if _node_bbox(node) is None and str(node.get("text", "")).strip()
+    ]
+    x_values = [
+        value
+        for _, bbox in positioned
+        for value in (bbox["x"], bbox["x"] + bbox["width"])
+    ]
+    y_values = [
+        value
+        for _, bbox in positioned
+        for value in (bbox["y"], bbox["y"] + bbox["height"])
+    ]
+    x_values.extend(point["x"] for line in connector_lines for point in line["points"])
+    y_values.extend(point["y"] for line in connector_lines for point in line["points"])
+    min_x = min(x_values)
+    min_y = min(y_values)
+    max_x = max(x_values)
+    max_y = max(y_values)
+    canvas_width = max(max_x - min_x, 1.0)
+    canvas_height = max(max_y - min_y, 1.0)
+
+    html = ['<section class="diagram-positioned">']
+    if unpositioned:
+        html.append('<div class="diagram-positioned-labels">')
+        for text in unpositioned:
+            html.append(
+                '<span class="diagram-positioned-label">'
+                f"{_escape_multiline(text)}"
+                "</span>"
+            )
+        html.append("</div>")
+    html.append(
+        '<div class="diagram-canvas" '
+        f'style="aspect-ratio:{canvas_width:.3f}/{canvas_height:.3f}">'
+    )
+    if connector_lines:
+        html.append('<svg class="diagram-connectors" aria-hidden="true">')
+        if any(line["arrow"] for line in connector_lines):
+            html.append(
+                '<defs><marker id="diagram-arrow" markerWidth="8" '
+                'markerHeight="8" refX="7" refY="4" orient="auto">'
+                '<path d="M0,0 L8,4 L0,8 Z"></path>'
+                "</marker></defs>"
+            )
+        for line in connector_lines:
+            start, end = line["points"]
+            x1 = (start["x"] - min_x) / canvas_width * 100
+            y1 = (start["y"] - min_y) / canvas_height * 100
+            x2 = (end["x"] - min_x) / canvas_width * 100
+            y2 = (end["y"] - min_y) / canvas_height * 100
+            marker = ' marker-end="url(#diagram-arrow)"' if line["arrow"] else ""
+            html.append(
+                f'<line x1="{x1:.3f}%" y1="{y1:.3f}%" '
+                f'x2="{x2:.3f}%" y2="{y2:.3f}%"{marker}></line>'
+            )
+        html.append("</svg>")
+    for node, bbox in positioned:
+        left = (bbox["x"] - min_x) / canvas_width * 100
+        top = (bbox["y"] - min_y) / canvas_height * 100
+        width = bbox["width"] / canvas_width * 100
+        height = bbox["height"] / canvas_height * 100
+        text = str(node.get("text", "")).strip()
+        html.append(
+            '<div class="diagram-positioned-node" '
+            f'style="left:{left:.3f}%;top:{top:.3f}%;'
+            f'width:{width:.3f}%;height:{height:.3f}%">'
+            f"{_escape_multiline(text)}"
+            "</div>"
+        )
+    html.append("</div></section>")
+    return "".join(html)
+
+
+def _node_bbox(node: dict[str, Any]) -> dict[str, float] | None:
+    bbox = node.get("bbox")
+    if not isinstance(bbox, dict):
+        return None
+    try:
+        x = float(bbox["x"])
+        y = float(bbox["y"])
+        width = float(bbox["width"])
+        height = float(bbox["height"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return {"x": x, "y": y, "width": width, "height": height}
+
+
+def _connector_points(
+    connector: dict[str, Any],
+) -> list[dict[str, float]] | None:
+    points = connector.get("points")
+    if isinstance(points, list) and len(points) >= 2:
+        start = _point_xy(points[0])
+        end = _point_xy(points[1])
+        if start is not None and end is not None:
+            return [start, end]
+    bbox = _connector_bbox(connector)
+    if bbox is None:
+        return None
+    x = bbox["x"]
+    y = bbox["y"]
+    width = bbox["width"]
+    height = bbox["height"]
+    if width >= max(height, 1.0) * 3:
+        y_mid = y + max(height, 1.0) / 2
+        return [{"x": x, "y": y_mid}, {"x": x + width, "y": y_mid}]
+    if height >= max(width, 1.0) * 3:
+        x_mid = x + max(width, 1.0) / 2
+        return [{"x": x_mid, "y": y}, {"x": x_mid, "y": y + height}]
+    return [{"x": x, "y": y}, {"x": x + width, "y": y + height}]
+
+
+def _connector_line(connector: dict[str, Any]) -> dict[str, Any] | None:
+    points = _connector_points(connector)
+    if points is None:
+        return None
+    return {"points": points, "arrow": bool(connector.get("arrow"))}
+
+
+def _connector_bbox(connector: dict[str, Any]) -> dict[str, float] | None:
+    bbox = connector.get("bbox")
+    if not isinstance(bbox, dict):
+        return None
+    try:
+        x = float(bbox["x"])
+        y = float(bbox["y"])
+        width = float(bbox["width"])
+        height = float(bbox["height"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if width <= 0 and height <= 0:
+        return None
+    return {"x": x, "y": y, "width": max(width, 0.0), "height": max(height, 0.0)}
+
+
+def _point_xy(point: Any) -> dict[str, float] | None:
+    if not isinstance(point, dict):
+        return None
+    try:
+        return {"x": float(point["x"]), "y": float(point["y"])}
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def _render_label_flowchart_diagram(nodes: list[dict[str, Any]]) -> str:
@@ -601,6 +787,63 @@ th {
   border: 1px solid #d8d8d2;
   border-radius: 4px;
   padding: 12px;
+}
+.diagram-positioned {
+  border: 1px solid #d8d8d2;
+  border-radius: 4px;
+  padding: 12px;
+  background: #fff;
+  overflow-x: auto;
+}
+.diagram-positioned-labels {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 0 0 10px;
+}
+.diagram-positioned-label {
+  border: 1px solid #d8d8d2;
+  background: #f7f7f5;
+  padding: 3px 8px;
+  font-size: 12px;
+  line-height: 1.25;
+}
+.diagram-canvas {
+  position: relative;
+  min-width: 680px;
+  max-width: 100%;
+  min-height: 180px;
+  border: 1px solid #c9c9c2;
+  background: #fff;
+}
+.diagram-connectors {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.diagram-connectors line {
+  stroke: #3f4a54;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+.diagram-connectors marker path {
+  fill: #3f4a54;
+}
+.diagram-positioned-node {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1.5px solid #1d1d1f;
+  background: #fff;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  text-align: center;
+  line-height: 1.2;
+  word-break: keep-all;
 }
 .diagram-flowchart {
   background: #f7f7f5;

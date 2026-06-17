@@ -14,7 +14,9 @@ _TAG_BIN_DATA = 0x12
 _TAG_PARA_TEXT = 0x43
 _TAG_CTRL_HEADER = 0x47
 _TAG_LIST_HEADER = 0x48
+_TAG_SHAPE_COMPONENT = 0x4C
 _TAG_TABLE_BODY = 0x4D
+_TAG_SHAPE_COMPONENT_LINE = 0x4E
 _TAG_SHAPE_PICTURE = 0x55
 
 _CTRL_TABLE = b" lbt"
@@ -77,11 +79,21 @@ class _Cell:
 class _TextBlock:
     text: str
     origin: str = "body"
+    bbox: dict[str, int | str] | None = None
 
 
 @dataclass
 class _DiagramBlock:
     text: str
+    bboxes: list[dict[str, int | str] | None] = field(default_factory=list)
+    connectors: list[dict[str, object]] = field(default_factory=list)
+
+
+@dataclass
+class _DrawingLineBlock:
+    bbox: dict[str, int | str]
+    points: list[dict[str, int]]
+    arrow: bool = False
 
 
 @dataclass
@@ -98,9 +110,9 @@ class _ImageBlock:
 
 @dataclass
 class _ParsedBlocks:
-    blocks: list[_TextBlock | _DiagramBlock | _TableBlock | _ImageBlock] = field(
-        default_factory=list
-    )
+    blocks: list[
+        _TextBlock | _DiagramBlock | _DrawingLineBlock | _TableBlock | _ImageBlock
+    ] = field(default_factory=list)
     assets: list[PendingAsset] = field(default_factory=list)
     saw_drawing: bool = False
     missing_image_count: int = 0
@@ -162,7 +174,11 @@ def _to_document(parsed: _ParsedBlocks) -> ParsedDocument:
             continue
 
         if isinstance(block, _DiagramBlock):
-            structured = _structured_diagram(block.text)
+            structured = _structured_diagram(
+                block.text,
+                bboxes=block.bboxes,
+                connectors=block.connectors,
+            )
             source_text = _diagram_source_text(structured)
             if not source_text:
                 continue
@@ -190,6 +206,9 @@ def _to_document(parsed: _ParsedBlocks) -> ParsedDocument:
                 )
             )
             block_index += 1
+            continue
+
+        if isinstance(block, _DrawingLineBlock):
             continue
 
         if isinstance(block, _ImageBlock):
@@ -260,8 +279,9 @@ def _to_document(parsed: _ParsedBlocks) -> ParsedDocument:
                 "type": "hwp5_drawing_structure_unsupported",
                 "severity": "medium",
                 "message": (
-                    "HWP5 drawing object text was extracted as structured diagram "
-                    "labels, but geometry and connector structure are not represented."
+                    "HWP5 drawing object text and some geometry were extracted as "
+                    "structured diagram evidence, but the drawing structure may still "
+                    "be incomplete."
                 ),
             }
         )
@@ -285,9 +305,15 @@ def _to_document(parsed: _ParsedBlocks) -> ParsedDocument:
 
 
 def _coalesce_drawing_text_blocks(
-    blocks: list[_TextBlock | _DiagramBlock | _TableBlock | _ImageBlock],
-) -> list[_TextBlock | _DiagramBlock | _TableBlock | _ImageBlock]:
-    result: list[_TextBlock | _DiagramBlock | _TableBlock | _ImageBlock] = []
+    blocks: list[
+        _TextBlock | _DiagramBlock | _DrawingLineBlock | _TableBlock | _ImageBlock
+    ],
+) -> list[
+    _TextBlock | _DiagramBlock | _DrawingLineBlock | _TableBlock | _ImageBlock
+]:
+    result: list[
+        _TextBlock | _DiagramBlock | _DrawingLineBlock | _TableBlock | _ImageBlock
+    ] = []
     index = 0
     while index < len(blocks):
         block = blocks[index]
@@ -304,6 +330,11 @@ def _coalesce_drawing_text_blocks(
             candidate = blocks[scan]
             if _is_drawing_text_block(candidate):
                 drawing_count += 1
+                cluster_end = scan
+                short_body_gap = 0
+                scan += 1
+                continue
+            if isinstance(candidate, _DrawingLineBlock):
                 cluster_end = scan
                 short_body_gap = 0
                 scan += 1
@@ -335,13 +366,27 @@ def _coalesce_drawing_text_blocks(
             for item in [*prefix, *blocks[index : cluster_end + 1]]
             if isinstance(item, _TextBlock)
         ]
+        line_blocks = [
+            item
+            for item in blocks[index : cluster_end + 1]
+            if isinstance(item, _DrawingLineBlock)
+        ]
         result.append(
             _DiagramBlock(
                 "\n".join(
                     text
                     for text in (_clean_text(item.text) for item in text_blocks)
                     if text
-                )
+                ),
+                bboxes=[
+                    item.bbox
+                    for item in text_blocks
+                    if _clean_text(item.text)
+                ],
+                connectors=[
+                    _structured_connector(connector_index, item)
+                    for connector_index, item in enumerate(line_blocks, start=1)
+                ],
             )
         )
         index = cluster_end + 1
@@ -361,7 +406,12 @@ def _is_short_body_text_block(block: object) -> bool:
     )
 
 
-def _structured_diagram(text: str) -> dict[str, object]:
+def _structured_diagram(
+    text: str,
+    *,
+    bboxes: list[dict[str, int | str] | None] | None = None,
+    connectors: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
     labels = [
         line
         for line in (_clean_text(part) for part in text.splitlines())
@@ -374,13 +424,28 @@ def _structured_diagram(text: str) -> dict[str, object]:
                 "id": f"n{index}",
                 "shape_type": "label",
                 "text": label,
-                "bbox": None,
+                "bbox": bboxes[index - 1] if bboxes and index <= len(bboxes) else None,
                 "metadata": {"source": "hwp5_drawing_text"},
             }
             for index, label in enumerate(labels, start=1)
         ],
         "edges": [],
+        "connectors": connectors or [],
         "mermaid": None,
+    }
+
+
+def _structured_connector(
+    index: int,
+    line: _DrawingLineBlock,
+) -> dict[str, object]:
+    return {
+        "id": f"c{index}",
+        "type": "line",
+        "bbox": dict(line.bbox),
+        "points": [dict(point) for point in line.points],
+        "arrow": line.arrow,
+        "metadata": {"source": "hwp5_gso_line"},
     }
 
 
@@ -413,16 +478,32 @@ def _parse_section(
     in_gso = False
     gso_level = -1
     gso_text_parts: list[str] = []
+    gso_bbox: dict[str, int | str] | None = None
+    gso_shape_type: str | None = None
+    gso_line_payload: bytes | None = None
 
     def close_gso() -> None:
-        nonlocal in_gso, gso_level, gso_text_parts
+        nonlocal in_gso, gso_level, gso_text_parts, gso_bbox
+        nonlocal gso_shape_type, gso_line_payload
         text = _clean_text(" ".join(gso_text_parts))
         if text:
-            parsed.blocks.append(_TextBlock(text, origin="drawing"))
+            parsed.blocks.append(_TextBlock(text, origin="drawing", bbox=gso_bbox))
+            parsed.saw_drawing = True
+        elif gso_shape_type == "line" and gso_bbox is not None:
+            parsed.blocks.append(
+                _DrawingLineBlock(
+                    bbox=gso_bbox,
+                    points=_line_points_from_bbox(gso_bbox, gso_line_payload),
+                    arrow=_line_has_arrow(gso_line_payload),
+                )
+            )
             parsed.saw_drawing = True
         in_gso = False
         gso_level = -1
         gso_text_parts = []
+        gso_bbox = None
+        gso_shape_type = None
+        gso_line_payload = None
 
     def close_current_cell(ctx: _TableCtx) -> None:
         if not ctx.in_cell:
@@ -492,6 +573,9 @@ def _parse_section(
                 in_gso = True
                 gso_level = level
                 gso_text_parts = []
+                gso_bbox = _gso_bbox_from_ctrl_header(payload)
+                gso_shape_type = None
+                gso_line_payload = None
             elif ctrl == _CTRL_TABLE:
                 table_stack.append(_TableCtx(ctrl_level=level))
             continue
@@ -524,6 +608,18 @@ def _parse_section(
             in_gso = False
             gso_level = -1
             gso_text_parts = []
+            gso_bbox = None
+            gso_shape_type = None
+            gso_line_payload = None
+            continue
+
+        if in_gso and tag_id == _TAG_SHAPE_COMPONENT:
+            if payload[:4] == b"nil$":
+                gso_shape_type = "line"
+            continue
+
+        if in_gso and tag_id == _TAG_SHAPE_COMPONENT_LINE:
+            gso_line_payload = payload
             continue
 
         if (
@@ -598,6 +694,61 @@ def _is_valid_table_cell_header(
         if col_addr >= ctx.column_count or col_addr + colspan > ctx.column_count:
             return False
     return True
+
+
+def _gso_bbox_from_ctrl_header(payload: bytes) -> dict[str, int | str] | None:
+    if len(payload) < 24:
+        return None
+    x = struct.unpack_from("<I", payload, 8)[0]
+    y = struct.unpack_from("<I", payload, 12)[0]
+    width = struct.unpack_from("<I", payload, 16)[0]
+    height = struct.unpack_from("<I", payload, 20)[0]
+    if width == 0 and height == 0:
+        return None
+    return {
+        "x": x,
+        "y": y,
+        "width": width,
+        "height": height,
+        "unit": "hwp",
+    }
+
+
+def _line_points_from_bbox(
+    bbox: dict[str, int | str],
+    payload: bytes | None,
+) -> list[dict[str, int]]:
+    x = _bbox_int(bbox, "x")
+    y = _bbox_int(bbox, "y")
+    width = _bbox_int(bbox, "width")
+    height = _bbox_int(bbox, "height")
+    if width >= max(height, 1) * 3:
+        y_mid = y + max(height, 1) // 2
+        return [{"x": x, "y": y_mid}, {"x": x + width, "y": y_mid}]
+    if height >= max(width, 1) * 3:
+        x_mid = x + max(width, 1) // 2
+        return [{"x": x_mid, "y": y}, {"x": x_mid, "y": y + height}]
+    if payload is not None and len(payload) >= 16:
+        start_x, start_y, end_x, end_y = struct.unpack_from("<4i", payload)
+        if max(abs(start_x), abs(start_y), abs(end_x), abs(end_y)) >= 1000:
+            return [
+                {"x": x + start_x, "y": y + start_y},
+                {"x": x + end_x, "y": y + end_y},
+            ]
+    return [{"x": x, "y": y}, {"x": x + width, "y": y + height}]
+
+
+def _line_has_arrow(payload: bytes | None) -> bool:
+    if payload is None or len(payload) < 20:
+        return False
+    return struct.unpack_from("<I", payload, 16)[0] != 0
+
+
+def _bbox_int(bbox: dict[str, int | str], key: str) -> int:
+    try:
+        return int(bbox[key])
+    except (KeyError, TypeError, ValueError):
+        return 0
 
 
 def _image_child_from_picture(
