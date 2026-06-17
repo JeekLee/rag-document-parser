@@ -88,10 +88,12 @@ class EvidenceUnitAgenticChunker:
 
     def _chunk_window(self, window: list[EvidenceUnit]) -> _WindowResult:
         try:
+            _validate_unique_unit_ids(window)
             raw_plan = self._plan_fn(window, self._llm, self._max_units)
             chunks = _materialize_window(window, raw_plan)
-        except ValueError as exc:
-            return _WindowResult(_fallback_chunks(window, str(exc)), str(exc))
+        except Exception as exc:
+            reason = _fallback_reason(exc)
+            return _WindowResult(_fallback_chunks(window, reason), reason)
         return _WindowResult(chunks)
 
     def _default_plan(
@@ -171,11 +173,59 @@ def _materialize_window(units: list[EvidenceUnit], raw_plan: Any) -> list[RagChu
         full_assigned = next_full_assigned
         row_ranges_by_unit = next_row_ranges
 
+    _validate_row_coverage(units, full_assigned, row_ranges_by_unit)
     covered = _covered_unit_ids(full_assigned, row_ranges_by_unit)
     missing = [unit.id for unit in units if unit.id not in covered]
     if missing:
         raise ValueError(f"chunk plan omitted units: {', '.join(missing)}")
     return chunks
+
+
+def _fallback_reason(exc: Exception) -> str:
+    reason = str(exc)
+    if reason:
+        return reason
+    return exc.__class__.__name__
+
+
+def _validate_unique_unit_ids(units: list[EvidenceUnit]) -> None:
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for unit in units:
+        if unit.id in seen and unit.id not in duplicates:
+            duplicates.append(unit.id)
+        seen.add(unit.id)
+
+    if duplicates:
+        raise ValueError(f"duplicate unit id: {', '.join(duplicates)}")
+
+
+def _validate_row_coverage(
+    units: list[EvidenceUnit],
+    full_assigned: set[str],
+    row_ranges_by_unit: dict[str, list[tuple[int, int]]],
+) -> None:
+    by_id = {unit.id: unit for unit in units}
+    for unit_id, ranges in row_ranges_by_unit.items():
+        if unit_id in full_assigned:
+            continue
+
+        unit = by_id[unit_id]
+        if unit.format != "structured_table" or not isinstance(unit.content, dict):
+            continue
+
+        rows = unit.content.get("rows", [])
+        if not isinstance(rows, list):
+            continue
+
+        missing = [
+            index
+            for index in _table_row_indexes(rows)
+            if not _row_selected(index, ranges)
+        ]
+        if missing:
+            omitted = ", ".join(str(index) for index in missing)
+            raise ValueError(f"chunk plan omitted table rows for unit {unit.id}: {omitted}")
 
 
 def _operation_unit_ids(
@@ -435,20 +485,22 @@ def _chunk_from_items(
     operations: list[dict[str, Any]],
     context_unit_ids: list[str],
 ) -> RagChunk:
+    source_text = "\n\n".join(source_parts)
     source_unit_ids = _unique([unit.id for unit in units])
     title = plan.get("title") if isinstance(plan.get("title"), str) else ""
     summary = plan.get("summary") if isinstance(plan.get("summary"), str) else ""
     if not summary:
-        summary = _fallback_summary(units)
+        summary = _fallback_summary_from_text(source_text)
 
-    keywords = _strings(plan.get("keywords")) or _fallback_keywords(units)
-    questions = _strings(plan.get("questions")) or _fallback_questions(title or summary)
+    keywords = _strings(plan.get("keywords")) or _fallback_keywords_from_text(source_text)
+    question_topic = source_text.strip().replace("\n", " ")[:160] or title or summary
+    questions = _strings(plan.get("questions")) or _fallback_questions(question_topic)
     chunk_type = _chunk_type(evidence_items)
 
     return RagChunk(
         id=f"chunk-{index}",
         type=chunk_type,
-        source=SourceEvidence(kind=chunk_type, text="\n\n".join(source_parts)),
+        source=SourceEvidence(kind=chunk_type, text=source_text),
         evidence=Evidence(items=evidence_items),
         summary=summary,
         keywords=keywords,
@@ -529,14 +581,21 @@ def _fallback_summary(units: list[EvidenceUnit]) -> str:
     return " / ".join(parts)[:500]
 
 
+def _fallback_summary_from_text(text: str) -> str:
+    return text.strip().replace("\n", " ")[:500]
+
+
 def _fallback_keywords(units: list[EvidenceUnit]) -> list[str]:
+    return _fallback_keywords_from_text("\n\n".join(unit.source.text for unit in units))
+
+
+def _fallback_keywords_from_text(text: str) -> list[str]:
     words: list[str] = []
-    for unit in units:
-        for token in re.findall(r"[0-9A-Za-z가-힣]{2,}", unit.source.text):
-            if token not in words:
-                words.append(token)
-            if len(words) >= 8:
-                return words
+    for token in re.findall(r"[0-9A-Za-z가-힣]{2,}", text):
+        if token not in words:
+            words.append(token)
+        if len(words) >= 8:
+            return words
     return words
 
 

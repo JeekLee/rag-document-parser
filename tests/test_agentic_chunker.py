@@ -56,6 +56,27 @@ def _table_unit(id: str):
     )
 
 
+def _single_row_table_unit(id: str):
+    from rag_document_parser import EvidenceUnit, SourceEvidence
+
+    base = _table_unit(id)
+    table = dict(base.content)
+    table["rows"] = [base.content["rows"][1]]
+    metadata = dict(base.metadata)
+    metadata["table"] = {**base.metadata["table"], "row_count": 1}
+    return EvidenceUnit(
+        id=id,
+        type=base.type,
+        format=base.format,
+        source=SourceEvidence(
+            kind="table",
+            text="table: 2 columns\nrow 2: 항목=B; 내용=Beta",
+        ),
+        content=table,
+        metadata=metadata,
+    )
+
+
 def test_agentic_chunker_uses_llm_prompt_when_no_plan_fn(monkeypatch):
     from rag_document_parser import LlmConfig
     from rag_document_parser.chunk import EvidenceUnitAgenticChunker
@@ -361,7 +382,7 @@ def test_agentic_chunker_materializes_table_row_subset():
             }
         ]
 
-    chunks = EvidenceUnitAgenticChunker(llm=None, plan_fn=plan_fn).chunk([_table_unit("b2")])
+    chunks = EvidenceUnitAgenticChunker(llm=None, plan_fn=plan_fn).chunk([_single_row_table_unit("b2")])
 
     table_item = chunks[0].evidence.items[0]
     assert table_item.type == "table"
@@ -369,6 +390,28 @@ def test_agentic_chunker_materializes_table_row_subset():
     assert [row["index"] for row in table_item.content["rows"]] == [2]
     assert "row 2" in chunks[0].source.text
     assert "row 1" not in chunks[0].source.text
+
+
+def test_agentic_chunker_falls_back_when_table_row_split_omits_rows():
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    def plan_fn(window, cfg, max_units):
+        return [
+            {
+                "unit_ids": ["b2"],
+                "operations": [
+                    {"unit_id": "b2", "action": "include_rows", "row_ranges": [[2, 2]]}
+                ],
+                "summary": "B 항목만 제공한다.",
+            }
+        ]
+
+    chunks = EvidenceUnitAgenticChunker(llm=None, plan_fn=plan_fn).chunk([_table_unit("b2")])
+
+    assert len(chunks) == 1
+    assert chunks[0].metadata["source_unit_ids"] == ["b2"]
+    assert [row["index"] for row in chunks[0].evidence.items[0].content["rows"]] == [1, 2]
+    assert "omitted table rows" in chunks[0].metadata["_fallback_reason"]
 
 
 def test_agentic_chunker_falls_back_without_dropping_units_on_invalid_plan():
@@ -390,6 +433,21 @@ def test_agentic_chunker_falls_back_without_dropping_units_on_invalid_plan():
     assert [chunk.metadata["source_unit_ids"] for chunk in chunks] == [["b1"], ["b2"]]
     assert chunks[0].metadata["_fallback_reason"].startswith("chunk plan omitted units")
     assert chunks[1].metadata["_fallback_reason"].startswith("chunk plan omitted units")
+
+
+def test_agentic_chunker_falls_back_when_planner_raises_exception():
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    units = [_text_unit("b1", "첫 번째 설명"), _text_unit("b2", "두 번째 설명")]
+
+    def plan_fn(window, cfg, max_units):
+        raise RuntimeError("planner down")
+
+    chunks = EvidenceUnitAgenticChunker(llm=None, plan_fn=plan_fn).chunk(units)
+
+    assert [chunk.metadata["source_unit_ids"] for chunk in chunks] == [["b1"], ["b2"]]
+    assert "planner down" in chunks[0].metadata["_fallback_reason"]
+    assert "planner down" in chunks[1].metadata["_fallback_reason"]
 
 
 def test_agentic_chunker_rejects_unit_ids_that_do_not_match_operations():
@@ -460,6 +518,37 @@ def test_agentic_chunker_splits_table_rows_across_chunks():
     assert [row["index"] for row in chunks[1].evidence.items[0].content["rows"]] == [2]
     assert "_fallback_reason" not in chunks[0].metadata
     assert "_fallback_reason" not in chunks[1].metadata
+
+
+def test_agentic_chunker_uses_row_subset_text_for_planned_fallback_fields():
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    def plan_fn(window, cfg, max_units):
+        return [
+            {
+                "unit_ids": ["b2"],
+                "operations": [{"unit_id": "b2", "action": "include_rows", "row_ranges": [[1, 1]]}],
+            },
+            {
+                "unit_ids": ["b2"],
+                "operations": [{"unit_id": "b2", "action": "include_rows", "row_ranges": [[2, 2]]}],
+                "context_unit_ids": ["b2"],
+            },
+        ]
+
+    chunks = EvidenceUnitAgenticChunker(llm=None, plan_fn=plan_fn).chunk([_table_unit("b2")])
+
+    assert len(chunks) == 2
+    assert "row 2" not in chunks[0].source.text
+    assert "row 2" not in chunks[0].summary
+    assert "Beta" not in chunks[0].summary
+    assert "Beta" not in chunks[0].keywords
+    assert "Beta" not in " ".join(chunks[0].questions)
+    assert "row 1" not in chunks[1].source.text
+    assert "row 1" not in chunks[1].summary
+    assert "Alpha" not in chunks[1].summary
+    assert "Alpha" not in chunks[1].keywords
+    assert "Alpha" not in " ".join(chunks[1].questions)
 
 
 def test_agentic_chunker_rejects_overlapping_table_row_ranges():
@@ -547,6 +636,27 @@ def test_agentic_chunker_rejects_full_include_and_row_subset_conflict():
 
     assert len(chunks) == 1
     assert "full include conflicts with include_rows" in chunks[0].metadata["_fallback_reason"]
+
+
+def test_agentic_chunker_falls_back_on_duplicate_unit_ids_before_planning():
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    units = [_text_unit("dup", "첫 번째 설명"), _text_unit("dup", "두 번째 설명")]
+    plan_called = False
+
+    def plan_fn(window, cfg, max_units):
+        nonlocal plan_called
+        plan_called = True
+        return []
+
+    chunks = EvidenceUnitAgenticChunker(llm=None, plan_fn=plan_fn).chunk(units)
+
+    assert plan_called is False
+    assert [chunk.metadata["source_unit_ids"] for chunk in chunks] == [["dup"], ["dup"]]
+    assert chunks[0].source.text == "첫 번째 설명"
+    assert chunks[1].source.text == "두 번째 설명"
+    assert "duplicate unit id" in chunks[0].metadata["_fallback_reason"]
+    assert "duplicate unit id" in chunks[1].metadata["_fallback_reason"]
 
 
 def test_agentic_chunker_preserves_source_unit_metadata_on_planned_and_fallback_chunks():
