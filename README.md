@@ -1,8 +1,8 @@
 # rag-document-parser
 
-RAG-ready document parser for producing source evidence, user-facing evidence
-payloads, and LLM-enriched chunk metadata from document formats such as HWP,
-HWPX, and PDF.
+RAG-ready document parser for producing canonical LLM source text,
+user-facing evidence payloads, and LLM-enriched chunk metadata from document
+formats such as HWP, HWPX, and PDF.
 
 The parser is not a Markdown converter. Its primary output is source-preserving
 evidence units for downstream agentic chunking, embedding, retrieval, LLM
@@ -51,7 +51,7 @@ for chunk in result.chunks:
 - Requires an LLM configuration and fails parsing when chunk enrichment is
   missing or invalid.
 - Converts simple Markdown tables into table evidence units with:
-  - structured source evidence for LLM context
+  - canonical row-oriented source text for LLM grounding
   - `structured_table` evidence payloads instead of Markdown table strings
   - LLM-generated summaries, keywords, and answerable questions
   - user-facing evidence payloads

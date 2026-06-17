@@ -55,23 +55,39 @@ def test_parse_text_document_returns_llm_enriched_chunks(monkeypatch):
 
     text_chunk, table_chunk = result.chunks
     assert text_chunk.source.kind == "text"
-    assert text_chunk.source.text == "코로나19 대면투약관리료는 다음 기준에 따라 산정한다."
-    assert text_chunk.source.section_path == ["요양급여 기준"]
+    assert text_chunk.source.text == (
+        "section: 요양급여 기준\n"
+        "코로나19 대면투약관리료는 다음 기준에 따라 산정한다."
+    )
+    assert text_chunk.source.to_dict() == {
+        "kind": "text",
+        "text": (
+            "section: 요양급여 기준\n"
+            "코로나19 대면투약관리료는 다음 기준에 따라 산정한다."
+        ),
+    }
     assert text_chunk.summary == "코로나19 대면투약관리료 산정 기준을 설명합니다."
     assert text_chunk.keywords == ["코로나19", "대면투약관리료", "산정 기준"]
     assert text_chunk.questions == ["코로나19 대면투약관리료는 어떤 기준에 따라 산정하나요?"]
     assert not hasattr(text_chunk, "source_pointer")
     assert text_chunk.evidence.kind == "text"
     assert text_chunk.evidence.format == "plain"
-    assert text_chunk.evidence.content == text_chunk.source.text
+    assert text_chunk.evidence.content == "코로나19 대면투약관리료는 다음 기준에 따라 산정한다."
 
     assert table_chunk.source.kind == "table"
-    assert table_chunk.source.section_path == ["요양급여 기준"]
-    assert table_chunk.source.headers == ["대상", "청구방법"]
-    assert table_chunk.source.rows == [
-        {"index": 1, "cells": {"대상": "약국", "청구방법": "대면투약관리료 코드로 청구"}}
-    ]
-    assert table_chunk.source.text == "대상=약국; 청구방법=대면투약관리료 코드로 청구"
+    assert table_chunk.source.text == (
+        "section: 요양급여 기준\n"
+        "columns: 대상 | 청구방법\n"
+        "row 1: 대상=약국; 청구방법=대면투약관리료 코드로 청구"
+    )
+    assert table_chunk.source.to_dict() == {
+        "kind": "table",
+        "text": (
+            "section: 요양급여 기준\n"
+            "columns: 대상 | 청구방법\n"
+            "row 1: 대상=약국; 청구방법=대면투약관리료 코드로 청구"
+        ),
+    }
     assert table_chunk.summary == "약국의 대면투약관리료 청구방법을 설명하는 표입니다."
     assert table_chunk.keywords == ["약국", "대면투약관리료", "청구방법"]
     assert table_chunk.questions == ["약국은 대면투약관리료를 어떻게 청구하나요?"]
@@ -136,7 +152,11 @@ def test_markdown_backend_returns_evidence_units():
 
     text_unit, table_unit = parsed.units
     assert text_unit.type == "text"
-    assert text_unit.source.text == "Plain paragraph."
+    assert text_unit.source.text == "section: Section\nPlain paragraph."
+    assert text_unit.source.to_dict() == {
+        "kind": "text",
+        "text": "section: Section\nPlain paragraph.",
+    }
     assert text_unit.evidence.content == "Plain paragraph."
     assert text_unit.metadata["common"] == {
         "chunk_kind": "text",
@@ -145,10 +165,11 @@ def test_markdown_backend_returns_evidence_units():
     }
 
     assert table_unit.type == "table"
-    assert table_unit.source.headers == ["A", "B"]
-    assert table_unit.source.rows == [
-        {"index": 1, "cells": {"A": "one", "B": "two"}}
-    ]
+    assert table_unit.source.text == "section: Section\ncolumns: A | B\nrow 1: A=one; B=two"
+    assert table_unit.source.to_dict() == {
+        "kind": "table",
+        "text": "section: Section\ncolumns: A | B\nrow 1: A=one; B=two",
+    }
     assert table_unit.evidence.format == "structured_table"
     assert table_unit.evidence.content == {
         "caption": None,
@@ -205,7 +226,6 @@ def test_parse_result_to_dict_is_json_serializable(monkeypatch):
     assert payload["chunks"][0]["source"] == {
         "kind": "text",
         "text": "plain paragraph",
-        "section_path": [],
     }
     assert payload["chunks"][0]["summary"] == "Plain paragraph summary."
     assert payload["chunks"][0]["keywords"] == ["plain", "paragraph"]
@@ -235,8 +255,9 @@ def test_source_does_not_require_position_offsets(monkeypatch):
         llm=LlmConfig(url="http://llm.test/v1", api_key="test", model="test-model")
     ).parse(raw, suffix=".md").chunks[0]
 
-    assert chunk.source.text == "한글"
-    assert chunk.source.section_path == ["H"]
+    assert chunk.source.text == "section: H\n한글"
+    assert chunk.source.to_dict() == {"kind": "text", "text": "section: H\n한글"}
+    assert chunk.metadata["common"]["section_path"] == ["H"]
     assert not hasattr(chunk, "source_pointer")
 
 
