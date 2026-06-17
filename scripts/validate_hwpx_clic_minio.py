@@ -4,9 +4,10 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import time
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +21,7 @@ def main() -> None:
     args = _parse_args()
     raw = args.input.read_bytes()
     document_sha256 = hashlib.sha256(raw).hexdigest()
-    run_id = args.run_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    run_id = _timestamped_run_id(args.run_id)
     prefix = f"{args.s3_prefix.strip('/')}/{run_id}".strip("/")
     storage = S3Config(
         endpoint=args.s3_endpoint,
@@ -183,6 +184,14 @@ def _count_asset_refs(value: Any) -> int:
 
 def _json_bytes(payload: Any) -> bytes:
     return json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+
+
+def _timestamped_run_id(run_id: str | None, *, now: datetime | None = None) -> str:
+    name = (run_id or "validation").strip()
+    if re.match(r"^\d{8}-\d{6}-", name):
+        return name
+    timestamp = (now or datetime.now()).strftime("%Y%m%d-%H%M%S")
+    return f"{timestamp}-{name}"
 
 
 def _parse_args() -> argparse.Namespace:
