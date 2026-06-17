@@ -13,6 +13,39 @@ from ..models import Evidence, EvidenceItem, EvidenceUnit, RagChunk, SourceEvide
 PlanFn = Callable[[list[EvidenceUnit], LlmConfig | None, int], Any]
 
 
+_PROMPT = """\
+당신은 RAG 인덱싱용 EvidenceUnit chunk planner입니다.
+아래 unit 목록을 의미적으로 일관된 chunk plan으로 묶어 주세요.
+
+규칙:
+- evidence content는 작성하지 않습니다. unit_id와 operation만 작성합니다.
+- evidence content는 unit에서 복사됩니다.
+- 모든 unit은 누락 없이 evidence로 포함되어야 합니다.
+- structured_table은 include_rows로 여러 chunk에 분해할 수 있습니다.
+- include_rows row range는 겹치지 않아야 하며 table row 범위 안에 있어야 합니다.
+- text, table, image를 같은 chunk에 묶을 수 있습니다.
+- 원문에 없는 사실을 summary, keywords, questions에 추가하지 않습니다.
+- 한 chunk는 가능하면 unit {max_units}개 이하로 유지합니다.
+
+Unit 목록:
+{units}
+
+JSON 배열만 출력하세요:
+[
+  {{
+    "unit_ids": ["b1"],
+    "operations": [
+      {{"unit_id": "b1", "action": "include"}}
+    ],
+    "title": "제목",
+    "summary": "요약",
+    "keywords": ["키워드"],
+    "questions": ["이 chunk로 답할 수 있는 질문"]
+  }}
+]
+"""
+
+
 @dataclass(frozen=True)
 class _WindowResult:
     chunks: list[RagChunk]
@@ -562,22 +595,42 @@ def _reindex_chunk(index: int, chunk: RagChunk) -> RagChunk:
 def _plan_prompt(window: list[EvidenceUnit], max_units: int) -> str:
     payload = {
         "max_units_per_chunk": max_units,
-        "units": [
-            {
-                "id": unit.id,
-                "type": unit.type,
-                "format": unit.format,
-                "source_text": unit.source.text[:2000],
-                "metadata": unit.metadata,
-            }
-            for unit in window
-        ],
+        "units": [_unit_payload(index, unit) for index, unit in enumerate(window)],
     }
-    return (
-        "Return a JSON array of chunk plan objects. Each object must include "
-        "unit_ids, non-empty operations, optional context_unit_ids, title, summary, "
-        "keywords, and questions. Use operations with action include or include_rows; "
-        "for include_rows provide row_ranges as inclusive [start, end] pairs. "
-        "Do not generate final evidence content; it will be copied from source units.\n\n"
-        f"{json.dumps(payload, ensure_ascii=False)}"
+    return _PROMPT.replace("{max_units}", str(max_units)).replace(
+        "{units}", json.dumps(payload, ensure_ascii=False, indent=2)
     )
+
+
+def _unit_payload(index: int, unit: EvidenceUnit) -> dict[str, Any]:
+    common = unit.metadata.get("common", {})
+    table = unit.metadata.get("table", {})
+    asset = unit.metadata.get("asset", {})
+    return {
+        "id": unit.id,
+        "index": index,
+        "type": unit.type,
+        "format": unit.format,
+        "section_path": common.get("section_path", []) if isinstance(common, dict) else [],
+        "source_preview": _truncate(unit.source.text, 900),
+        "table": _compact_table(table),
+        "asset": dict(asset) if isinstance(asset, dict) else {},
+    }
+
+
+def _compact_table(table: Any) -> dict[str, Any]:
+    if not isinstance(table, dict):
+        return {}
+    result: dict[str, Any] = {}
+    if "table_id" in table:
+        result["table_id"] = table["table_id"]
+    if "headers" in table and isinstance(table["headers"], list):
+        result["headers"] = [str(header)[:80] for header in table["headers"][:12]]
+    if "row_count" in table:
+        result["row_count"] = table["row_count"]
+    return result
+
+
+def _truncate(value: str, limit: int) -> str:
+    text = value.strip()
+    return text if len(text) <= limit else text[: limit - 1] + "…"

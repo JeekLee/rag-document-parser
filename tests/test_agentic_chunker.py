@@ -56,6 +56,107 @@ def _table_unit(id: str):
     )
 
 
+def test_agentic_chunker_uses_llm_prompt_when_no_plan_fn(monkeypatch):
+    from rag_document_parser import LlmConfig
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    calls = []
+
+    def fake_chat_json(prompt, cfg):
+        calls.append((prompt, cfg))
+        return [
+            {
+                "unit_ids": ["b1"],
+                "operations": [{"unit_id": "b1", "action": "include"}],
+                "title": "첫 문장",
+                "summary": "첫 문장 요약",
+                "keywords": ["첫"],
+                "questions": ["첫 문장은 무엇인가요?"],
+            }
+        ]
+
+    monkeypatch.setattr("rag_document_parser.chunk.agentic.chat_json", fake_chat_json)
+    cfg = LlmConfig(url="http://llm.test/v1", api_key="key", model="model")
+
+    chunks = EvidenceUnitAgenticChunker(llm=cfg).chunk([_text_unit("b1", "첫 문장")])
+
+    assert len(calls) == 1
+    assert '"id": "b1"' in calls[0][0]
+    assert calls[0][1] is cfg
+    assert chunks[0].summary == "첫 문장 요약"
+
+
+def test_agentic_chunker_records_context_units_without_duplicate_evidence():
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    units = [_text_unit("b1", "앞 문맥"), _text_unit("b2", "대상 문장")]
+
+    def plan_fn(window, cfg, max_units):
+        return [
+            {
+                "unit_ids": ["b1"],
+                "operations": [{"unit_id": "b1", "action": "include"}],
+                "context_unit_ids": [],
+                "summary": "앞 문맥",
+                "keywords": ["앞"],
+                "questions": ["앞 문맥은 무엇인가요?"],
+            },
+            {
+                "unit_ids": ["b2"],
+                "operations": [{"unit_id": "b2", "action": "include"}],
+                "context_unit_ids": ["b1"],
+                "summary": "대상 문장",
+                "keywords": ["대상"],
+                "questions": ["대상 문장은 무엇인가요?"],
+            },
+        ]
+
+    chunks = EvidenceUnitAgenticChunker(llm=None, plan_fn=plan_fn).chunk(units)
+
+    assert chunks[1].metadata["source_unit_ids"] == ["b2"]
+    assert chunks[1].metadata["context_unit_ids"] == ["b1"]
+    assert chunks[1].evidence.items[0].source_unit_ids == ["b2"]
+
+
+def test_agentic_chunker_uses_rich_korean_llm_prompt_contract(monkeypatch):
+    from rag_document_parser import LlmConfig
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    calls = []
+
+    def fake_chat_json(prompt, cfg):
+        calls.append((prompt, cfg))
+        return [
+            {
+                "unit_ids": ["b2"],
+                "operations": [{"unit_id": "b2", "action": "include"}],
+                "title": "표",
+                "summary": "표 전체를 제공한다.",
+                "keywords": ["표"],
+                "questions": ["표에는 무엇이 있나요?"],
+            }
+        ]
+
+    monkeypatch.setattr("rag_document_parser.chunk.agentic.chat_json", fake_chat_json)
+    cfg = LlmConfig(url="http://llm.test/v1", api_key="key", model="model")
+
+    chunks = EvidenceUnitAgenticChunker(llm=cfg, max_units_per_chunk=7).chunk([_table_unit("b2")])
+
+    assert len(chunks) == 1
+    assert len(calls) == 1
+    prompt = calls[0][0]
+    assert "RAG 인덱싱용 EvidenceUnit chunk planner" in prompt
+    assert '"max_units_per_chunk": 7' in prompt
+    assert '"source_preview":' in prompt
+    assert '"source_text"' not in prompt
+    assert '"row_count": 2' in prompt
+    assert '"항목"' in prompt
+    assert '"내용"' in prompt
+    assert "evidence content는 작성하지 않습니다" in prompt
+    assert "evidence content는 unit에서 복사됩니다" in prompt
+    assert chunks[0].summary == "표 전체를 제공한다."
+
+
 def test_agentic_chunker_materializes_cross_kind_chunk_from_plan():
     from rag_document_parser.chunk import EvidenceUnitAgenticChunker
 
