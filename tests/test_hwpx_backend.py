@@ -10,12 +10,6 @@ OPF = "http://www.idpf.org/2007/opf/"
 PNG_BYTES = b"\x89PNG\r\n\x1a\nfake-png"
 
 
-def _llm_config():
-    from rag_document_parser import LlmConfig
-
-    return LlmConfig(url="http://llm.test/v1", api_key="test", model="test-model")
-
-
 def _s3_config():
     from rag_document_parser import S3Config
 
@@ -143,15 +137,6 @@ def test_hwpx_backend_parses_text_table_nested_table_and_image_asset():
 def test_parser_registers_hwpx_backend_and_uploads_hwpx_images(monkeypatch):
     from rag_document_parser import RagDocumentParser
 
-    monkeypatch.setattr(
-        "rag_document_parser.parser._chat_json",
-        lambda prompt, cfg: {
-            "summary": "HWPX chunk summary.",
-            "keywords": ["hwpx"],
-            "questions": ["HWPX 문서에 무엇이 있나요?"],
-        },
-    )
-
     uploads = []
 
     def fake_put_object(cfg, key, data, content_type):
@@ -168,7 +153,7 @@ def test_parser_registers_hwpx_backend_and_uploads_hwpx_images(monkeypatch):
     raw = _make_hwpx(xml, image_bytes=PNG_BYTES)
     document_hash = hashlib.sha256(raw).hexdigest()
 
-    result = RagDocumentParser(llm=_llm_config(), object_storage=_s3_config()).parse(
+    result = RagDocumentParser(object_storage=_s3_config()).parse(
         raw,
         suffix=".hwpx",
     )
@@ -183,8 +168,8 @@ def test_parser_registers_hwpx_backend_and_uploads_hwpx_images(monkeypatch):
     assert result.assets[0].uri == (
         f"s3://rag-assets/documents/{document_hash}/assets/img-0001.png"
     )
-    assert result.chunks[0].evidence.content["uri"] == result.assets[0].uri
-    assert result.chunks[0].summary == "HWPX chunk summary."
+    assert result.units[0].evidence.content["uri"] == result.assets[0].uri
+    assert not hasattr(result.units[0], "summary")
 
 
 def test_hwpx_table_cell_image_is_preserved_as_nested_asset_ref():
@@ -215,15 +200,6 @@ def test_hwpx_table_cell_image_is_preserved_as_nested_asset_ref():
 def test_nested_asset_refs_are_uploaded_and_resolved_in_table_evidence(monkeypatch):
     from rag_document_parser import RagDocumentParser
 
-    monkeypatch.setattr(
-        "rag_document_parser.parser._chat_json",
-        lambda prompt, cfg: {
-            "summary": "Table image summary.",
-            "keywords": ["table", "image"],
-            "questions": ["표 안 이미지는 무엇인가요?"],
-        },
-    )
-
     uploads = []
 
     def fake_put_object(cfg, key, data, content_type):
@@ -244,7 +220,7 @@ def test_nested_asset_refs_are_uploaded_and_resolved_in_table_evidence(monkeypat
     raw = _make_hwpx(xml, image_bytes=PNG_BYTES)
     document_hash = hashlib.sha256(raw).hexdigest()
 
-    result = RagDocumentParser(llm=_llm_config(), object_storage=_s3_config()).parse(
+    result = RagDocumentParser(object_storage=_s3_config()).parse(
         raw,
         suffix=".hwpx",
     )
@@ -256,7 +232,7 @@ def test_nested_asset_refs_are_uploaded_and_resolved_in_table_evidence(monkeypat
             "image/png",
         )
     ]
-    image_child = result.chunks[0].evidence.content["rows"][0]["cells"][1]["children"][0]
+    image_child = result.units[0].evidence.content["rows"][0]["cells"][1]["children"][0]
     assert image_child["content"]["uri"] == (
         f"s3://rag-assets/documents/{document_hash}/assets/img-0001.png"
     )

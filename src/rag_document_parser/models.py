@@ -129,14 +129,14 @@ class RagChunk:
 @dataclass(frozen=True)
 class ParseResult:
     source: SourceInfo
-    chunks: list[RagChunk]
+    units: list[EvidenceUnit]
     assets: list[DocumentAsset] = field(default_factory=list)
     quality_warnings: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "source": self.source.to_dict(),
-            "chunks": [chunk.to_dict() for chunk in self.chunks],
+            "units": [unit.to_dict() for unit in self.units],
             "assets": [asset.to_dict() for asset in self.assets],
             "quality_warnings": list(self.quality_warnings),
         }

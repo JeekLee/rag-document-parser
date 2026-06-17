@@ -6,30 +6,14 @@ import json
 import os
 import time
 from collections import Counter
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from rag_document_parser import HwpxBackend, LlmConfig, RagDocumentParser, S3Config
+from rag_document_parser import HwpxBackend, S3Config
 from rag_document_parser.backends import ParsedDocument
 from rag_document_parser.evidence_html import render_evidence_units_html
 from rag_document_parser.storage import put_object
-
-
-@dataclass
-class LimitedBackend:
-    max_units: int | None = None
-
-    def parse(self, data: bytes, suffix: str) -> ParsedDocument:
-        parsed = HwpxBackend().parse(data, suffix)
-        if self.max_units is None:
-            return parsed
-        return ParsedDocument(
-            units=parsed.units[: self.max_units],
-            assets=parsed.assets,
-            quality_warnings=parsed.quality_warnings,
-        )
 
 
 def main() -> None:
@@ -93,45 +77,12 @@ def main() -> None:
         ),
     }
 
-    llm_payload: dict[str, Any] | None = None
-    llm_elapsed = None
-    if not args.skip_llm:
-        llm_started = time.perf_counter()
-        result = RagDocumentParser(
-            llm=LlmConfig(
-                url=args.llm_url,
-                api_key=args.llm_api_key,
-                model=args.llm_model,
-                timeout=args.llm_timeout,
-            ),
-            object_storage=storage,
-            backends={".hwpx": LimitedBackend(args.llm_max_units)},
-        ).parse(
-            raw,
-            suffix=".hwpx",
-            source_name=args.source_name or args.input.name,
-        )
-        llm_elapsed = time.perf_counter() - llm_started
-        llm_payload = result.to_dict()
-        llm_json = _json_bytes(llm_payload)
-        llm_json_path = output_dir / "parse-result.llm.json"
-        llm_json_path.write_bytes(llm_json)
-        uploads["llm_parse_result_json"] = put_object(
-            storage,
-            "parse-result.llm.json",
-            llm_json,
-            "application/json; charset=utf-8",
-        )
-
     metrics = _metrics(
         parsed=parsed,
         raw_bytes=len(raw),
         document_sha256=document_sha256,
         evidence_elapsed=evidence_elapsed,
-        llm_elapsed=llm_elapsed,
-        llm_payload=llm_payload,
         uploads=uploads,
-        llm_max_units=args.llm_max_units,
         uploaded_assets=uploaded_assets,
     )
     metrics_json = _json_bytes(metrics)
@@ -153,10 +104,7 @@ def _metrics(
     raw_bytes: int,
     document_sha256: str,
     evidence_elapsed: float,
-    llm_elapsed: float | None,
-    llm_payload: dict[str, Any] | None,
     uploads: dict[str, str],
-    llm_max_units: int | None,
     uploaded_assets: list[dict[str, Any]],
 ) -> dict[str, Any]:
     counts = Counter(unit.type for unit in parsed.units)
@@ -176,14 +124,6 @@ def _metrics(
             "bytes": sum(len(asset.data) for asset in parsed.assets),
             "by_mime": dict(sorted(Counter(asset.mime for asset in parsed.assets).items())),
             "uris": [asset["uri"] for asset in uploaded_assets],
-        },
-        "llm": None
-        if llm_payload is None
-        else {
-            "max_units": llm_max_units,
-            "chunks": len(llm_payload["chunks"]),
-            "elapsed_seconds": round(llm_elapsed or 0.0, 3),
-            "sample_chunk": llm_payload["chunks"][0] if llm_payload["chunks"] else None,
         },
         "uploads": dict(uploads),
     }
@@ -245,17 +185,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--s3-secret-key", default=os.getenv("RDP_S3_SECRET_KEY", "minioadmin"))
     parser.add_argument("--s3-region", default=os.getenv("RDP_S3_REGION", "us-east-1"))
     parser.add_argument("--s3-prefix", default=os.getenv("RDP_S3_PREFIX", "hwpx-validation"))
-    parser.add_argument("--skip-llm", action="store_true")
-    parser.add_argument("--llm-url", default=os.getenv("RDP_LLM_URL", "http://localhost:10080/v1"))
-    parser.add_argument("--llm-api-key", default=os.getenv("RDP_LLM_API_KEY", ""))
-    parser.add_argument("--llm-model", default=os.getenv("RDP_LLM_MODEL", "qwen3-vl-30b-a3b"))
-    parser.add_argument("--llm-timeout", type=float, default=float(os.getenv("RDP_LLM_TIMEOUT", "120")))
-    parser.add_argument("--llm-max-units", type=int)
     args = parser.parse_args()
     if not args.input.exists():
         parser.error(f"input does not exist: {args.input}")
-    if not args.skip_llm and not args.llm_api_key:
-        parser.error("--llm-api-key or RDP_LLM_API_KEY is required unless --skip-llm is set")
     return args
 
 

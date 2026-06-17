@@ -1,19 +1,16 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from dataclasses import dataclass
 from typing import Any
 
 from .backends import DocumentBackend, default_backends
-from .llm import LlmConfig, chat_json as _chat_json
 from .models import (
     DocumentAsset,
     Evidence,
     EvidenceUnit,
     ParseResult,
     PendingAsset,
-    RagChunk,
     SourceInfo,
 )
 from .storage import S3Config, put_object as _put_object
@@ -21,13 +18,10 @@ from .storage import S3Config, put_object as _put_object
 
 @dataclass
 class RagDocumentParser:
-    llm: LlmConfig | None = None
     object_storage: S3Config | None = None
     backends: dict[str, DocumentBackend] | None = None
 
     def __post_init__(self) -> None:
-        if self.llm is None:
-            raise ValueError("llm is required")
         if self.object_storage is None:
             raise ValueError("object_storage is required")
         backends = default_backends()
@@ -65,7 +59,7 @@ class RagDocumentParser:
         )
         return ParseResult(
             source=source_info,
-            chunks=_enrich_chunks(_chunks_from_units(parsed.units, assets), self.llm),
+            units=_resolve_units(parsed.units, assets),
             assets=assets,
             quality_warnings=list(parsed.quality_warnings),
         )
@@ -105,24 +99,23 @@ def _upload_assets(
     return uploaded
 
 
-def _chunks_from_units(
+def _resolve_units(
     units: list[EvidenceUnit],
     assets: list[DocumentAsset],
-) -> list[RagChunk]:
+) -> list[EvidenceUnit]:
     assets_by_id = {asset.id: asset for asset in assets}
-    chunks: list[RagChunk] = []
+    resolved: list[EvidenceUnit] = []
     for unit in units:
-        chunks.append(
-            RagChunk(
+        resolved.append(
+            EvidenceUnit(
                 id=unit.id,
                 type=unit.type,
                 source=unit.source,
                 evidence=_resolve_asset_evidence(unit.evidence, assets_by_id),
-                summary="",
                 metadata=dict(unit.metadata),
             )
         )
-    return chunks
+    return resolved
 
 
 def _resolve_asset_evidence(
@@ -183,76 +176,6 @@ def _nested_evidence(value: dict[str, Any]) -> Evidence | None:
     if "content" not in value:
         return None
     return Evidence(kind=kind, format=fmt, content=value["content"])
-
-
-def _enrich_chunks(chunks: list[RagChunk], llm: LlmConfig | None) -> list[RagChunk]:
-    if llm is None:
-        raise ValueError("llm is required")
-
-    enriched: list[RagChunk] = []
-    for chunk in chunks:
-        enrichment = _chunk_enrichment(chunk, llm)
-        enriched.append(
-            RagChunk(
-                id=chunk.id,
-                type=chunk.type,
-                source=chunk.source,
-                evidence=chunk.evidence,
-                summary=enrichment["summary"],
-                keywords=enrichment["keywords"],
-                questions=enrichment["questions"],
-                metadata=chunk.metadata,
-            )
-        )
-    return enriched
-
-
-def _chunk_enrichment(chunk: RagChunk, llm: LlmConfig) -> dict[str, Any]:
-    prompt = _enrichment_prompt(chunk)
-    payload = _chat_json(prompt, llm)
-    enrichment = _normalize_enrichment(payload)
-    if enrichment is None:
-        raise ValueError(f"LLM enrichment failed for chunk {chunk.id}")
-    return enrichment
-
-
-def _enrichment_prompt(chunk: RagChunk) -> str:
-    payload = {
-        "id": chunk.id,
-        "type": chunk.type,
-        "source": chunk.source.to_dict(),
-        "evidence": chunk.evidence.to_dict(),
-        "metadata": chunk.metadata,
-    }
-    return (
-        "아래 문서 청크를 RAG 검색과 근거 제시에 사용할 수 있도록 보강해줘.\n"
-        "반드시 다음 JSON object만 반환해: "
-        '{"summary": string, "keywords": string[], "questions": string[]}.\n'
-        "summary는 청크 내용을 짧게 요약하고, keywords는 검색에 유용한 핵심어를 뽑고, "
-        "questions는 이 청크만으로 답변 가능한 질문을 작성해.\n\n"
-        f"{json.dumps(payload, ensure_ascii=False)}"
-    )
-
-
-def _normalize_enrichment(payload: Any) -> dict[str, Any] | None:
-    if not isinstance(payload, dict):
-        return None
-    summary = payload.get("summary")
-    keywords = payload.get("keywords")
-    questions = payload.get("questions")
-    if not isinstance(summary, str) or not summary.strip():
-        return None
-    if not _is_string_list(keywords) or not _is_string_list(questions):
-        return None
-    return {
-        "summary": summary.strip(),
-        "keywords": [item.strip() for item in keywords if item.strip()],
-        "questions": [item.strip() for item in questions if item.strip()],
-    }
-
-
-def _is_string_list(value: Any) -> bool:
-    return isinstance(value, list) and all(isinstance(item, str) for item in value)
 
 
 def _normalize_suffix(suffix: str) -> str:

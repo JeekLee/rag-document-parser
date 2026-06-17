@@ -4,12 +4,6 @@ import hashlib
 import json
 
 
-def _llm_config():
-    from rag_document_parser import LlmConfig
-
-    return LlmConfig(url="http://llm.test/v1", api_key="test", model="test-model")
-
-
 def _s3_config():
     from rag_document_parser import S3Config
 
@@ -22,30 +16,17 @@ def _s3_config():
     )
 
 
-def test_parse_text_document_returns_llm_enriched_chunks(monkeypatch):
+def test_parse_text_document_returns_evidence_units_without_llm(monkeypatch):
     from rag_document_parser import RagDocumentParser
 
-    responses = iter(
-        [
-            {
-                "summary": "코로나19 대면투약관리료 산정 기준을 설명합니다.",
-                "keywords": ["코로나19", "대면투약관리료", "산정 기준"],
-                "questions": ["코로나19 대면투약관리료는 어떤 기준에 따라 산정하나요?"],
-            },
-            {
-                "summary": "약국의 대면투약관리료 청구방법을 설명하는 표입니다.",
-                "keywords": ["약국", "대면투약관리료", "청구방법"],
-                "questions": ["약국은 대면투약관리료를 어떻게 청구하나요?"],
-            },
-        ]
+    def fail_chat_json(prompt, cfg):
+        raise AssertionError("parse() must not call LLM enrichment")
+
+    monkeypatch.setattr(
+        "rag_document_parser.parser._chat_json",
+        fail_chat_json,
+        raising=False,
     )
-    prompts: list[str] = []
-
-    def fake_chat_json(prompt, cfg):
-        prompts.append(prompt)
-        return next(responses)
-
-    monkeypatch.setattr("rag_document_parser.parser._chat_json", fake_chat_json)
 
     raw = (
         "# 요양급여 기준\n\n"
@@ -55,7 +36,7 @@ def test_parse_text_document_returns_llm_enriched_chunks(monkeypatch):
         "| 약국 | 대면투약관리료 코드로 청구 |\n"
     ).encode()
 
-    result = RagDocumentParser(llm=_llm_config(), object_storage=_s3_config()).parse(
+    result = RagDocumentParser(object_storage=_s3_config()).parse(
         raw,
         suffix=".md",
         source_id="notice-1/attachment-1",
@@ -65,51 +46,39 @@ def test_parse_text_document_returns_llm_enriched_chunks(monkeypatch):
     assert result.source.sha256 == hashlib.sha256(raw).hexdigest()
     assert result.source.suffix == ".md"
     assert not hasattr(result, "preview_markdown")
-    assert [chunk.type for chunk in result.chunks] == ["text", "table"]
-    assert len(prompts) == 2
-    assert "embedding_text" not in result.chunks[0].to_dict()
+    assert not hasattr(result, "chunks")
+    assert [unit.type for unit in result.units] == ["text", "table"]
 
-    text_chunk, table_chunk = result.chunks
-    assert text_chunk.source.kind == "text"
-    assert text_chunk.source.text == (
+    text_unit, table_unit = result.units
+    assert text_unit.source.kind == "text"
+    assert text_unit.source.text == (
         "section: 요양급여 기준\n"
         "코로나19 대면투약관리료는 다음 기준에 따라 산정한다."
     )
-    assert text_chunk.source.to_dict() == {
+    assert text_unit.source.to_dict() == {
         "kind": "text",
         "text": (
             "section: 요양급여 기준\n"
             "코로나19 대면투약관리료는 다음 기준에 따라 산정한다."
         ),
     }
-    assert text_chunk.summary == "코로나19 대면투약관리료 산정 기준을 설명합니다."
-    assert text_chunk.keywords == ["코로나19", "대면투약관리료", "산정 기준"]
-    assert text_chunk.questions == ["코로나19 대면투약관리료는 어떤 기준에 따라 산정하나요?"]
-    assert not hasattr(text_chunk, "source_pointer")
-    assert text_chunk.evidence.kind == "text"
-    assert text_chunk.evidence.format == "plain"
-    assert text_chunk.evidence.content == "코로나19 대면투약관리료는 다음 기준에 따라 산정한다."
+    assert not hasattr(text_unit, "summary")
+    assert not hasattr(text_unit, "keywords")
+    assert not hasattr(text_unit, "questions")
+    assert not hasattr(text_unit, "source_pointer")
+    assert text_unit.evidence.kind == "text"
+    assert text_unit.evidence.format == "plain"
+    assert text_unit.evidence.content == "코로나19 대면투약관리료는 다음 기준에 따라 산정한다."
 
-    assert table_chunk.source.kind == "table"
-    assert table_chunk.source.text == (
+    assert table_unit.source.kind == "table"
+    assert table_unit.source.text == (
         "section: 요양급여 기준\n"
         "columns: 대상 | 청구방법\n"
         "row 1: 대상=약국; 청구방법=대면투약관리료 코드로 청구"
     )
-    assert table_chunk.source.to_dict() == {
-        "kind": "table",
-        "text": (
-            "section: 요양급여 기준\n"
-            "columns: 대상 | 청구방법\n"
-            "row 1: 대상=약국; 청구방법=대면투약관리료 코드로 청구"
-        ),
-    }
-    assert table_chunk.summary == "약국의 대면투약관리료 청구방법을 설명하는 표입니다."
-    assert table_chunk.keywords == ["약국", "대면투약관리료", "청구방법"]
-    assert table_chunk.questions == ["약국은 대면투약관리료를 어떻게 청구하나요?"]
-    assert table_chunk.evidence.kind == "table"
-    assert table_chunk.evidence.format == "structured_table"
-    assert table_chunk.evidence.content == {
+    assert table_unit.evidence.kind == "table"
+    assert table_unit.evidence.format == "structured_table"
+    assert table_unit.evidence.content == {
         "caption": None,
         "columns": [
             {"id": "c1", "text": "대상"},
@@ -137,12 +106,12 @@ def test_parse_text_document_returns_llm_enriched_chunks(monkeypatch):
             }
         ],
     }
-    assert table_chunk.metadata["common"] == {
+    assert table_unit.metadata["common"] == {
         "chunk_kind": "table",
         "section_path": ["요양급여 기준"],
         "display_format": "structured_table",
     }
-    assert table_chunk.metadata["table"] == {
+    assert table_unit.metadata["table"] == {
         "table_id": "t1",
         "headers": ["대상", "청구방법"],
         "row_count": 1,
@@ -169,10 +138,6 @@ def test_markdown_backend_returns_evidence_units():
     text_unit, table_unit = parsed.units
     assert text_unit.type == "text"
     assert text_unit.source.text == "section: Section\nPlain paragraph."
-    assert text_unit.source.to_dict() == {
-        "kind": "text",
-        "text": "section: Section\nPlain paragraph.",
-    }
     assert text_unit.evidence.content == "Plain paragraph."
     assert text_unit.metadata["common"] == {
         "chunk_kind": "text",
@@ -182,72 +147,34 @@ def test_markdown_backend_returns_evidence_units():
 
     assert table_unit.type == "table"
     assert table_unit.source.text == "section: Section\ncolumns: A | B\nrow 1: A=one; B=two"
-    assert table_unit.source.to_dict() == {
-        "kind": "table",
-        "text": "section: Section\ncolumns: A | B\nrow 1: A=one; B=two",
-    }
     assert table_unit.evidence.format == "structured_table"
-    assert table_unit.evidence.content == {
-        "caption": None,
-        "columns": [
-            {"id": "c1", "text": "A"},
-            {"id": "c2", "text": "B"},
-        ],
-        "rows": [
-            {
-                "index": 1,
-                "cells": [
-                    {
-                        "column_id": "c1",
-                        "text": "one",
-                        "rowspan": 1,
-                        "colspan": 1,
-                        "children": [],
-                    },
-                    {
-                        "column_id": "c2",
-                        "text": "two",
-                        "rowspan": 1,
-                        "colspan": 1,
-                        "children": [],
-                    },
-                ],
-            }
-        ],
-    }
+    assert table_unit.evidence.content["columns"] == [
+        {"id": "c1", "text": "A"},
+        {"id": "c2", "text": "B"},
+    ]
     assert table_unit.metadata["common"]["display_format"] == "structured_table"
 
 
-def test_parse_result_to_dict_is_json_serializable(monkeypatch):
+def test_parse_result_to_dict_is_json_serializable():
     from rag_document_parser import RagDocumentParser
 
-    monkeypatch.setattr(
-        "rag_document_parser.parser._chat_json",
-        lambda prompt, cfg: {
-            "summary": "Plain paragraph summary.",
-            "keywords": ["plain", "paragraph"],
-            "questions": ["What does the paragraph say?"],
-        },
-    )
-
     raw = b"plain paragraph"
-    payload = RagDocumentParser(llm=_llm_config(), object_storage=_s3_config()).parse(
+    payload = RagDocumentParser(object_storage=_s3_config()).parse(
         raw, suffix=".txt"
     ).to_dict()
 
     assert payload["source"]["sha256"] == hashlib.sha256(raw).hexdigest()
     assert payload["assets"] == []
+    assert "chunks" not in payload
     assert "preview_markdown" not in payload
-    assert "source_pointer" not in payload["chunks"][0]
-    assert "embedding_text" not in payload["chunks"][0]
-    assert payload["chunks"][0]["source"] == {
+    assert "source_pointer" not in payload["units"][0]
+    assert "embedding_text" not in payload["units"][0]
+    assert "summary" not in payload["units"][0]
+    assert payload["units"][0]["source"] == {
         "kind": "text",
         "text": "plain paragraph",
     }
-    assert payload["chunks"][0]["summary"] == "Plain paragraph summary."
-    assert payload["chunks"][0]["keywords"] == ["plain", "paragraph"]
-    assert payload["chunks"][0]["questions"] == ["What does the paragraph say?"]
-    assert payload["chunks"][0]["evidence"] == {
+    assert payload["units"][0]["evidence"] == {
         "kind": "text",
         "format": "plain",
         "content": "plain paragraph",
@@ -255,62 +182,34 @@ def test_parse_result_to_dict_is_json_serializable(monkeypatch):
     assert json.loads(json.dumps(payload, ensure_ascii=False)) == payload
 
 
-def test_source_does_not_require_position_offsets(monkeypatch):
+def test_source_does_not_require_position_offsets():
     from rag_document_parser import RagDocumentParser
-
-    monkeypatch.setattr(
-        "rag_document_parser.parser._chat_json",
-        lambda prompt, cfg: {
-            "summary": "한글 요약",
-            "keywords": ["한글"],
-            "questions": ["무슨 내용인가요?"],
-        },
-    )
 
     raw = "# H\n\n한글".encode()
-    chunk = RagDocumentParser(llm=_llm_config(), object_storage=_s3_config()).parse(
+    unit = RagDocumentParser(object_storage=_s3_config()).parse(
         raw, suffix=".md"
-    ).chunks[0]
+    ).units[0]
 
-    assert chunk.source.text == "section: H\n한글"
-    assert chunk.source.to_dict() == {"kind": "text", "text": "section: H\n한글"}
-    assert chunk.metadata["common"]["section_path"] == ["H"]
-    assert not hasattr(chunk, "source_pointer")
+    assert unit.source.text == "section: H\n한글"
+    assert unit.source.to_dict() == {"kind": "text", "text": "section: H\n한글"}
+    assert unit.metadata["common"]["section_path"] == ["H"]
+    assert not hasattr(unit, "source_pointer")
 
 
-def test_parser_requires_llm_and_object_storage_config():
+def test_parser_requires_object_storage_config_only():
     from rag_document_parser import RagDocumentParser
 
     try:
-        RagDocumentParser(llm=None, object_storage=_s3_config())
-    except ValueError as exc:
-        assert "llm is required" in str(exc)
-    else:
-        raise AssertionError("expected ValueError")
-
-    try:
-        RagDocumentParser(llm=_llm_config(), object_storage=None)
+        RagDocumentParser(object_storage=None)
     except ValueError as exc:
         assert "object_storage is required" in str(exc)
     else:
         raise AssertionError("expected ValueError")
 
-
-def test_parse_fails_when_llm_enrichment_is_invalid(monkeypatch):
-    from rag_document_parser import RagDocumentParser
-
-    monkeypatch.setattr("rag_document_parser.parser._chat_json", lambda prompt, cfg: None)
-
-    parser = RagDocumentParser(llm=_llm_config(), object_storage=_s3_config())
-    try:
-        parser.parse(b"plain paragraph", suffix=".txt")
-    except ValueError as exc:
-        assert "LLM enrichment failed" in str(exc)
-    else:
-        raise AssertionError("expected ValueError")
+    RagDocumentParser(object_storage=_s3_config())
 
 
-def test_custom_backend_can_be_registered_for_suffix(monkeypatch):
+def test_custom_backend_can_be_registered_for_suffix():
     from rag_document_parser import (
         Evidence,
         EvidenceUnit,
@@ -318,15 +217,6 @@ def test_custom_backend_can_be_registered_for_suffix(monkeypatch):
         SourceEvidence,
     )
     from rag_document_parser.backends import ParsedDocument
-
-    monkeypatch.setattr(
-        "rag_document_parser.parser._chat_json",
-        lambda prompt, cfg: {
-            "summary": "Custom backend summary.",
-            "keywords": ["custom"],
-            "questions": ["What did the custom backend parse?"],
-        },
-    )
 
     class CustomBackend:
         calls: list[tuple[bytes, str]]
@@ -356,15 +246,13 @@ def test_custom_backend_can_be_registered_for_suffix(monkeypatch):
 
     backend = CustomBackend()
     result = RagDocumentParser(
-        llm=_llm_config(),
         object_storage=_s3_config(),
         backends={".custom": backend},
     ).parse(b"custom bytes", suffix=".CUSTOM")
 
     assert backend.calls == [(b"custom bytes", ".custom")]
     assert result.source.suffix == ".custom"
-    assert result.chunks[0].source.text == "custom text"
-    assert result.chunks[0].summary == "Custom backend summary."
+    assert result.units[0].source.text == "custom text"
     assert result.quality_warnings == [
         {
             "type": "custom_warning",
@@ -378,11 +266,15 @@ def test_unsupported_suffix_fails_before_llm_call(monkeypatch):
     from rag_document_parser import RagDocumentParser
 
     def fail_chat_json(prompt, cfg):
-        raise AssertionError("LLM should not be called for unsupported formats")
+        raise AssertionError("parse() must not call LLM enrichment")
 
-    monkeypatch.setattr("rag_document_parser.parser._chat_json", fail_chat_json)
+    monkeypatch.setattr(
+        "rag_document_parser.parser._chat_json",
+        fail_chat_json,
+        raising=False,
+    )
 
-    parser = RagDocumentParser(llm=_llm_config(), object_storage=_s3_config())
+    parser = RagDocumentParser(object_storage=_s3_config())
     try:
         parser.parse(b"not supported", suffix=".docx")
     except ValueError as exc:
@@ -401,15 +293,6 @@ def test_image_assets_are_uploaded_to_s3_and_linked_in_evidence(monkeypatch):
         SourceEvidence,
     )
     from rag_document_parser.backends import ParsedDocument
-
-    monkeypatch.setattr(
-        "rag_document_parser.parser._chat_json",
-        lambda prompt, cfg: {
-            "summary": "Image summary.",
-            "keywords": ["image"],
-            "questions": ["What does the image show?"],
-        },
-    )
 
     uploads = []
 
@@ -459,7 +342,6 @@ def test_image_assets_are_uploaded_to_s3_and_linked_in_evidence(monkeypatch):
 
     raw = b"fake source document"
     result = RagDocumentParser(
-        llm=_llm_config(),
         object_storage=_s3_config(),
         backends={".imgdoc": ImageBackend()},
     ).parse(raw, suffix=".imgdoc")
@@ -483,7 +365,7 @@ def test_image_assets_are_uploaded_to_s3_and_linked_in_evidence(monkeypatch):
         "bytes": len(b"png bytes"),
         "metadata": {},
     }
-    assert result.chunks[0].evidence.content == {
+    assert result.units[0].evidence.content == {
         "asset_id": "img-0001",
         "caption": "청구 절차 이미지",
         "uri": f"s3://rag-assets/documents/{document_hash}/assets/img-0001.png",
