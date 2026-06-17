@@ -30,7 +30,7 @@ parser = RagDocumentParser(
 result = parser.parse(raw_bytes, suffix=".md")
 
 for unit in result.units:
-    store_extracted_unit(unit.source, unit.type, unit.format, unit.content, unit.metadata)
+    store_extracted_unit(unit.id, unit.source, unit.type, unit.format, unit.content, unit.metadata)
 
 for asset in result.assets:
     register_asset(asset.uri)
@@ -59,7 +59,8 @@ for chunk in chunks:
 
 - Defines the public RAG result model:
   - `ParseResult`: parser output containing extracted units and uploaded assets.
-  - `EvidenceUnit`: extraction-stage source, content, type, format, and metadata.
+  - `EvidenceUnit`: extraction-stage id, source, content, type, format, and
+    metadata.
   - `EvidenceItem`: one evidence payload item inside composite chunk evidence.
   - `Evidence`: composite chunk evidence made from one or more `EvidenceItem`
     values for a `RagChunk`.
