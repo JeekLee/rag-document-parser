@@ -260,14 +260,33 @@ def _column_header_text(
     column_index: int,
 ) -> str:
     texts: list[str] = []
-    for row in header_rows:
+    last_header_row = len(header_rows) - 1
+    for row_index, row in enumerate(header_rows):
         for cell in row:
-            if int(cell["col_addr"]) != column_index:
+            if not _header_cell_contributes_to_column(
+                cell,
+                column_index,
+                row_index,
+                last_header_row,
+            ):
                 continue
             text = str(cell["text"]).strip()
             if text and text not in texts:
                 texts.append(text)
     return " / ".join(texts)
+
+
+def _header_cell_contributes_to_column(
+    cell: dict[str, object],
+    column_index: int,
+    row_index: int,
+    last_header_row: int,
+) -> bool:
+    start = int(cell["col_addr"])
+    end = start + int(cell["colspan"])
+    return column_index == start or (
+        start < column_index < end and row_index < last_header_row
+    )
 
 
 def _header_row_count(raw_rows: list[list[dict[str, object]]]) -> int:
@@ -278,14 +297,46 @@ def _header_row_count(raw_rows: list[list[dict[str, object]]]) -> int:
         return 1
     count = 1
     header_row_end = _row_span_end(first_row)
-    for row in raw_rows[1:]:
+    while count < len(raw_rows):
+        row = raw_rows[count]
         row_start = _row_start(row)
-        if row_start < header_row_end or _row_is_blank(row):
+        if (
+            row_start < header_row_end
+            or _row_is_blank(row)
+            or _row_refines_previous_header(row, raw_rows[count - 1])
+        ):
             count += 1
             header_row_end = max(header_row_end, _row_span_end(row))
             continue
         break
     return count
+
+
+def _row_refines_previous_header(
+    row: list[dict[str, object]],
+    previous_row: list[dict[str, object]],
+) -> bool:
+    if any(cell["children"] for cell in row):
+        return False
+    groups = [
+        cell
+        for cell in previous_row
+        if int(cell["colspan"]) > 1 and str(cell["text"]).strip()
+    ]
+    if not groups:
+        return False
+    for group in groups:
+        group_start = int(group["col_addr"])
+        group_end = group_start + int(group["colspan"])
+        refiners = [
+            cell
+            for cell in row
+            if group_start <= int(cell["col_addr"])
+            and int(cell["col_addr"]) + int(cell["colspan"]) <= group_end
+        ]
+        if not any(str(cell["text"]).strip() for cell in refiners):
+            return False
+    return True
 
 
 def _row_start(row: list[dict[str, object]]) -> int:
@@ -498,10 +549,42 @@ def _cell_source_label(
     *,
     use_header_labels: bool,
 ) -> str:
-    header = column_text.get(str(cell["column_id"]), "")
-    if use_header_labels and header and not header.startswith("col "):
-        return header
-    return _cell_coordinate_label(str(cell["column_id"]), int(cell.get("colspan", 1)))
+    column_id = str(cell["column_id"])
+    colspan = int(cell.get("colspan", 1))
+    if use_header_labels:
+        labels = [
+            column_text.get(f"c{column_index}", f"col {column_index}")
+            for column_index in range(
+                _column_id_number(column_id),
+                _column_id_number(column_id) + colspan,
+            )
+        ]
+        common_prefix = _common_semantic_header_prefix(labels)
+        if common_prefix is not None:
+            return common_prefix
+        if len(set(labels)) == 1 and _is_semantic_column_label(labels[0]):
+            return labels[0]
+        if colspan == 1 and _is_semantic_column_label(labels[0]):
+            return labels[0]
+    return _cell_coordinate_label(column_id, colspan)
+
+
+def _is_semantic_column_label(label: str) -> bool:
+    return bool(label) and not label.startswith("col ")
+
+
+def _common_semantic_header_prefix(labels: list[str]) -> str | None:
+    if not labels or not all(_is_semantic_column_label(label) for label in labels):
+        return None
+    split_labels = [label.split(" / ") for label in labels]
+    prefix: list[str] = []
+    for parts in zip(*split_labels):
+        if len(set(parts)) != 1:
+            break
+        prefix.append(parts[0])
+    if not prefix:
+        return None
+    return " / ".join(prefix)
 
 
 def _cell_coordinate_label(column_id: str, colspan: int) -> str:

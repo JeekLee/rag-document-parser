@@ -321,7 +321,7 @@ def test_hwpx_table_uses_cell_addresses_and_spans_for_grid_width():
         "",
         "",
         "관련 근거",
-        "",
+        "관련 근거",
         "",
         "",
     ]
@@ -390,3 +390,112 @@ def test_hwpx_table_keeps_header_rows_covered_by_rowspan_out_of_body():
     assert len(content["rows"]) == 1
     assert content["header_rows"][1]["cells"][0]["text"] == "영상"
     assert content["rows"][0]["cells"][0]["text"] == "진단"
+
+
+def test_hwpx_table_propagates_colspan_header_groups_to_leaf_columns():
+    from rag_document_parser import HwpxBackend
+
+    table = _table(
+        [
+            _text_cell("현행", colspan=3, row_addr=0, col_addr=0),
+            _text_cell("개정", colspan=3, row_addr=0, col_addr=3),
+            _text_cell("비고", rowspan=2, row_addr=0, col_addr=6),
+        ],
+        [
+            _text_cell("항목", row_addr=1, col_addr=0),
+            _text_cell("제목", row_addr=1, col_addr=1),
+            _text_cell("세부인정사항", row_addr=1, col_addr=2),
+            _text_cell("항목", row_addr=1, col_addr=3),
+            _text_cell("제목", row_addr=1, col_addr=4),
+            _text_cell("세부인정사항", row_addr=1, col_addr=5),
+        ],
+        [
+            _text_cell("일반사항", row_addr=2, col_addr=0),
+            _text_cell("자연분만", row_addr=2, col_addr=1),
+            _text_cell("현행 기준", row_addr=2, col_addr=2),
+            _text_cell("일반사항", row_addr=2, col_addr=3),
+            _text_cell("제왕절개", row_addr=2, col_addr=4),
+            _text_cell("개정 기준", row_addr=2, col_addr=5),
+            _text_cell("문구 수정", row_addr=2, col_addr=6),
+        ],
+        [
+            _text_cell("I. 행위 일반사항", colspan=3, row_addr=3, col_addr=0),
+            _text_cell("I. 행위 일반사항", colspan=3, row_addr=3, col_addr=3),
+            _text_cell("동일", row_addr=3, col_addr=6),
+        ],
+    )
+    xml = (
+        f'<hp:sec xmlns:hp="{HP}">'
+        f"<hp:p><hp:run>{table}</hp:run></hp:p>"
+        "</hp:sec>"
+    )
+
+    parsed = HwpxBackend().parse(_make_hwpx(xml), ".hwpx")
+
+    content = parsed.units[0].evidence.content
+    assert [column["text"] for column in content["columns"]] == [
+        "현행 / 항목",
+        "현행 / 제목",
+        "현행 / 세부인정사항",
+        "개정 / 항목",
+        "개정 / 제목",
+        "개정 / 세부인정사항",
+        "비고",
+    ]
+    assert parsed.units[0].source.text == (
+        "table: 7 columns\n"
+        "header 1: cols 1-3: 현행; cols 4-6: 개정; col 7: 비고\n"
+        "header 2: col 1: 항목; col 2: 제목; col 3: 세부인정사항; "
+        "col 4: 항목; col 5: 제목; col 6: 세부인정사항\n"
+        "row 1: 현행 / 항목: 일반사항; 현행 / 제목: 자연분만; "
+        "현행 / 세부인정사항: 현행 기준; 개정 / 항목: 일반사항; "
+        "개정 / 제목: 제왕절개; 개정 / 세부인정사항: 개정 기준; 비고: 문구 수정\n"
+        "row 2: 현행: I. 행위 일반사항; 개정: I. 행위 일반사항; 비고: 동일"
+    )
+
+
+def test_hwpx_table_treats_colspan_only_second_row_as_header():
+    from rag_document_parser import HwpxBackend
+
+    table = _table(
+        [
+            _text_cell("검사", colspan=2, row_addr=0, col_addr=0),
+            _text_cell("결과", colspan=2, row_addr=0, col_addr=2),
+        ],
+        [
+            _text_cell("일반", row_addr=1, col_addr=0),
+            _text_cell("정밀", row_addr=1, col_addr=1),
+            _text_cell("판정", row_addr=1, col_addr=2),
+            _text_cell("근거", row_addr=1, col_addr=3),
+        ],
+        [
+            _text_cell("복부", row_addr=2, col_addr=0),
+            _text_cell("심장", row_addr=2, col_addr=1),
+            _text_cell("급여", row_addr=2, col_addr=2),
+            _text_cell("고시", row_addr=2, col_addr=3),
+        ],
+    )
+    xml = (
+        f'<hp:sec xmlns:hp="{HP}">'
+        f"<hp:p><hp:run>{table}</hp:run></hp:p>"
+        "</hp:sec>"
+    )
+
+    parsed = HwpxBackend().parse(_make_hwpx(xml), ".hwpx")
+
+    content = parsed.units[0].evidence.content
+    assert [column["text"] for column in content["columns"]] == [
+        "검사 / 일반",
+        "검사 / 정밀",
+        "결과 / 판정",
+        "결과 / 근거",
+    ]
+    assert len(content["header_rows"]) == 2
+    assert [row["index"] for row in content["rows"]] == [1]
+    assert parsed.units[0].source.text == (
+        "table: 4 columns\n"
+        "header 1: cols 1-2: 검사; cols 3-4: 결과\n"
+        "header 2: col 1: 일반; col 2: 정밀; col 3: 판정; col 4: 근거\n"
+        "row 1: 검사 / 일반: 복부; 검사 / 정밀: 심장; "
+        "결과 / 판정: 급여; 결과 / 근거: 고시"
+    )
