@@ -157,3 +157,107 @@ def test_render_evidence_image_uses_public_url_while_showing_source_uri():
         in html
     )
     assert "s3://rag-assets/doc/assets/img-0001.png" in html
+
+
+def test_render_structured_table_uses_header_rows_with_spans():
+    from rag_document_parser.evidence_html import render_evidence_html
+
+    html = render_evidence_html(
+        {
+            "kind": "table",
+            "format": "structured_table",
+            "content": {
+                "caption": None,
+                "columns": [
+                    {"id": "c1", "text": ""},
+                    {"id": "c2", "text": ""},
+                    {"id": "c3", "text": "관련 근거"},
+                    {"id": "c4", "text": "관련 근거"},
+                ],
+                "header_rows": [
+                    {
+                        "index": 1,
+                        "cells": [
+                            {
+                                "column_id": "c1",
+                                "text": "",
+                                "rowspan": 1,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                            {
+                                "column_id": "c2",
+                                "text": "",
+                                "rowspan": 1,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                            {
+                                "column_id": "c3",
+                                "text": "관련 근거",
+                                "rowspan": 2,
+                                "colspan": 2,
+                                "children": [],
+                            },
+                        ],
+                    },
+                    {
+                        "index": 2,
+                        "cells": [
+                            {
+                                "column_id": "c1",
+                                "text": "",
+                                "rowspan": 1,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                            {
+                                "column_id": "c2",
+                                "text": "",
+                                "rowspan": 1,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                        ],
+                    },
+                ],
+                "rows": [
+                    {
+                        "index": 1,
+                        "cells": [
+                            {
+                                "column_id": "c1",
+                                "text": "개정",
+                                "rowspan": 1,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                            {
+                                "column_id": "c2",
+                                "text": "고시",
+                                "rowspan": 1,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                            {
+                                "column_id": "c3",
+                                "text": "시행",
+                                "rowspan": 1,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                            {
+                                "column_id": "c4",
+                                "text": "QA",
+                                "rowspan": 1,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                        ],
+                    }
+                ],
+            },
+        }
+    )
+
+    assert '<th rowspan="2" colspan="2">관련 근거</th>' in html

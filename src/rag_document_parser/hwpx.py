@@ -32,11 +32,34 @@ class HwpxBackend:
                 for paragraph in root.findall(_q("p")):
                     table = paragraph.find(f".//{_q('tbl')}")
                     if table is not None:
-                        table_id = f"t{table_index}"
-                        table_index += 1
                         structured = _structured_table(table, z, bin_data_map, assets)
                         if not structured["columns"] and not structured["rows"]:
                             continue
+                        text_box = _single_cell_text_table_text(structured)
+                        if text_box is not None:
+                            units.append(
+                                EvidenceUnit(
+                                    id=f"b{block_index}",
+                                    type="text",
+                                    source=SourceEvidence(kind="text", text=text_box),
+                                    evidence=Evidence(
+                                        kind="text",
+                                        format="plain",
+                                        content=text_box,
+                                    ),
+                                    metadata={
+                                        "common": {
+                                            "chunk_kind": "text",
+                                            "section_path": [],
+                                            "display_format": "plain",
+                                        }
+                                    },
+                                )
+                            )
+                            block_index += 1
+                            continue
+                        table_id = f"t{table_index}"
+                        table_index += 1
                         units.append(
                             EvidenceUnit(
                                 id=f"b{block_index}",
@@ -171,62 +194,178 @@ def _structured_table(
     assets: list[PendingAsset],
 ) -> dict[str, object]:
     raw_rows = [
-        _table_row(row, z, bin_data_map, assets)
-        for row in table.findall(_q("tr"))
+        _table_row(row, row_index, z, bin_data_map, assets)
+        for row_index, row in enumerate(table.findall(_q("tr")))
     ]
+    raw_rows = [row for row in raw_rows if row]
     if not raw_rows:
         return {"caption": None, "columns": [], "rows": []}
 
-    first_row_is_header = not any(cell["children"] for cell in raw_rows[0])
-    header_row = raw_rows[0] if first_row_is_header else []
-    data_rows = raw_rows[1:] if first_row_is_header else raw_rows
-    column_count = max((len(row) for row in raw_rows), default=0)
-    headers = [
-        str(header_row[index]["text"] or f"Column {index + 1}")
-        if index < len(header_row)
-        else f"Column {index + 1}"
-        for index in range(column_count)
-    ]
-    columns = [
+    column_count = _table_column_count(raw_rows)
+    header_count = _header_row_count(raw_rows)
+    header_raw_rows = raw_rows[:header_count]
+    data_raw_rows = raw_rows[header_count:]
+    columns = _table_columns(column_count, header_raw_rows)
+    header_rows = [
         {
-            "id": f"c{index}",
-            "text": header,
+            "index": index,
+            "cells": _evidence_cells(raw_cells, columns),
         }
-        for index, header in enumerate(headers, start=1)
+        for index, raw_cells in enumerate(header_raw_rows, start=1)
     ]
 
     rows: list[dict[str, object]] = []
-    for row_index, raw_cells in enumerate(data_rows, start=1):
-        cells: list[dict[str, object]] = []
-        for column, raw_cell in zip(columns, raw_cells, strict=False):
-            cells.append(
-                {
-                    "column_id": column["id"],
-                    "text": raw_cell["text"],
-                    "rowspan": raw_cell["rowspan"],
-                    "colspan": raw_cell["colspan"],
-                    "children": raw_cell["children"],
-                }
-            )
-        rows.append({"index": row_index, "cells": cells})
+    for raw_cells in data_raw_rows:
+        if _row_is_blank(raw_cells):
+            continue
+        rows.append(
+            {
+                "index": len(rows) + 1,
+                "cells": _evidence_cells(raw_cells, columns),
+            }
+        )
 
-    return {"caption": None, "columns": columns, "rows": rows}
+    result: dict[str, object] = {"caption": None, "columns": columns, "rows": rows}
+    if header_rows:
+        result["header_rows"] = header_rows
+    return result
+
+
+def _table_column_count(raw_rows: list[list[dict[str, object]]]) -> int:
+    return max(
+        (
+            int(cell["col_addr"]) + int(cell["colspan"])
+            for row in raw_rows
+            for cell in row
+        ),
+        default=0,
+    )
+
+
+def _table_columns(
+    column_count: int,
+    header_rows: list[list[dict[str, object]]],
+) -> list[dict[str, str]]:
+    return [
+        {
+            "id": f"c{index}",
+            "text": _column_header_text(header_rows, index - 1),
+        }
+        for index in range(1, column_count + 1)
+    ]
+
+
+def _column_header_text(
+    header_rows: list[list[dict[str, object]]],
+    column_index: int,
+) -> str:
+    texts: list[str] = []
+    for row in header_rows:
+        for cell in row:
+            if int(cell["col_addr"]) != column_index:
+                continue
+            text = str(cell["text"]).strip()
+            if text and text not in texts:
+                texts.append(text)
+    return " / ".join(texts)
+
+
+def _header_row_count(raw_rows: list[list[dict[str, object]]]) -> int:
+    first_row = raw_rows[0]
+    if any(cell["children"] for cell in first_row):
+        return 0
+    if len(raw_rows) == 1:
+        return 1
+    count = 1
+    header_row_end = _row_span_end(first_row)
+    for row in raw_rows[1:]:
+        row_start = _row_start(row)
+        if row_start < header_row_end or _row_is_blank(row):
+            count += 1
+            header_row_end = max(header_row_end, _row_span_end(row))
+            continue
+        break
+    return count
+
+
+def _row_start(row: list[dict[str, object]]) -> int:
+    return min((int(cell["row_addr"]) for cell in row), default=0)
+
+
+def _row_span_end(row: list[dict[str, object]]) -> int:
+    return max(
+        (
+            int(cell["row_addr"]) + int(cell["rowspan"])
+            for cell in row
+        ),
+        default=0,
+    )
+
+
+def _row_is_blank(row: list[dict[str, object]]) -> bool:
+    return not any(str(cell["text"]).strip() or cell["children"] for cell in row)
+
+
+def _evidence_cells(
+    raw_cells: list[dict[str, object]],
+    columns: list[dict[str, str]],
+) -> list[dict[str, object]]:
+    cells: list[dict[str, object]] = []
+    for raw_cell in sorted(raw_cells, key=lambda cell: int(cell["col_addr"])):
+        column_index = int(raw_cell["col_addr"])
+        column_id = (
+            columns[column_index]["id"]
+            if 0 <= column_index < len(columns)
+            else f"c{column_index + 1}"
+        )
+        cells.append(
+            {
+                "column_id": column_id,
+                "text": raw_cell["text"],
+                "rowspan": raw_cell["rowspan"],
+                "colspan": raw_cell["colspan"],
+                "children": raw_cell["children"],
+            }
+        )
+    return cells
+
+
+def _single_cell_text_table_text(table: dict[str, object]) -> str | None:
+    if table["rows"]:
+        return None
+    header_rows = table.get("header_rows")
+    if not isinstance(header_rows, list) or len(header_rows) != 1:
+        return None
+    cells = header_rows[0].get("cells")
+    if not isinstance(cells, list) or len(cells) != 1:
+        return None
+    cell = cells[0]
+    if not isinstance(cell, dict) or cell.get("children"):
+        return None
+    text = str(cell.get("text", "")).strip()
+    return text or None
 
 
 def _table_row(
     row: ET.Element,
+    row_index: int,
     z: zipfile.ZipFile,
     bin_data_map: dict[str, str],
     assets: list[PendingAsset],
 ) -> list[dict[str, object]]:
-    return [
-        _table_cell(cell, z, bin_data_map, assets)
-        for cell in row.findall(_q("tc"))
-    ]
+    cells: list[dict[str, object]] = []
+    col_cursor = 0
+    for cell in row.findall(_q("tc")):
+        raw_cell = _table_cell(cell, row_index, col_cursor, z, bin_data_map, assets)
+        cells.append(raw_cell)
+        col_cursor = int(raw_cell["col_addr"]) + int(raw_cell["colspan"])
+    return cells
 
 
 def _table_cell(
     cell: ET.Element,
+    row_index: int,
+    col_index: int,
     z: zipfile.ZipFile,
     bin_data_map: dict[str, str],
     assets: list[PendingAsset],
@@ -264,6 +403,8 @@ def _table_cell(
                 texts.append(text)
     return {
         "text": " ".join(texts),
+        "row_addr": _cell_addr(cell, "rowAddr", row_index),
+        "col_addr": _cell_addr(cell, "colAddr", col_index),
         "rowspan": _cell_span(cell, "rowSpan"),
         "colspan": _cell_span(cell, "colSpan"),
         "children": children,
@@ -281,29 +422,107 @@ def _cell_span(cell: ET.Element, name: str) -> int:
         return 1
 
 
+def _cell_addr(cell: ET.Element, name: str, default: int) -> int:
+    value = cell.get(name)
+    if value is None:
+        addr = cell.find(_q("cellAddr"))
+        value = addr.get(name) if addr is not None else None
+    try:
+        return max(0, int(value)) if value is not None else default
+    except ValueError:
+        return default
+
+
 def _table_source_text(table: dict[str, object]) -> str:
     columns = table["columns"]
     rows = table["rows"]
-    column_text = {str(column["id"]): str(column["text"]) for column in columns}
+    column_text = {
+        str(column["id"]): _column_source_label(column)
+        for column in columns
+    }
     lines: list[str] = []
     if columns:
-        lines.append("columns: " + " | ".join(str(column["text"]) for column in columns))
+        lines.append(
+            "columns: "
+            + " | ".join(_column_source_label(column) for column in columns)
+        )
+    for header_row in table.get("header_rows", []):
+        cells = _table_source_cells(
+            header_row["cells"],
+            column_text,
+            use_header_labels=False,
+        )
+        if cells:
+            lines.append(f"header row {header_row['index']}: " + "; ".join(cells))
     for row in rows:
-        cells: list[str] = []
-        for cell in row["cells"]:
-            header = column_text.get(str(cell["column_id"]), str(cell["column_id"]))
-            value = str(cell["text"])
-            child_texts = [
-                "nested table: " + _inline_table_source(child["content"])
-                for child in cell["children"]
-                if child.get("kind") == "table"
-            ]
-            combined = "; ".join(part for part in [value, *child_texts] if part)
-            if combined:
-                cells.append(f"{header}={combined}")
+        cells = _table_source_cells(
+            row["cells"],
+            column_text,
+            use_header_labels=True,
+        )
         if cells:
             lines.append(f"row {row['index']}: " + "; ".join(cells))
     return "\n".join(lines)
+
+
+def _column_source_label(column: dict[str, object]) -> str:
+    text = str(column["text"]).strip()
+    return text or _column_coordinate_label(str(column["id"]))
+
+
+def _table_source_cells(
+    cells: list[dict[str, object]],
+    column_text: dict[str, str],
+    *,
+    use_header_labels: bool,
+) -> list[str]:
+    result: list[str] = []
+    for cell in cells:
+        header = _cell_source_label(
+            cell,
+            column_text,
+            use_header_labels=use_header_labels,
+        )
+        value = str(cell["text"])
+        child_texts = [
+            "nested table: " + _inline_table_source(child["content"])
+            for child in cell["children"]
+            if child.get("kind") == "table"
+        ]
+        combined = "; ".join(part for part in [value, *child_texts] if part)
+        if combined:
+            result.append(f"{header}={combined}")
+    return result
+
+
+def _cell_source_label(
+    cell: dict[str, object],
+    column_text: dict[str, str],
+    *,
+    use_header_labels: bool,
+) -> str:
+    header = column_text.get(str(cell["column_id"]), "")
+    if use_header_labels and header and not header.startswith("col "):
+        return header
+    return _cell_coordinate_label(str(cell["column_id"]), int(cell.get("colspan", 1)))
+
+
+def _cell_coordinate_label(column_id: str, colspan: int) -> str:
+    start = _column_id_number(column_id)
+    if colspan <= 1:
+        return _column_coordinate_label(column_id)
+    return f"col {start}-col {start + colspan - 1}"
+
+
+def _column_coordinate_label(column_id: str) -> str:
+    return f"col {_column_id_number(column_id)}"
+
+
+def _column_id_number(column_id: str) -> int:
+    try:
+        return max(1, int(column_id.removeprefix("c")))
+    except ValueError:
+        return 1
 
 
 def _inline_table_source(table: dict[str, object]) -> str:
