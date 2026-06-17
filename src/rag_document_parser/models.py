@@ -42,30 +42,12 @@ class SourceInfo:
 class SourceEvidence:
     kind: str
     text: str
-    section_path: list[str] = field(default_factory=list)
-    headers: list[str] = field(default_factory=list)
-    rows: list[dict[str, Any]] = field(default_factory=list)
-    caption: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {
+        return {
             "kind": self.kind,
             "text": self.text,
-            "section_path": list(self.section_path),
         }
-        if self.headers:
-            payload["headers"] = list(self.headers)
-        if self.rows:
-            payload["rows"] = [
-                {
-                    "index": row["index"],
-                    "cells": dict(row["cells"]),
-                }
-                for row in self.rows
-            ]
-        if self.caption is not None:
-            payload["caption"] = self.caption
-        return payload
 
 
 @dataclass(frozen=True)

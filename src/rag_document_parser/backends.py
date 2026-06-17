@@ -56,8 +56,7 @@ def _units_from_markdown(markdown: str) -> list[EvidenceUnit]:
                 type="text",
                 source=SourceEvidence(
                     kind="text",
-                    text=text,
-                    section_path=list(section_path),
+                    text=_with_section(section_path, text),
                 ),
                 evidence=Evidence(kind="text", format="plain", content=text),
                 metadata={
@@ -81,7 +80,7 @@ def _units_from_markdown(markdown: str) -> list[EvidenceUnit]:
         block_index += 1
         table_index += 1
         headers, rows = _table_parts(lines)
-        table_source_text = _table_source_text(headers, rows)
+        table_source_text = _table_source_text(headers, rows, section_path)
         units.append(
             EvidenceUnit(
                 id=block_id,
@@ -89,9 +88,6 @@ def _units_from_markdown(markdown: str) -> list[EvidenceUnit]:
                 source=SourceEvidence(
                     kind="table",
                     text=table_source_text,
-                    section_path=list(section_path),
-                    headers=headers,
-                    rows=_source_rows(headers, rows),
                 ),
                 evidence=Evidence(
                     kind="table",
@@ -179,32 +175,31 @@ def _structured_table(headers: list[str], rows: list[list[str]]) -> dict[str, ob
     }
 
 
-def _source_rows(headers: list[str], rows: list[list[str]]) -> list[dict[str, object]]:
-    source_rows: list[dict[str, object]] = []
+def _table_source_text(
+    headers: list[str],
+    rows: list[list[str]],
+    section_path: list[str],
+) -> str:
+    lines: list[str] = []
+    if section_path:
+        lines.append(f"section: {' > '.join(section_path)}")
+    if headers:
+        lines.append(f"columns: {' | '.join(headers)}")
     for index, row in enumerate(rows, start=1):
-        source_rows.append(
-            {
-                "index": index,
-                "cells": {
-                    header: value
-                    for header, value in zip(headers, row, strict=False)
-                },
-            }
-        )
-    return source_rows
-
-
-def _table_source_text(headers: list[str], rows: list[list[str]]) -> str:
-    parts: list[str] = []
-    for row in rows:
         cells = [
             f"{header}={value}"
             for header, value in zip(headers, row, strict=False)
             if value
         ]
         if cells:
-            parts.append("; ".join(cells))
-    return "\n".join(parts)
+            lines.append(f"row {index}: {'; '.join(cells)}")
+    return "\n".join(lines)
+
+
+def _with_section(section_path: list[str], text: str) -> str:
+    if not section_path:
+        return text
+    return f"section: {' > '.join(section_path)}\n{text}"
 
 
 def _split_table_row(line: str) -> list[str]:
