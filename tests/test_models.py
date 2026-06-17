@@ -49,3 +49,60 @@ def test_chunk_evidence_is_composite_items_only():
             }
         ]
     }
+
+
+def test_rag_chunk_serializes_composite_evidence_and_enrichment_fields():
+    from rag_document_parser import Evidence, EvidenceItem, RagChunk, SourceEvidence
+
+    chunk = RagChunk(
+        id="chunk-1",
+        type="mixed",
+        source=SourceEvidence(kind="mixed", text="source text"),
+        evidence=Evidence(
+            items=[
+                EvidenceItem(
+                    type="text",
+                    format="plain",
+                    content="display text",
+                    source_unit_ids=["b1"],
+                    metadata={},
+                )
+            ]
+        ),
+        summary="summary",
+        keywords=["keyword"],
+        questions=["question?"],
+        metadata={"source_unit_ids": ["b1"]},
+    )
+
+    assert chunk.to_dict() == {
+        "id": "chunk-1",
+        "type": "mixed",
+        "source": {"kind": "mixed", "text": "source text"},
+        "evidence": {
+            "items": [
+                {
+                    "type": "text",
+                    "format": "plain",
+                    "content": "display text",
+                    "source_unit_ids": ["b1"],
+                    "metadata": {},
+                }
+            ]
+        },
+        "summary": "summary",
+        "keywords": ["keyword"],
+        "questions": ["question?"],
+        "metadata": {"source_unit_ids": ["b1"]},
+    }
+
+
+def test_evidence_item_omits_format_when_not_set():
+    from rag_document_parser import EvidenceItem
+
+    assert EvidenceItem(type="text", content="plain").to_dict() == {
+        "type": "text",
+        "content": "plain",
+        "source_unit_ids": [],
+        "metadata": {},
+    }
