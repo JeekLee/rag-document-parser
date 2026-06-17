@@ -9,6 +9,7 @@ from .extract.formats.pdf import PdfBackend
 from .models import (
     DocumentAsset,
     Evidence,
+    EvidenceItem,
     EvidenceUnit,
     PendingAsset,
     ParseResult,
@@ -23,6 +24,7 @@ __all__ = [
     "DocumentBackend",
     "DocumentAsset",
     "Evidence",
+    "EvidenceItem",
     "EvidenceUnit",
     "Hwp5Backend",
     "HwpxBackend",

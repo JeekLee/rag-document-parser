@@ -5,17 +5,31 @@ from typing import Any
 
 
 @dataclass(frozen=True)
-class Evidence:
-    kind: str
-    format: str
+class EvidenceItem:
+    type: str
     content: Any
+    format: str | None = None
+    source_unit_ids: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "kind": self.kind,
-            "format": self.format,
+        payload: dict[str, Any] = {
+            "type": self.type,
             "content": self.content,
+            "source_unit_ids": list(self.source_unit_ids),
+            "metadata": dict(self.metadata),
         }
+        if self.format is not None:
+            payload["format"] = self.format
+        return payload
+
+
+@dataclass(frozen=True)
+class Evidence:
+    items: list[EvidenceItem] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"items": [item.to_dict() for item in self.items]}
 
 
 @dataclass(frozen=True)
@@ -88,16 +102,18 @@ class SourceEvidence:
 class EvidenceUnit:
     id: str
     type: str
+    format: str
     source: SourceEvidence
-    evidence: Evidence
+    content: Any
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "type": self.type,
+            "format": self.format,
             "source": self.source.to_dict(),
-            "evidence": self.evidence.to_dict(),
+            "content": self.content,
             "metadata": dict(self.metadata),
         }
 
