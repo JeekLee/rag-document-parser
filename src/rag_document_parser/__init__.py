@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from .backends import DocumentBackend, MarkdownBackend, ParsedDocument
-from .hwpx import HwpxBackend
-from .llm import LlmConfig
+from .enrichment.llm import LlmConfig
+from .extract.backend import DocumentBackend, ParsedDocument
+from .extract.formats.hwpx import HwpxBackend
+from .extract.formats.markdown import MarkdownBackend
 from .models import (
     DocumentAsset,
     Evidence,
@@ -13,7 +14,7 @@ from .models import (
     SourceEvidence,
     SourceInfo,
 )
-from .parser import RagDocumentParser
+from .pipeline.parser import RagDocumentParser
 from .storage import S3Config, public_url_for_s3_uri
 
 __all__ = [
