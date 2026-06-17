@@ -384,6 +384,133 @@ def test_pdf_backend_combines_grouped_header_rows(monkeypatch):
     )
 
 
+def test_pdf_backend_restores_pdf_header_cell_spans_from_missing_slots(monkeypatch):
+    from rag_document_parser.extract.formats.pdf import PdfBackend
+
+    table = _FakeTable(
+        bbox=(0.0, 80.0, 300.0, 180.0),
+        row_cells=[
+            [
+                (0.0, 80.0, 200.0, 110.0),
+                None,
+                (200.0, 80.0, 300.0, 140.0),
+            ],
+            [
+                (0.0, 110.0, 100.0, 140.0),
+                (100.0, 110.0, 200.0, 140.0),
+                None,
+            ],
+            [
+                (0.0, 140.0, 100.0, 180.0),
+                (100.0, 140.0, 200.0, 180.0),
+                (200.0, 140.0, 300.0, 180.0),
+            ],
+        ],
+        extracted=[
+            ["본인부담률 인하 관련", None, "개정 관련"],
+            ["질의", "답변", None],
+            ["질문", "답변", "개정안"],
+        ],
+    )
+    page = _FakePage(chars=[{"text": "가"} for _ in range(40)], images=[], tables=[table])
+    monkeypatch.setitem(
+        sys.modules,
+        "pdfplumber",
+        SimpleNamespace(open=lambda stream: _FakePdf([page])),
+    )
+
+    parsed = PdfBackend().parse(b"%PDF-1.4 fake", ".pdf")
+
+    content = parsed.units[0].evidence.content
+    assert [column["text"] for column in content["columns"]] == [
+        "본인부담률 인하 관련 / 질의",
+        "본인부담률 인하 관련 / 답변",
+        "개정 관련",
+    ]
+    assert [
+        (cell["column_id"], cell["text"], cell["rowspan"], cell["colspan"])
+        for cell in content["header_rows"][0]["cells"]
+    ] == [
+        ("c1", "본인부담률 인하 관련", 1, 2),
+        ("c3", "개정 관련", 2, 1),
+    ]
+    assert [
+        (cell["column_id"], cell["text"], cell["rowspan"], cell["colspan"])
+        for cell in content["header_rows"][1]["cells"]
+    ] == [
+        ("c1", "질의", 1, 1),
+        ("c2", "답변", 1, 1),
+    ]
+
+
+def test_pdf_backend_restores_pdf_body_rowspans_from_missing_slots(monkeypatch):
+    from rag_document_parser.extract.formats.pdf import PdfBackend
+
+    table = _FakeTable(
+        bbox=(0.0, 80.0, 300.0, 180.0),
+        row_cells=[
+            [
+                (0.0, 80.0, 50.0, 100.0),
+                (50.0, 80.0, 150.0, 100.0),
+                (150.0, 80.0, 300.0, 100.0),
+            ],
+            [
+                (0.0, 100.0, 50.0, 180.0),
+                (50.0, 100.0, 150.0, 180.0),
+                (150.0, 100.0, 300.0, 140.0),
+            ],
+            [
+                None,
+                None,
+                (150.0, 140.0, 300.0, 180.0),
+            ],
+        ],
+        extracted=[
+            ["연번", "질의", "답변"],
+            ["1", "질문", "첫 답변"],
+            [None, None, "추가 답변"],
+        ],
+    )
+    page = _FakePage(chars=[{"text": "가"} for _ in range(40)], images=[], tables=[table])
+    monkeypatch.setitem(
+        sys.modules,
+        "pdfplumber",
+        SimpleNamespace(open=lambda stream: _FakePdf([page])),
+    )
+
+    parsed = PdfBackend().parse(b"%PDF-1.4 fake", ".pdf")
+
+    rows = parsed.units[0].evidence.content["rows"]
+    assert [
+        (cell["column_id"], cell["text"], cell["rowspan"], cell["colspan"])
+        for cell in rows[0]["cells"]
+    ] == [
+        ("c1", "1", 2, 1),
+        ("c2", "질문", 2, 1),
+        ("c3", "첫 답변", 1, 1),
+    ]
+    assert [
+        (cell["column_id"], cell["text"], cell["rowspan"], cell["colspan"])
+        for cell in rows[1]["cells"]
+    ] == [("c3", "추가 답변", 1, 1)]
+
+
+def test_pdf_backend_uses_semantic_source_label_for_mixed_colspan_headers():
+    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
+
+    label = pdf_backend._cell_source_label(
+        {"column_id": "c1", "colspan": 3},
+        {
+            "c1": "개정 / 항목",
+            "c2": "개정 / 제목",
+            "c3": "비고",
+        },
+        use_header_labels=True,
+    )
+
+    assert label == "개정 / 비고"
+
+
 def test_pdf_backend_combines_single_group_header_rows(monkeypatch):
     from rag_document_parser.extract.formats.pdf import PdfBackend
 

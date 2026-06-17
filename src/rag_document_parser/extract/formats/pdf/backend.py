@@ -44,6 +44,12 @@ class _NestedResolution:
     children: dict[int, dict[tuple[int, int], list[int]]]
 
 
+@dataclass(frozen=True)
+class _TableCellSpans:
+    spans: dict[tuple[int, int], tuple[int, int]]
+    covered: set[tuple[int, int]]
+
+
 class _OcrResults(dict[int, str]):
     def __init__(self) -> None:
         super().__init__()
@@ -913,6 +919,11 @@ def _structured_table_from_pdf_table(
 
     columns = _columns_from_header_rows(normalized_rows[:header_depth], column_count)
     child_map = nested.children.get(table_idx, {})
+    cell_spans = _table_cell_spans(
+        table,
+        row_count=len(normalized_rows),
+        column_count=column_count,
+    )
     header_rows: list[dict[str, object]] = []
     for header_index, raw_row in enumerate(normalized_rows[:header_depth]):
         header_cells = _row_evidence_cells(
@@ -923,6 +934,7 @@ def _structured_table_from_pdf_table(
             raw_row=raw_row,
             columns=columns,
             child_map=child_map,
+            cell_spans=cell_spans,
             nested=nested,
             seen=seen | {table_idx},
         )
@@ -939,6 +951,7 @@ def _structured_table_from_pdf_table(
             raw_row=raw_row,
             columns=columns,
             child_map=child_map,
+            cell_spans=cell_spans,
             nested=nested,
             seen=seen | {table_idx},
         )
@@ -1540,6 +1553,165 @@ def _normalize_header_text(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _table_cell_spans(
+    table: object,
+    *,
+    row_count: int,
+    column_count: int,
+) -> _TableCellSpans:
+    cell_rows = [
+        _pad_row_cells(_row_cells(table, row_index), column_count)
+        for row_index in range(row_count)
+    ]
+    column_boundaries = _table_column_boundaries(cell_rows, column_count)
+    row_bottoms = [_row_bottom(cells) for cells in cell_rows]
+    spans: dict[tuple[int, int], tuple[int, int]] = {}
+    covered: set[tuple[int, int]] = set()
+    for row_index, row in enumerate(cell_rows):
+        for column_index, bbox in enumerate(row):
+            if (row_index, column_index) in covered:
+                continue
+            if bbox is None:
+                spans[(row_index, column_index)] = (1, 1)
+                continue
+            colspan = _pdf_cell_colspan(
+                row,
+                column_index,
+                column_count,
+                bbox,
+                column_boundaries,
+            )
+            rowspan = _pdf_cell_rowspan(
+                cell_rows,
+                row_bottoms,
+                row_index,
+                column_index,
+                colspan,
+                bbox,
+            )
+            spans[(row_index, column_index)] = (rowspan, colspan)
+            for covered_row in range(row_index, row_index + rowspan):
+                for covered_column in range(column_index, column_index + colspan):
+                    if (covered_row, covered_column) == (row_index, column_index):
+                        continue
+                    covered_bbox = cell_rows[covered_row][covered_column]
+                    if _slot_is_covered_by_cell(covered_bbox, bbox):
+                        covered.add((covered_row, covered_column))
+    return _TableCellSpans(spans=spans, covered=covered)
+
+
+def _pad_row_cells(
+    row: list[tuple[float, float, float, float] | None],
+    column_count: int,
+) -> list[tuple[float, float, float, float] | None]:
+    return [*row[:column_count], *([None] * max(0, column_count - len(row)))]
+
+
+def _row_bottom(
+    cells: list[tuple[float, float, float, float] | None],
+) -> float | None:
+    bottoms = [cell[3] for cell in cells if cell is not None]
+    return max(bottoms) if bottoms else None
+
+
+def _table_column_boundaries(
+    cell_rows: list[list[tuple[float, float, float, float] | None]],
+    column_count: int,
+) -> list[float]:
+    positions = [
+        position
+        for row in cell_rows
+        for cell in row
+        if cell is not None
+        for position in (cell[0], cell[2])
+    ]
+    boundaries = _cluster_positions(positions)
+    if len(boundaries) < column_count + 1:
+        return []
+    return boundaries
+
+
+def _cluster_positions(
+    positions: list[float],
+    *,
+    tolerance: float = 2.0,
+) -> list[float]:
+    clustered: list[float] = []
+    for position in sorted(positions):
+        if not clustered or abs(position - clustered[-1]) > tolerance:
+            clustered.append(position)
+            continue
+        clustered[-1] = (clustered[-1] + position) / 2
+    return clustered
+
+
+def _pdf_cell_colspan(
+    row: list[tuple[float, float, float, float] | None],
+    column_index: int,
+    column_count: int,
+    bbox: tuple[float, float, float, float],
+    column_boundaries: list[float],
+) -> int:
+    colspan = 1
+    while column_index + colspan < column_count and _slot_is_covered_by_cell(
+        row[column_index + colspan],
+        bbox,
+    ):
+        if column_boundaries and not _cell_reaches_column_end(
+            bbox,
+            column_boundaries,
+            column_index + colspan,
+        ):
+            break
+        colspan += 1
+    return colspan
+
+
+def _cell_reaches_column_end(
+    bbox: tuple[float, float, float, float],
+    column_boundaries: list[float],
+    column_index: int,
+    *,
+    tolerance: float = 2.0,
+) -> bool:
+    boundary_index = column_index + 1
+    return (
+        boundary_index >= len(column_boundaries)
+        or bbox[2] >= column_boundaries[boundary_index] - tolerance
+    )
+
+
+def _pdf_cell_rowspan(
+    cell_rows: list[list[tuple[float, float, float, float] | None]],
+    row_bottoms: list[float | None],
+    row_index: int,
+    column_index: int,
+    colspan: int,
+    bbox: tuple[float, float, float, float],
+    *,
+    tolerance: float = 2.0,
+) -> int:
+    rowspan = 1
+    for next_row in range(row_index + 1, len(cell_rows)):
+        row_bottom = row_bottoms[next_row]
+        if row_bottom is None or bbox[3] < row_bottom - tolerance:
+            break
+        if not all(
+            _slot_is_covered_by_cell(cell_rows[next_row][covered_column], bbox)
+            for covered_column in range(column_index, column_index + colspan)
+        ):
+            break
+        rowspan += 1
+    return rowspan
+
+
+def _slot_is_covered_by_cell(
+    slot: tuple[float, float, float, float] | None,
+    bbox: tuple[float, float, float, float],
+) -> bool:
+    return slot is None or _bbox_near_equal(slot, bbox)
+
+
 def _row_evidence_cells(
     page: object,
     tables: list[object],
@@ -1549,12 +1721,16 @@ def _row_evidence_cells(
     raw_row: list[str],
     columns: list[dict[str, str]],
     child_map: dict[tuple[int, int], list[int]],
+    cell_spans: _TableCellSpans,
     nested: _NestedResolution,
     seen: set[int],
 ) -> list[dict[str, object]]:
     cells: list[dict[str, object]] = []
     row_cells = _row_cells(tables[table_idx], row_index)
     for column_index, column in enumerate(columns):
+        if (row_index, column_index) in cell_spans.covered:
+            continue
+        rowspan, colspan = cell_spans.spans.get((row_index, column_index), (1, 1))
         text = raw_row[column_index] if column_index < len(raw_row) else ""
         child_indices = child_map.get((row_index, column_index), [])
         children = [
@@ -1580,8 +1756,8 @@ def _row_evidence_cells(
             {
                 "column_id": column["id"],
                 "text": text,
-                "rowspan": 1,
-                "colspan": 1,
+                "rowspan": rowspan,
+                "colspan": colspan,
                 "children": children,
             }
         )
@@ -2333,6 +2509,9 @@ def _cell_source_label(
         common_prefix = _common_semantic_header_prefix(labels)
         if common_prefix is not None:
             return common_prefix
+        group_label = _semantic_column_group_label(labels)
+        if group_label is not None:
+            return group_label
         if len(set(labels)) == 1 and _is_semantic_column_label(labels[0]):
             return labels[0]
         if colspan == 1 and _is_semantic_column_label(labels[0]):
@@ -2356,6 +2535,19 @@ def _common_semantic_header_prefix(labels: list[str]) -> str | None:
     if not prefix:
         return None
     return " / ".join(prefix)
+
+
+def _semantic_column_group_label(labels: list[str]) -> str | None:
+    if not labels or not all(_is_semantic_column_label(label) for label in labels):
+        return None
+    groups: list[str] = []
+    for label in labels:
+        group = label.split(" / ", 1)[0]
+        if group and group not in groups:
+            groups.append(group)
+    if not groups:
+        return None
+    return " / ".join(groups)
 
 
 def _cell_coordinate_label(column_id: str, colspan: int) -> str:

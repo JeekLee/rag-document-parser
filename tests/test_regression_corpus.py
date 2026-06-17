@@ -213,6 +213,23 @@ def test_pdf_corpus_preserves_grouped_headers_and_reduces_fragmentation():
         ]
         for unit in benefit_tables
     )
+    grouped_table = benefit_tables[2].evidence.content
+    assert [
+        (cell["text"], cell["rowspan"], cell["colspan"])
+        for cell in grouped_table["header_rows"][0]["cells"]
+    ] == [
+        ("현행", 1, 3),
+        ("개정", 1, 3),
+        ("비고", 2, 1),
+    ]
+    assert [
+        (cell["column_id"], cell["text"], cell["colspan"])
+        for cell in grouped_table["rows"][0]["cells"]
+    ] == [
+        ("c1", "I. 행위 일반사항", 3),
+        ("c4", "I. 행위 일반사항", 4),
+    ]
+    assert "개정 / 비고: I. 행위 일반사항" in benefit_tables[2].source.text
     assert not any(
         "col 2:" in line
         for unit in benefit_tables
@@ -245,6 +262,18 @@ def test_pdf_corpus_preserves_grouped_headers_and_reduces_fragmentation():
     assert len(cesarean_tables) == 2
     assert [len(unit.evidence.content["rows"]) for unit in cesarean_tables] == [2, 9]
     assert all(unit.evidence.content["rows"] for unit in cesarean_tables)
+    assert [
+        (cell["text"], cell["rowspan"], cell["colspan"])
+        for cell in cesarean_tables[0].evidence.content["header_rows"][0]["cells"]
+    ] == [
+        ("연번", 2, 1),
+        ("본인부담률 인하(5%) 관련", 1, 2),
+        ("본인부담률 개정(5%→0%) 관련", 1, 1),
+    ]
+    assert [
+        (cell["column_id"], cell["rowspan"], cell["colspan"])
+        for cell in cesarean_tables[0].evidence.content["rows"][0]["cells"]
+    ][:2] == [("c1", 2, 1), ("c2", 2, 1)]
     assert all(
         [column["text"] for column in unit.evidence.content["columns"]]
         == [
