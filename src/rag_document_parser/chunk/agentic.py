@@ -237,11 +237,13 @@ def _table_subset(table: dict[str, Any], ranges: list[tuple[int, int]]) -> dict[
     if not isinstance(rows, list):
         raise ValueError("structured_table content requires rows")
 
+    _validate_row_range_bounds(ranges, _table_row_indexes(rows))
+
     for row in rows:
         if not isinstance(row, dict):
             continue
         index = row.get("index")
-        if isinstance(index, int) and _row_selected(index, ranges):
+        if type(index) is int and _row_selected(index, ranges):
             selected.append(row)
 
     if not selected:
@@ -250,6 +252,31 @@ def _table_subset(table: dict[str, Any], ranges: list[tuple[int, int]]) -> dict[
     subset = dict(table)
     subset["rows"] = selected
     return subset
+
+
+def _table_row_indexes(rows: list[Any]) -> list[int]:
+    indexes: list[int] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        index = row.get("index")
+        if type(index) is int:
+            indexes.append(index)
+    return indexes
+
+
+def _validate_row_range_bounds(
+    ranges: list[tuple[int, int]],
+    row_indexes: list[int],
+) -> None:
+    if not row_indexes:
+        return
+
+    min_index = min(row_indexes)
+    max_index = max(row_indexes)
+    for start, end in ranges:
+        if start < min_index or end > max_index:
+            raise ValueError("row range is outside table rows")
 
 
 def _row_selected(index: int, ranges: list[tuple[int, int]]) -> bool:

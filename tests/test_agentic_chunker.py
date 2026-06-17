@@ -255,6 +255,25 @@ def test_agentic_chunker_rejects_malformed_row_ranges():
     assert "row range must be [start, end] ints with start <= end" in chunks[0].metadata["_fallback_reason"]
 
 
+def test_agentic_chunker_rejects_row_ranges_outside_table_bounds():
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    def plan_fn(window, cfg, max_units):
+        return [
+            {
+                "unit_ids": ["b2"],
+                "operations": [{"unit_id": "b2", "action": "include_rows", "row_ranges": [[0, 99]]}],
+                "summary": "표 범위를 벗어난 행을 선택한다.",
+            }
+        ]
+
+    chunks = EvidenceUnitAgenticChunker(llm=None, plan_fn=plan_fn).chunk([_table_unit("b2")])
+
+    assert len(chunks) == 1
+    assert chunks[0].metadata["source_unit_ids"] == ["b2"]
+    assert "row range is outside table rows" in chunks[0].metadata["_fallback_reason"]
+
+
 def test_agentic_chunker_rejects_full_include_and_row_subset_conflict():
     from rag_document_parser.chunk import EvidenceUnitAgenticChunker
 
