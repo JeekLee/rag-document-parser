@@ -4,8 +4,26 @@ import hashlib
 import json
 
 
+def _llm_config():
+    from rag_document_parser import LlmConfig
+
+    return LlmConfig(url="http://llm.test/v1", api_key="test", model="test-model")
+
+
+def _s3_config():
+    from rag_document_parser import S3Config
+
+    return S3Config(
+        endpoint="http://minio.test",
+        bucket="rag-assets",
+        access_key="access",
+        secret_key="secret",
+        prefix="documents",
+    )
+
+
 def test_parse_text_document_returns_llm_enriched_chunks(monkeypatch):
-    from rag_document_parser import LlmConfig, RagDocumentParser
+    from rag_document_parser import RagDocumentParser
 
     responses = iter(
         [
@@ -37,9 +55,7 @@ def test_parse_text_document_returns_llm_enriched_chunks(monkeypatch):
         "| 약국 | 대면투약관리료 코드로 청구 |\n"
     ).encode()
 
-    result = RagDocumentParser(
-        llm=LlmConfig(url="http://llm.test/v1", api_key="test", model="test-model")
-    ).parse(
+    result = RagDocumentParser(llm=_llm_config(), object_storage=_s3_config()).parse(
         raw,
         suffix=".md",
         source_id="notice-1/attachment-1",
@@ -203,7 +219,7 @@ def test_markdown_backend_returns_evidence_units():
 
 
 def test_parse_result_to_dict_is_json_serializable(monkeypatch):
-    from rag_document_parser import LlmConfig, RagDocumentParser
+    from rag_document_parser import RagDocumentParser
 
     monkeypatch.setattr(
         "rag_document_parser.parser._chat_json",
@@ -215,11 +231,12 @@ def test_parse_result_to_dict_is_json_serializable(monkeypatch):
     )
 
     raw = b"plain paragraph"
-    payload = RagDocumentParser(
-        llm=LlmConfig(url="http://llm.test/v1", api_key="test", model="test-model")
-    ).parse(raw, suffix=".txt").to_dict()
+    payload = RagDocumentParser(llm=_llm_config(), object_storage=_s3_config()).parse(
+        raw, suffix=".txt"
+    ).to_dict()
 
     assert payload["source"]["sha256"] == hashlib.sha256(raw).hexdigest()
+    assert payload["assets"] == []
     assert "preview_markdown" not in payload
     assert "source_pointer" not in payload["chunks"][0]
     assert "embedding_text" not in payload["chunks"][0]
@@ -239,7 +256,7 @@ def test_parse_result_to_dict_is_json_serializable(monkeypatch):
 
 
 def test_source_does_not_require_position_offsets(monkeypatch):
-    from rag_document_parser import LlmConfig, RagDocumentParser
+    from rag_document_parser import RagDocumentParser
 
     monkeypatch.setattr(
         "rag_document_parser.parser._chat_json",
@@ -251,9 +268,9 @@ def test_source_does_not_require_position_offsets(monkeypatch):
     )
 
     raw = "# H\n\n한글".encode()
-    chunk = RagDocumentParser(
-        llm=LlmConfig(url="http://llm.test/v1", api_key="test", model="test-model")
-    ).parse(raw, suffix=".md").chunks[0]
+    chunk = RagDocumentParser(llm=_llm_config(), object_storage=_s3_config()).parse(
+        raw, suffix=".md"
+    ).chunks[0]
 
     assert chunk.source.text == "section: H\n한글"
     assert chunk.source.to_dict() == {"kind": "text", "text": "section: H\n한글"}
@@ -261,25 +278,30 @@ def test_source_does_not_require_position_offsets(monkeypatch):
     assert not hasattr(chunk, "source_pointer")
 
 
-def test_parser_requires_llm_config():
+def test_parser_requires_llm_and_object_storage_config():
     from rag_document_parser import RagDocumentParser
 
     try:
-        RagDocumentParser(llm=None)
+        RagDocumentParser(llm=None, object_storage=_s3_config())
     except ValueError as exc:
         assert "llm is required" in str(exc)
     else:
         raise AssertionError("expected ValueError")
 
+    try:
+        RagDocumentParser(llm=_llm_config(), object_storage=None)
+    except ValueError as exc:
+        assert "object_storage is required" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
 
 def test_parse_fails_when_llm_enrichment_is_invalid(monkeypatch):
-    from rag_document_parser import LlmConfig, RagDocumentParser
+    from rag_document_parser import RagDocumentParser
 
     monkeypatch.setattr("rag_document_parser.parser._chat_json", lambda prompt, cfg: None)
 
-    parser = RagDocumentParser(
-        llm=LlmConfig(url="http://llm.test/v1", api_key="test", model="test-model")
-    )
+    parser = RagDocumentParser(llm=_llm_config(), object_storage=_s3_config())
     try:
         parser.parse(b"plain paragraph", suffix=".txt")
     except ValueError as exc:
@@ -292,7 +314,6 @@ def test_custom_backend_can_be_registered_for_suffix(monkeypatch):
     from rag_document_parser import (
         Evidence,
         EvidenceUnit,
-        LlmConfig,
         RagDocumentParser,
         SourceEvidence,
     )
@@ -335,7 +356,8 @@ def test_custom_backend_can_be_registered_for_suffix(monkeypatch):
 
     backend = CustomBackend()
     result = RagDocumentParser(
-        llm=LlmConfig(url="http://llm.test/v1", api_key="test", model="test-model"),
+        llm=_llm_config(),
+        object_storage=_s3_config(),
         backends={".custom": backend},
     ).parse(b"custom bytes", suffix=".CUSTOM")
 
@@ -353,16 +375,14 @@ def test_custom_backend_can_be_registered_for_suffix(monkeypatch):
 
 
 def test_unsupported_suffix_fails_before_llm_call(monkeypatch):
-    from rag_document_parser import LlmConfig, RagDocumentParser
+    from rag_document_parser import RagDocumentParser
 
     def fail_chat_json(prompt, cfg):
         raise AssertionError("LLM should not be called for unsupported formats")
 
     monkeypatch.setattr("rag_document_parser.parser._chat_json", fail_chat_json)
 
-    parser = RagDocumentParser(
-        llm=LlmConfig(url="http://llm.test/v1", api_key="test", model="test-model")
-    )
+    parser = RagDocumentParser(llm=_llm_config(), object_storage=_s3_config())
     try:
         parser.parse(b"not supported", suffix=".docx")
     except ValueError as exc:
@@ -370,3 +390,105 @@ def test_unsupported_suffix_fails_before_llm_call(monkeypatch):
         assert ".docx" in str(exc)
     else:
         raise AssertionError("expected ValueError")
+
+
+def test_image_assets_are_uploaded_to_s3_and_linked_in_evidence(monkeypatch):
+    from rag_document_parser import (
+        Evidence,
+        EvidenceUnit,
+        PendingAsset,
+        RagDocumentParser,
+        SourceEvidence,
+    )
+    from rag_document_parser.backends import ParsedDocument
+
+    monkeypatch.setattr(
+        "rag_document_parser.parser._chat_json",
+        lambda prompt, cfg: {
+            "summary": "Image summary.",
+            "keywords": ["image"],
+            "questions": ["What does the image show?"],
+        },
+    )
+
+    uploads = []
+
+    def fake_put_object(cfg, key, data, content_type):
+        uploads.append((cfg, key, data, content_type))
+        return f"s3://{cfg.bucket}/{cfg.prefix}/{key}"
+
+    monkeypatch.setattr("rag_document_parser.parser._put_object", fake_put_object)
+
+    class ImageBackend:
+        def parse(self, data: bytes, suffix: str) -> ParsedDocument:
+            return ParsedDocument(
+                units=[
+                    EvidenceUnit(
+                        id="img-unit-1",
+                        type="image",
+                        source=SourceEvidence(
+                            kind="image",
+                            text="summary: 요양급여 청구 절차를 보여주는 이미지",
+                        ),
+                        evidence=Evidence(
+                            kind="image",
+                            format="asset_ref",
+                            content={
+                                "asset_id": "img-0001",
+                                "caption": "청구 절차 이미지",
+                            },
+                        ),
+                        metadata={
+                            "common": {
+                                "chunk_kind": "image",
+                                "display_format": "image",
+                            }
+                        },
+                    )
+                ],
+                assets=[
+                    PendingAsset(
+                        id="img-0001",
+                        kind="image",
+                        data=b"png bytes",
+                        mime="image/png",
+                        ext="png",
+                    )
+                ],
+            )
+
+    raw = b"fake source document"
+    result = RagDocumentParser(
+        llm=_llm_config(),
+        object_storage=_s3_config(),
+        backends={".imgdoc": ImageBackend()},
+    ).parse(raw, suffix=".imgdoc")
+
+    document_hash = hashlib.sha256(raw).hexdigest()
+    assert uploads == [
+        (
+            _s3_config(),
+            f"{document_hash}/assets/img-0001.png",
+            b"png bytes",
+            "image/png",
+        )
+    ]
+    assert result.assets[0].to_dict() == {
+        "id": "img-0001",
+        "kind": "image",
+        "uri": f"s3://rag-assets/documents/{document_hash}/assets/img-0001.png",
+        "mime": "image/png",
+        "ext": "png",
+        "sha256": hashlib.sha256(b"png bytes").hexdigest(),
+        "bytes": len(b"png bytes"),
+        "metadata": {},
+    }
+    assert result.chunks[0].evidence.content == {
+        "asset_id": "img-0001",
+        "caption": "청구 절차 이미지",
+        "uri": f"s3://rag-assets/documents/{document_hash}/assets/img-0001.png",
+        "mime": "image/png",
+        "ext": "png",
+        "sha256": hashlib.sha256(b"png bytes").hexdigest(),
+        "bytes": len(b"png bytes"),
+    }

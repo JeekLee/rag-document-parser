@@ -3,12 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from .models import Evidence, EvidenceUnit, SourceEvidence
+from .models import Evidence, EvidenceUnit, PendingAsset, SourceEvidence
 
 
 @dataclass(frozen=True)
 class ParsedDocument:
     units: list[EvidenceUnit]
+    assets: list[PendingAsset] = field(default_factory=list)
     quality_warnings: list[dict[str, Any]] = field(default_factory=list)
 
 

@@ -39,6 +39,40 @@ class SourceInfo:
 
 
 @dataclass(frozen=True)
+class PendingAsset:
+    id: str
+    kind: str
+    data: bytes
+    mime: str
+    ext: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class DocumentAsset:
+    id: str
+    kind: str
+    uri: str
+    mime: str
+    ext: str
+    sha256: str
+    bytes: int
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "kind": self.kind,
+            "uri": self.uri,
+            "mime": self.mime,
+            "ext": self.ext,
+            "sha256": self.sha256,
+            "bytes": self.bytes,
+            "metadata": dict(self.metadata),
+        }
+
+
+@dataclass(frozen=True)
 class SourceEvidence:
     kind: str
     text: str
@@ -96,11 +130,13 @@ class RagChunk:
 class ParseResult:
     source: SourceInfo
     chunks: list[RagChunk]
+    assets: list[DocumentAsset] = field(default_factory=list)
     quality_warnings: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "source": self.source.to_dict(),
             "chunks": [chunk.to_dict() for chunk in self.chunks],
+            "assets": [asset.to_dict() for asset in self.assets],
             "quality_warnings": list(self.quality_warnings),
         }
