@@ -39,9 +39,13 @@ def render_evidence_html(
 ) -> str:
     if assets_by_id is None:
         assets_by_id = {}
-    kind = evidence.get("kind")
-    fmt = evidence.get("format")
-    content = evidence.get("content")
+    kind, fmt, content = _evidence_shape(evidence)
+    if kind == "composite" and isinstance(content, list):
+        return "".join(
+            render_evidence_html(item, assets_by_id=assets_by_id)
+            for item in content
+            if isinstance(item, dict)
+        )
     if kind == "table" and fmt == "structured_table" and isinstance(content, dict):
         return _render_structured_table(content, assets_by_id)
     if fmt == "asset_ref" and isinstance(content, dict):
@@ -51,11 +55,27 @@ def render_evidence_html(
     return f"<pre>{escape(str(content))}</pre>"
 
 
+def _evidence_shape(evidence: dict[str, Any]) -> tuple[str, str | None, object]:
+    if "items" in evidence and isinstance(evidence["items"], list):
+        return "composite", None, evidence["items"]
+    kind = evidence.get("type", evidence.get("kind", "text"))
+    fmt = evidence.get("format")
+    content = evidence.get("content")
+    return str(kind), str(fmt) if isinstance(fmt, str) else None, content
+
+
 def _render_evidence_unit(
     unit: dict[str, Any],
     assets_by_id: dict[str, dict[str, Any]],
 ) -> str:
-    evidence = unit.get("evidence", {})
+    evidence = {
+        "type": unit.get("type", "text"),
+        "format": unit.get("format"),
+        "content": unit.get("content"),
+    }
+    legacy_evidence = unit.get("evidence")
+    if isinstance(legacy_evidence, dict):
+        evidence = legacy_evidence
     source = unit.get("source", {})
     source_text = source.get("text", "") if isinstance(source, dict) else ""
     return (
@@ -65,7 +85,7 @@ def _render_evidence_unit(
         f"<span>{escape(str(unit.get('type', '')))}</span>"
         "</header>"
         f'<pre class="source-text">{escape(str(source_text))}</pre>'
-        f"{render_evidence_html(evidence, assets_by_id) if isinstance(evidence, dict) else ''}"
+        f"{render_evidence_html(evidence, assets_by_id)}"
         "</section>"
     )
 

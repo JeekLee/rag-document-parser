@@ -8,85 +8,79 @@ def test_render_evidence_units_as_html_without_llm_enrichment():
         {
             "id": "b1",
             "type": "table",
+            "format": "structured_table",
             "source": {"kind": "table", "text": "columns: 구분 | 세부"},
-            "evidence": {
-                "kind": "table",
-                "format": "structured_table",
-                "content": {
-                    "caption": None,
-                    "columns": [
-                        {"id": "c1", "text": "구분"},
-                        {"id": "c2", "text": "세부"},
-                    ],
-                    "rows": [
-                        {
-                            "index": 1,
-                            "cells": [
-                                {
-                                    "column_id": "c1",
-                                    "text": "본인부담",
-                                    "rowspan": 1,
-                                    "colspan": 1,
-                                    "children": [],
-                                },
-                                {
-                                    "column_id": "c2",
-                                    "text": "",
-                                    "rowspan": 1,
-                                    "colspan": 1,
-                                    "children": [
-                                        {
-                                            "kind": "table",
-                                            "format": "structured_table",
-                                            "content": {
-                                                "caption": None,
-                                                "columns": [
-                                                    {"id": "c1", "text": "항목"},
-                                                    {"id": "c2", "text": "금액"},
-                                                ],
-                                                "rows": [
-                                                    {
-                                                        "index": 1,
-                                                        "cells": [
-                                                            {
-                                                                "column_id": "c1",
-                                                                "text": "외래",
-                                                                "rowspan": 1,
-                                                                "colspan": 1,
-                                                                "children": [],
-                                                            },
-                                                            {
-                                                                "column_id": "c2",
-                                                                "text": "1000",
-                                                                "rowspan": 1,
-                                                                "colspan": 1,
-                                                                "children": [],
-                                                            },
-                                                        ],
-                                                    }
-                                                ],
-                                            },
-                                        }
-                                    ],
-                                },
-                            ],
-                        }
-                    ],
-                },
+            "content": {
+                "caption": None,
+                "columns": [
+                    {"id": "c1", "text": "구분"},
+                    {"id": "c2", "text": "세부"},
+                ],
+                "rows": [
+                    {
+                        "index": 1,
+                        "cells": [
+                            {
+                                "column_id": "c1",
+                                "text": "본인부담",
+                                "rowspan": 1,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                            {
+                                "column_id": "c2",
+                                "text": "",
+                                "rowspan": 1,
+                                "colspan": 1,
+                                "children": [
+                                    {
+                                        "type": "table",
+                                        "format": "structured_table",
+                                        "content": {
+                                            "caption": None,
+                                            "columns": [
+                                                {"id": "c1", "text": "항목"},
+                                                {"id": "c2", "text": "금액"},
+                                            ],
+                                            "rows": [
+                                                {
+                                                    "index": 1,
+                                                    "cells": [
+                                                        {
+                                                            "column_id": "c1",
+                                                            "text": "외래",
+                                                            "rowspan": 1,
+                                                            "colspan": 1,
+                                                            "children": [],
+                                                        },
+                                                        {
+                                                            "column_id": "c2",
+                                                            "text": "1000",
+                                                            "rowspan": 1,
+                                                            "colspan": 1,
+                                                            "children": [],
+                                                        },
+                                                    ],
+                                                }
+                                            ],
+                                        },
+                                    }
+                                ],
+                            },
+                        ],
+                    }
+                ],
             },
             "metadata": {},
         },
         {
             "id": "b2",
             "type": "image",
+            "format": "asset_ref",
             "source": {"kind": "image", "text": "image: img-0001"},
-            "evidence": {
-                "kind": "image",
-                "format": "asset_ref",
-                "content": {
-                    "asset_id": "img-0001",
-                    "caption": "첨부 이미지",
-                },
+            "content": {
+                "asset_id": "img-0001",
+                "caption": "첨부 이미지",
             },
             "metadata": {},
         },
@@ -114,6 +108,52 @@ def test_render_evidence_units_as_html_without_llm_enrichment():
     assert "외래" in html
     assert "s3://rag-assets/doc/assets/img-0001.png" in html
     assert "첨부 이미지" in html
+
+
+def test_render_composite_chunk_evidence_items():
+    from rag_document_parser.evidence_html import render_evidence_html
+
+    html = render_evidence_html(
+        {
+            "items": [
+                {
+                    "type": "text",
+                    "format": "plain",
+                    "content": "청크 설명",
+                    "source_unit_ids": ["b1"],
+                    "metadata": {},
+                },
+                {
+                    "type": "table",
+                    "format": "structured_table",
+                    "content": {
+                        "caption": None,
+                        "columns": [{"id": "c1", "text": "항목"}],
+                        "rows": [
+                            {
+                                "index": 1,
+                                "cells": [
+                                    {
+                                        "column_id": "c1",
+                                        "text": "급여",
+                                        "rowspan": 1,
+                                        "colspan": 1,
+                                        "children": [],
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                    "source_unit_ids": ["b2"],
+                    "metadata": {},
+                },
+            ]
+        }
+    )
+
+    assert "청크 설명" in html
+    assert "급여" in html
+    assert html.count("<table") == 1
 
 
 def test_render_evidence_image_uses_public_url_while_showing_source_uri():
