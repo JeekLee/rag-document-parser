@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+from datetime import datetime
 from pathlib import Path
 
 
@@ -58,6 +59,39 @@ def test_upload_assets_adds_public_url_when_public_endpoint_is_configured(monkey
         uploaded[0]["public_url"]
         == "http://203.0.113.10:10190/rag-assets/validation/run/doc-sha/assets/img-0001.png"
     )
+
+
+def test_validation_run_id_gets_datetime_prefix():
+    validate_hwpx_clic_minio = _load_validation_script()
+
+    run_id = validate_hwpx_clic_minio._timestamped_run_id(
+        "grid-fidelity",
+        now=datetime(2026, 6, 17, 16, 42, 3),
+    )
+
+    assert run_id == "20260617-164203-grid-fidelity"
+
+
+def test_validation_run_id_does_not_double_prefix():
+    validate_hwpx_clic_minio = _load_validation_script()
+
+    run_id = validate_hwpx_clic_minio._timestamped_run_id(
+        "20260617-164203-grid-fidelity",
+        now=datetime(2026, 6, 17, 17, 0, 0),
+    )
+
+    assert run_id == "20260617-164203-grid-fidelity"
+
+
+def test_validation_run_id_default_is_timestamped():
+    validate_hwpx_clic_minio = _load_validation_script()
+
+    run_id = validate_hwpx_clic_minio._timestamped_run_id(
+        None,
+        now=datetime(2026, 6, 17, 16, 42, 3),
+    )
+
+    assert run_id == "20260617-164203-validation"
 
 
 def _load_validation_script():
