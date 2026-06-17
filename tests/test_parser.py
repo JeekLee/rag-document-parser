@@ -76,16 +76,39 @@ def test_parse_text_document_returns_llm_enriched_chunks(monkeypatch):
     assert table_chunk.keywords == ["약국", "대면투약관리료", "청구방법"]
     assert table_chunk.questions == ["약국은 대면투약관리료를 어떻게 청구하나요?"]
     assert table_chunk.evidence.kind == "table"
-    assert table_chunk.evidence.format == "markdown_table"
-    assert table_chunk.evidence.content == (
-        "| 대상 | 청구방법 |\n"
-        "| --- | --- |\n"
-        "| 약국 | 대면투약관리료 코드로 청구 |"
-    )
+    assert table_chunk.evidence.format == "structured_table"
+    assert table_chunk.evidence.content == {
+        "caption": None,
+        "columns": [
+            {"id": "c1", "text": "대상"},
+            {"id": "c2", "text": "청구방법"},
+        ],
+        "rows": [
+            {
+                "index": 1,
+                "cells": [
+                    {
+                        "column_id": "c1",
+                        "text": "약국",
+                        "rowspan": 1,
+                        "colspan": 1,
+                        "children": [],
+                    },
+                    {
+                        "column_id": "c2",
+                        "text": "대면투약관리료 코드로 청구",
+                        "rowspan": 1,
+                        "colspan": 1,
+                        "children": [],
+                    },
+                ],
+            }
+        ],
+    }
     assert table_chunk.metadata["common"] == {
         "chunk_kind": "table",
         "section_path": ["요양급여 기준"],
-        "display_format": "markdown_table",
+        "display_format": "structured_table",
     }
     assert table_chunk.metadata["table"] == {
         "table_id": "t1",
@@ -126,7 +149,36 @@ def test_markdown_backend_returns_evidence_units():
     assert table_unit.source.rows == [
         {"index": 1, "cells": {"A": "one", "B": "two"}}
     ]
-    assert table_unit.evidence.format == "markdown_table"
+    assert table_unit.evidence.format == "structured_table"
+    assert table_unit.evidence.content == {
+        "caption": None,
+        "columns": [
+            {"id": "c1", "text": "A"},
+            {"id": "c2", "text": "B"},
+        ],
+        "rows": [
+            {
+                "index": 1,
+                "cells": [
+                    {
+                        "column_id": "c1",
+                        "text": "one",
+                        "rowspan": 1,
+                        "colspan": 1,
+                        "children": [],
+                    },
+                    {
+                        "column_id": "c2",
+                        "text": "two",
+                        "rowspan": 1,
+                        "colspan": 1,
+                        "children": [],
+                    },
+                ],
+            }
+        ],
+    }
+    assert table_unit.metadata["common"]["display_format"] == "structured_table"
 
 
 def test_parse_result_to_dict_is_json_serializable(monkeypatch):

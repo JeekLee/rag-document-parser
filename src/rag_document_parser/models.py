@@ -8,9 +8,9 @@ from typing import Any
 class Evidence:
     kind: str
     format: str
-    content: str
+    content: Any
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "kind": self.kind,
             "format": self.format,

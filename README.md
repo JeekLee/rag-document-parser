@@ -52,6 +52,7 @@ for chunk in result.chunks:
   missing or invalid.
 - Converts simple Markdown tables into table evidence units with:
   - structured source evidence for LLM context
+  - `structured_table` evidence payloads instead of Markdown table strings
   - LLM-generated summaries, keywords, and answerable questions
   - user-facing evidence payloads
   - `agentic-chunker`-compatible metadata such as `common.chunk_kind`
@@ -60,5 +61,5 @@ for chunk in result.chunks:
 
 - Move HWP/HWPX/PDF parsing code in from `md-converter`.
 - Preserve table cell structure before evidence rendering.
-- Add HTML/table evidence for complex tables.
+- Add rowspan, colspan, nested blocks, and nested-table support for complex tables.
 - Add optional source locators later only if product UX needs page/region jumps.

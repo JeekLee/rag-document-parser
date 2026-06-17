@@ -95,14 +95,14 @@ def _units_from_markdown(markdown: str) -> list[EvidenceUnit]:
                 ),
                 evidence=Evidence(
                     kind="table",
-                    format="markdown_table",
-                    content="\n".join(lines),
+                    format="structured_table",
+                    content=_structured_table(headers, rows),
                 ),
                 metadata={
                     "common": {
                         "chunk_kind": "table",
                         "section_path": list(section_path),
-                        "display_format": "markdown_table",
+                        "display_format": "structured_table",
                     },
                     "table": {
                         "table_id": table_id,
@@ -143,6 +143,40 @@ def _table_parts(lines: list[str]) -> tuple[list[str], list[list[str]]]:
     if len(rows) < 3:
         return [], []
     return rows[0], rows[2:]
+
+
+def _structured_table(headers: list[str], rows: list[list[str]]) -> dict[str, object]:
+    columns = [
+        {
+            "id": f"c{index}",
+            "text": header,
+        }
+        for index, header in enumerate(headers, start=1)
+    ]
+    structured_rows: list[dict[str, object]] = []
+    for row_index, row in enumerate(rows, start=1):
+        cells: list[dict[str, object]] = []
+        for column, value in zip(columns, row, strict=False):
+            cells.append(
+                {
+                    "column_id": column["id"],
+                    "text": value,
+                    "rowspan": 1,
+                    "colspan": 1,
+                    "children": [],
+                }
+            )
+        structured_rows.append(
+            {
+                "index": row_index,
+                "cells": cells,
+            }
+        )
+    return {
+        "caption": None,
+        "columns": columns,
+        "rows": structured_rows,
+    }
 
 
 def _source_rows(headers: list[str], rows: list[list[str]]) -> list[dict[str, object]]:
