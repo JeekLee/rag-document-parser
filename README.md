@@ -45,9 +45,9 @@ for asset in result.assets:
   - `S3Config`
 - Requires S3-compatible object storage; binary assets are uploaded and exposed
   as asset references instead of being embedded in source or evidence.
-- Supports UTF-8 text/Markdown parsing and HWPX parsing.
-- Selects a parser backend by suffix; `.md`, `.markdown`, `.txt`, and `.hwpx`
-  are currently backed by built-in backends.
+- Supports UTF-8 text/Markdown, HWPX, HWP5 (`.hwp`), and PDF parsing.
+- Selects a parser backend by suffix; `.md`, `.markdown`, `.txt`, `.hwpx`,
+  `.hwp`, and `.pdf` are backed by built-in backends.
 - Parser backends produce `EvidenceUnit` objects; the current default chunker
   has intentionally been removed from parsing. Agentic chunking and
   summary/keyword/question generation happen after parsing.
@@ -55,6 +55,11 @@ for asset in result.assets:
   tables, multi-row headers, merged cells, and image assets. Images embedded in
   table cells are preserved as nested `asset_ref` evidence and uploaded to
   S3-compatible object storage.
+- The HWP5 backend adapts the `md-converter` record parser to produce text,
+  structured table, nested table, and image evidence units instead of Markdown.
+- The PDF backend adapts the `md-converter` pdfplumber/OCR flow to produce
+  page-ordered text, structured tables, nested table evidence, image assets,
+  and OCR text units for scanned pages.
 - Converts simple Markdown tables into table evidence units with:
   - canonical row-oriented source text for LLM grounding
   - `structured_table` evidence payloads instead of Markdown table strings
@@ -81,13 +86,26 @@ Legacy import modules such as `rag_document_parser.parser`,
 `rag_document_parser.backends`, `rag_document_parser.hwpx`, and
 `rag_document_parser.llm` remain as compatibility shims.
 
+## Optional dependencies
+
+Install format dependencies explicitly when using non-HWPX formats:
+
+```bash
+uv sync --extra hwp5
+uv sync --extra pdf
+uv sync --extra pdf-ocr
+```
+
+`pdf-ocr` includes Python bindings for OCR fallback. The local Tesseract binary,
+Korean language data, and Poppler must still be installed on the host if
+pytesseract/pdf2image OCR fallback is used.
+
 ## Next scope
 
-- Move HWP/PDF parsing code in from `md-converter`.
 - Add the agentic chunking adapter that consumes `EvidenceUnit` objects and
   performs LLM-based summary, keyword, and question generation on final chunks.
-- Improve HWPX complex table fidelity beyond the current rowspan, colspan,
-  nested table, and nested asset baseline.
+- Improve complex table fidelity beyond the current HWPX/HWP5/PDF baseline,
+  especially header inference and PDF table fragmentation.
 - Add optional source locators later only if product UX needs page/region jumps.
 
 ## Validation

@@ -124,3 +124,50 @@ def test_supported_hwpx_corpus_preserves_grouped_header_context():
         "본인부담률 인하(5%) 관련 / 답변",
         "본인부담률 개정(5%→0%) 관련 / 개정(안)",
     ]
+
+
+def test_supported_hwp5_and_pdf_corpus_extracts_evidence_units():
+    from rag_document_parser import Hwp5Backend, PdfBackend
+
+    documents = [
+        document
+        for document in _manifest_documents()
+        if document["format"] in {"hwp", "pdf"} and document["parser_supported"]
+    ]
+    assert documents
+
+    for document in documents:
+        path = CORPUS_DIR / str(document["path"])
+        expected = document["expected"]
+        backend = (
+            Hwp5Backend()
+            if document["format"] == "hwp"
+            else PdfBackend(
+                max_ocr_workers=2,
+                ocr_fn=(
+                    (lambda png, page_idx: f"OCR page {page_idx + 1}")
+                    if expected.get("requires_ocr")
+                    else None
+                ),
+            )
+        )
+
+        parsed = backend.parse(path.read_bytes(), f".{document['format']}")
+        table_units = [unit for unit in parsed.units if unit.type == "table"]
+
+        assert len(parsed.units) >= expected["min_units"], document["id"]
+        assert len(table_units) >= expected["min_tables"], document["id"]
+        assert len(parsed.assets) >= expected.get("min_assets", 0), document["id"]
+        if expected.get("requires_ocr"):
+            assert len(parsed.units) == expected["scanned_pages"], document["id"]
+            assert all(unit.type == "text" for unit in parsed.units), document["id"]
+            assert parsed.quality_warnings == [], document["id"]
+
+        for unit in parsed.units:
+            assert unit.source.text, document["id"]
+            assert unit.evidence.kind == unit.type, document["id"]
+            assert "common" in unit.metadata, document["id"]
+        for unit in table_units:
+            assert unit.source.text.startswith("table: "), document["id"]
+            assert unit.evidence.format == "structured_table", document["id"]
+            assert isinstance(unit.evidence.content, dict), document["id"]
