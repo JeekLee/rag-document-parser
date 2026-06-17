@@ -26,9 +26,22 @@ def _run(text: str) -> str:
     return f"<hp:run><hp:t>{text}</hp:t></hp:run>"
 
 
-def _text_cell(text: str, *, rowspan: int = 1, colspan: int = 1) -> str:
+def _text_cell(
+    text: str,
+    *,
+    rowspan: int = 1,
+    colspan: int = 1,
+    row_addr: int | None = None,
+    col_addr: int | None = None,
+) -> str:
+    addr_xml = (
+        f'<hp:cellAddr rowAddr="{row_addr}" colAddr="{col_addr}" />'
+        if row_addr is not None and col_addr is not None
+        else ""
+    )
     return (
         f'<hp:tc rowSpan="{rowspan}" colSpan="{colspan}">'
+        f"{addr_xml}"
         f"<hp:cellSpan rowSpan=\"{rowspan}\" colSpan=\"{colspan}\" />"
         "<hp:subList><hp:p>"
         f"{_run(text)}"
@@ -256,10 +269,114 @@ def test_hwpx_table_first_row_with_image_is_not_lost_as_header():
 
     table_content = parsed.units[0].evidence.content
     assert table_content["columns"] == [
-        {"id": "c1", "text": "Column 1"},
-        {"id": "c2", "text": "Column 2"},
+        {"id": "c1", "text": ""},
+        {"id": "c2", "text": ""},
     ]
     image_child = table_content["rows"][0]["cells"][0]["children"][0]
     assert image_child["format"] == "asset_ref"
     assert image_child["content"]["asset_id"] == "img-0001"
     assert table_content["rows"][0]["cells"][1]["text"] == "문서 제목"
+
+
+def test_hwpx_table_uses_cell_addresses_and_spans_for_grid_width():
+    from rag_document_parser import HwpxBackend
+
+    table = _table(
+        [
+            _text_cell("", row_addr=0, col_addr=0),
+            _text_cell("", row_addr=0, col_addr=1),
+            _text_cell("관련 근거", rowspan=2, colspan=2, row_addr=0, col_addr=2),
+            _text_cell("", row_addr=0, col_addr=4),
+            _text_cell("", row_addr=0, col_addr=5),
+        ],
+        [
+            _text_cell("", row_addr=1, col_addr=0),
+            _text_cell("", row_addr=1, col_addr=1),
+            _text_cell("", row_addr=1, col_addr=4),
+            _text_cell("", row_addr=1, col_addr=5),
+        ],
+        [
+            _text_cell("개정 ’16.11.7.", row_addr=2, col_addr=0),
+            _text_cell("고시 제2016-149호", row_addr=2, col_addr=1),
+            _text_cell("(2016.10.01.시행)", row_addr=2, col_addr=2),
+            _text_cell("1차 QA", colspan=3, row_addr=2, col_addr=3),
+        ],
+    )
+    xml = (
+        f'<hp:sec xmlns:hp="{HP}">'
+        f"<hp:p><hp:run>{table}</hp:run></hp:p>"
+        "</hp:sec>"
+    )
+
+    parsed = HwpxBackend().parse(_make_hwpx(xml), ".hwpx")
+
+    content = parsed.units[0].evidence.content
+    assert len(content["columns"]) == 6
+    assert [column["text"] for column in content["columns"]] == [
+        "",
+        "",
+        "관련 근거",
+        "",
+        "",
+        "",
+    ]
+    assert [row["index"] for row in content["rows"]] == [1]
+    cells = content["rows"][0]["cells"]
+    assert [(cell["column_id"], cell["text"], cell["colspan"]) for cell in cells] == [
+        ("c1", "개정 ’16.11.7.", 1),
+        ("c2", "고시 제2016-149호", 1),
+        ("c3", "(2016.10.01.시행)", 1),
+        ("c4", "1차 QA", 3),
+    ]
+    assert sum(cell["colspan"] for cell in cells) == len(content["columns"])
+    assert "Column " not in parsed.units[0].source.text
+
+
+def test_hwpx_single_cell_text_table_is_emitted_as_text_unit():
+    from rag_document_parser import HwpxBackend
+
+    table = _table([_text_cell("목  차", row_addr=0, col_addr=0)])
+    xml = (
+        f'<hp:sec xmlns:hp="{HP}">'
+        f"<hp:p><hp:run>{table}</hp:run></hp:p>"
+        "</hp:sec>"
+    )
+
+    parsed = HwpxBackend().parse(_make_hwpx(xml), ".hwpx")
+
+    assert [unit.type for unit in parsed.units] == ["text"]
+    assert parsed.units[0].source.text == "목  차"
+    assert parsed.units[0].evidence.content == "목  차"
+
+
+def test_hwpx_table_keeps_header_rows_covered_by_rowspan_out_of_body():
+    from rag_document_parser import HwpxBackend
+
+    table = _table(
+        [
+            _text_cell("구분", rowspan=2, colspan=2, row_addr=0, col_addr=0),
+            _text_cell("산정요건", colspan=2, row_addr=0, col_addr=2),
+        ],
+        [
+            _text_cell("영상", row_addr=1, col_addr=2),
+            _text_cell("판독", row_addr=1, col_addr=3),
+        ],
+        [
+            _text_cell("진단", colspan=2, row_addr=2, col_addr=0),
+            _text_cell("필수", row_addr=2, col_addr=2),
+            _text_cell("필수", row_addr=2, col_addr=3),
+        ],
+    )
+    xml = (
+        f'<hp:sec xmlns:hp="{HP}">'
+        f"<hp:p><hp:run>{table}</hp:run></hp:p>"
+        "</hp:sec>"
+    )
+
+    parsed = HwpxBackend().parse(_make_hwpx(xml), ".hwpx")
+
+    content = parsed.units[0].evidence.content
+    assert len(content["header_rows"]) == 2
+    assert len(content["rows"]) == 1
+    assert content["header_rows"][1]["cells"][0]["text"] == "영상"
+    assert content["rows"][0]["cells"][0]["text"] == "진단"

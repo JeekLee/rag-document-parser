@@ -80,32 +80,29 @@ def _render_structured_table(
         if isinstance(column, dict)
     ]
     rows = [row for row in table.get("rows", []) if isinstance(row, dict)]
-    column_text = {str(column.get("id")): str(column.get("text", "")) for column in columns}
     html = ['<table class="evidence-table">']
-    if columns:
+    header_rows = [
+        row
+        for row in table.get("header_rows", [])
+        if isinstance(row, dict)
+    ]
+    if header_rows:
+        html.append("<thead>")
+        for row in header_rows:
+            html.append("<tr>")
+            html.append(_render_table_cells(row.get("cells", []), "th", assets_by_id))
+            html.append("</tr>")
+        html.append("</thead>")
+    elif columns:
         html.append("<thead><tr>")
         for column in columns:
-            html.append(f"<th>{escape(str(column.get('text', '')))}</th>")
+            text = escape(str(column.get("text", ""))) or "&nbsp;"
+            html.append(f"<th>{text}</th>")
         html.append("</tr></thead>")
     html.append("<tbody>")
     for row in rows:
         html.append("<tr>")
-        for cell in row.get("cells", []):
-            if not isinstance(cell, dict):
-                continue
-            rowspan = _positive_int(cell.get("rowspan"))
-            colspan = _positive_int(cell.get("colspan"))
-            attrs = []
-            if rowspan > 1:
-                attrs.append(f'rowspan="{rowspan}"')
-            if colspan > 1:
-                attrs.append(f'colspan="{colspan}"')
-            attrs_text = (" " + " ".join(attrs)) if attrs else ""
-            children = _render_children(cell.get("children", []), assets_by_id)
-            text = escape(str(cell.get("text", "")))
-            if not text and not children:
-                text = "&nbsp;"
-            html.append(f"<td{attrs_text}>{text}{children}</td>")
+        html.append(_render_table_cells(row.get("cells", []), "td", assets_by_id))
         if not row.get("cells") and columns:
             html.append(f'<td colspan="{len(columns)}">&nbsp;</td>')
         html.append("</tr>")
@@ -114,6 +111,33 @@ def _render_structured_table(
     html.append("</tbody></table>")
     if not columns and not rows:
         return "<p class=\"empty-table\">빈 표</p>"
+    return "".join(html)
+
+
+def _render_table_cells(
+    cells: Any,
+    tag: str,
+    assets_by_id: dict[str, dict[str, Any]],
+) -> str:
+    html = []
+    if not isinstance(cells, list):
+        return ""
+    for cell in cells:
+        if not isinstance(cell, dict):
+            continue
+        rowspan = _positive_int(cell.get("rowspan"))
+        colspan = _positive_int(cell.get("colspan"))
+        attrs = []
+        if rowspan > 1:
+            attrs.append(f'rowspan="{rowspan}"')
+        if colspan > 1:
+            attrs.append(f'colspan="{colspan}"')
+        attrs_text = (" " + " ".join(attrs)) if attrs else ""
+        children = _render_children(cell.get("children", []), assets_by_id)
+        text = escape(str(cell.get("text", "")))
+        if not text and not children:
+            text = "&nbsp;"
+        html.append(f"<{tag}{attrs_text}>{text}{children}</{tag}>")
     return "".join(html)
 
 

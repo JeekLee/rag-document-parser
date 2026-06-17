@@ -51,9 +51,10 @@ for asset in result.assets:
 - Parser backends produce `EvidenceUnit` objects; the current default chunker
   has intentionally been removed from parsing. Agentic chunking and
   summary/keyword/question generation happen after parsing.
-- The HWPX backend extracts text, structured tables, nested tables, and image
-  assets. Images embedded in table cells are preserved as nested `asset_ref`
-  evidence and uploaded to S3-compatible object storage.
+- The HWPX backend extracts text, coordinate-based structured tables, nested
+  tables, multi-row headers, merged cells, and image assets. Images embedded in
+  table cells are preserved as nested `asset_ref` evidence and uploaded to
+  S3-compatible object storage.
 - Converts simple Markdown tables into table evidence units with:
   - canonical row-oriented source text for LLM grounding
   - `structured_table` evidence payloads instead of Markdown table strings
