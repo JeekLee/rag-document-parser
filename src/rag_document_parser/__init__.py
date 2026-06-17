@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from .enrichment.llm import LlmConfig
 from .extract.backend import DocumentBackend, ParsedDocument
+from .extract.formats.hwp5 import Hwp5Backend
 from .extract.formats.hwpx import HwpxBackend
 from .extract.formats.markdown import MarkdownBackend
+from .extract.formats.pdf import PdfBackend
 from .models import (
     DocumentAsset,
     Evidence,
@@ -22,10 +24,12 @@ __all__ = [
     "DocumentAsset",
     "Evidence",
     "EvidenceUnit",
+    "Hwp5Backend",
     "HwpxBackend",
     "LlmConfig",
     "MarkdownBackend",
     "PendingAsset",
+    "PdfBackend",
     "ParseResult",
     "ParsedDocument",
     "RagChunk",

@@ -27,8 +27,13 @@
       "original_name": "(제2024-22호)+초음파검사+급여기준+관련+질의응답(전체합본).pdf",
       "bytes": 698770,
       "sha256": "c7e380bdb2248ee999efdc7b0abc52bb6b3e9b8de8ea4503c30ac036b6930b41",
-      "parser_supported": false,
-      "purpose": "PDF pair for the ultrasound HWPX regression document."
+      "parser_supported": true,
+      "purpose": "Text-layer PDF pair for the ultrasound HWPX regression document.",
+      "expected": {
+        "min_units": 60,
+        "min_tables": 40,
+        "min_assets": 2
+      }
     },
     {
       "id": "hwpx-benefit-criteria-2024-278",
@@ -56,8 +61,12 @@
       "original_name": "(제2024-278호)「요양급여의+적용기준+및+방법에+관한+세부사항」.pdf",
       "bytes": 203976,
       "sha256": "e551390788315ab3ece5052cedba409e0644e9cb412d66e50a179dfaf92cd70a",
-      "parser_supported": false,
-      "purpose": "PDF pair for the 2024-278 HWPX regression document."
+      "parser_supported": true,
+      "purpose": "Text-layer PDF pair for the 2024-278 HWPX regression document.",
+      "expected": {
+        "min_units": 10,
+        "min_tables": 5
+      }
     },
     {
       "id": "hwpx-cesarean-copay-qa",
@@ -85,8 +94,12 @@
       "original_name": "제왕절개 본인부담률 개정 관련 질의응답 개정.pdf",
       "bytes": 209411,
       "sha256": "b7a5d806613046567370392730b5b9bd9984cca5b1aa38bed407bc5de80cd3c0",
-      "parser_supported": false,
-      "purpose": "PDF pair for the cesarean copay HWPX regression document."
+      "parser_supported": true,
+      "purpose": "Text-layer PDF pair for the cesarean copay HWPX regression document.",
+      "expected": {
+        "min_units": 10,
+        "min_tables": 5
+      }
     },
     {
       "id": "hwp-medical-aid-overpayment-deduction",
@@ -97,8 +110,12 @@
       "original_name": "의료급여 과다본인부담금 공제의뢰 업무처리요령.hwp",
       "bytes": 114688,
       "sha256": "40b29956a44a07d9ac68b37db5c66a92a780f494a177bd828c4169eace638565",
-      "parser_supported": false,
-      "purpose": "Legacy HWP sample paired with PDF for upcoming backend work."
+      "parser_supported": true,
+      "purpose": "Legacy HWP sample paired with PDF for HWP5 backend regression.",
+      "expected": {
+        "min_units": 90,
+        "min_tables": 2
+      }
     },
     {
       "id": "pdf-medical-aid-overpayment-deduction",
@@ -109,8 +126,14 @@
       "original_name": "의료급여 과다본인부담금 공제 업무처리 요령.pdf",
       "bytes": 29777,
       "sha256": "2b87928b60cb6723cd799a79bbbfb6f83b8ce167712912ef13f40cf0a0e43ef2",
-      "parser_supported": false,
-      "purpose": "PDF pair for the medical aid overpayment HWP regression document."
+      "parser_supported": true,
+      "purpose": "Scanned PDF pair for the medical aid overpayment HWP regression document.",
+      "expected": {
+        "requires_ocr": true,
+        "scanned_pages": 3,
+        "min_units": 3,
+        "min_tables": 0
+      }
     }
   ]
 }
