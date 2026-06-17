@@ -251,6 +251,9 @@ def test_custom_backend_can_be_registered_for_suffix():
 
     assert backend.calls == [(b"custom bytes", ".custom")]
     assert result.source.suffix == ".custom"
+    assert result.units[0].type == "text"
+    assert result.units[0].format == "plain"
+    assert result.units[0].content == "custom text"
     assert result.units[0].source.text == "custom text"
     assert result.quality_warnings == [
         {

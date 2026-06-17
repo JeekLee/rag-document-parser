@@ -258,6 +258,71 @@ def test_nested_asset_refs_are_uploaded_and_resolved_in_table_evidence(monkeypat
     assert image_child["content"]["sha256"] == hashlib.sha256(PNG_BYTES).hexdigest()
 
 
+def test_legacy_nested_kind_asset_ref_is_resolved_and_canonicalized():
+    from rag_document_parser.extract.assets import resolve_units
+    from rag_document_parser.models import DocumentAsset, EvidenceUnit, SourceEvidence
+
+    unit = EvidenceUnit(
+        id="b1",
+        type="table",
+        format="structured_table",
+        source=SourceEvidence(kind="table", text="table with legacy image"),
+        content={
+            "caption": None,
+            "columns": [{"id": "c1", "text": "이미지"}],
+            "rows": [
+                {
+                    "index": 1,
+                    "cells": [
+                        {
+                            "column_id": "c1",
+                            "text": "",
+                            "rowspan": 1,
+                            "colspan": 1,
+                            "children": [
+                                {
+                                    "kind": "image",
+                                    "format": "asset_ref",
+                                    "content": {
+                                        "asset_id": "img-0001",
+                                        "caption": "legacy nested",
+                                    },
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+    asset = DocumentAsset(
+        id="img-0001",
+        kind="image",
+        uri="s3://rag-assets/documents/doc-sha/assets/img-0001.png",
+        mime="image/png",
+        ext="png",
+        sha256=hashlib.sha256(PNG_BYTES).hexdigest(),
+        bytes=len(PNG_BYTES),
+    )
+
+    resolved = resolve_units([unit], [asset])
+
+    image_child = resolved[0].content["rows"][0]["cells"][0]["children"][0]
+    assert image_child == {
+        "type": "image",
+        "format": "asset_ref",
+        "content": {
+            "asset_id": "img-0001",
+            "caption": "legacy nested",
+            "uri": "s3://rag-assets/documents/doc-sha/assets/img-0001.png",
+            "mime": "image/png",
+            "ext": "png",
+            "sha256": hashlib.sha256(PNG_BYTES).hexdigest(),
+            "bytes": len(PNG_BYTES),
+        },
+    }
+
+
 def test_hwpx_table_first_row_with_image_is_not_lost_as_header():
     from rag_document_parser import HwpxBackend
 
