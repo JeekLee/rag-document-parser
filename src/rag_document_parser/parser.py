@@ -7,7 +7,7 @@ from typing import Any
 
 from .backends import DocumentBackend, default_backends
 from .llm import LlmConfig, chat_json as _chat_json
-from .models import ParseResult, RagChunk, SourceInfo
+from .models import EvidenceUnit, ParseResult, RagChunk, SourceInfo
 
 
 @dataclass
@@ -52,7 +52,7 @@ class RagDocumentParser:
         )
         return ParseResult(
             source=source_info,
-            chunks=_enrich_chunks(parsed.chunks, self.llm),
+            chunks=_enrich_chunks(_chunks_from_units(parsed.units), self.llm),
             quality_warnings=list(parsed.quality_warnings),
         )
 
@@ -64,6 +64,22 @@ class RagDocumentParser:
             raise ValueError(
                 f"Unsupported format: {suffix!r} (supported: {supported})"
             ) from exc
+
+
+def _chunks_from_units(units: list[EvidenceUnit]) -> list[RagChunk]:
+    chunks: list[RagChunk] = []
+    for unit in units:
+        chunks.append(
+            RagChunk(
+                id=unit.id,
+                type=unit.type,
+                source=unit.source,
+                evidence=unit.evidence,
+                summary="",
+                metadata=dict(unit.metadata),
+            )
+        )
+    return chunks
 
 
 def _enrich_chunks(chunks: list[RagChunk], llm: LlmConfig | None) -> list[RagChunk]:

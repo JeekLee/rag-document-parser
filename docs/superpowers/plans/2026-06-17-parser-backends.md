@@ -4,7 +4,7 @@
 
 **Goal:** Split raw document parsing from RAG chunk enrichment so HWPX/HWP/PDF parsers can be added behind a stable interface.
 
-**Architecture:** `RagDocumentParser` selects a backend by suffix. Backends return unenriched `RagChunk` objects from normalized document content, then the existing LLM enrichment step adds `summary`, `keywords`, and `questions`.
+**Architecture:** `RagDocumentParser` selects a backend by suffix. Backends return source-preserving `EvidenceUnit` objects from normalized document content, the default chunker promotes one unit to one `RagChunk`, then the existing LLM enrichment step adds `summary`, `keywords`, and `questions`.
 
 **Tech Stack:** Python 3.11 dataclasses, pytest, stdlib only.
 
@@ -20,7 +20,7 @@
 
 - [ ] **Step 1: Write failing tests**
 
-Add tests that show `.txt` and `.md` are handled by the Markdown backend, custom registered suffixes can provide chunks, and unsupported suffixes fail before LLM calls.
+Add tests that show `.txt` and `.md` are handled by the Markdown backend, custom registered suffixes can provide evidence units, and unsupported suffixes fail before LLM calls.
 
 - [ ] **Step 2: Verify RED**
 

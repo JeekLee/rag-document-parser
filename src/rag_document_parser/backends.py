@@ -3,25 +3,25 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from .models import Evidence, RagChunk, SourceEvidence
+from .models import Evidence, EvidenceUnit, SourceEvidence
 
 
 @dataclass(frozen=True)
 class ParsedDocument:
-    chunks: list[RagChunk]
+    units: list[EvidenceUnit]
     quality_warnings: list[dict[str, Any]] = field(default_factory=list)
 
 
 class DocumentBackend(Protocol):
     def parse(self, data: bytes, suffix: str) -> ParsedDocument:
-        """Parse raw document bytes into unenriched RAG chunks."""
+        """Parse raw document bytes into source-preserving evidence units."""
         ...
 
 
 class MarkdownBackend:
     def parse(self, data: bytes, suffix: str) -> ParsedDocument:
         markdown = data.decode("utf-8", errors="replace")
-        return ParsedDocument(chunks=_chunks_from_markdown(markdown))
+        return ParsedDocument(units=_units_from_markdown(markdown))
 
 
 def default_backends() -> dict[str, DocumentBackend]:
@@ -33,8 +33,8 @@ def default_backends() -> dict[str, DocumentBackend]:
     }
 
 
-def _chunks_from_markdown(markdown: str) -> list[RagChunk]:
-    chunks: list[RagChunk] = []
+def _units_from_markdown(markdown: str) -> list[EvidenceUnit]:
+    units: list[EvidenceUnit] = []
     section_path: list[str] = []
     paragraph_lines: list[str] = []
     table_lines: list[str] = []
@@ -50,8 +50,8 @@ def _chunks_from_markdown(markdown: str) -> list[RagChunk]:
             return
         chunk_id = f"b{block_index}"
         block_index += 1
-        chunks.append(
-            RagChunk(
+        units.append(
+            EvidenceUnit(
                 id=chunk_id,
                 type="text",
                 source=SourceEvidence(
@@ -60,7 +60,6 @@ def _chunks_from_markdown(markdown: str) -> list[RagChunk]:
                     section_path=list(section_path),
                 ),
                 evidence=Evidence(kind="text", format="plain", content=text),
-                summary="",
                 metadata={
                     "common": {
                         "chunk_kind": "text",
@@ -83,8 +82,8 @@ def _chunks_from_markdown(markdown: str) -> list[RagChunk]:
         table_index += 1
         headers, rows = _table_parts(lines)
         table_source_text = _table_source_text(headers, rows)
-        chunks.append(
-            RagChunk(
+        units.append(
+            EvidenceUnit(
                 id=block_id,
                 type="table",
                 source=SourceEvidence(
@@ -99,7 +98,6 @@ def _chunks_from_markdown(markdown: str) -> list[RagChunk]:
                     format="markdown_table",
                     content="\n".join(lines),
                 ),
-                summary="",
                 metadata={
                     "common": {
                         "chunk_kind": "table",
@@ -137,7 +135,7 @@ def _chunks_from_markdown(markdown: str) -> list[RagChunk]:
 
     flush_paragraph()
     flush_table()
-    return chunks
+    return units
 
 
 def _table_parts(lines: list[str]) -> tuple[list[str], list[list[str]]]:

@@ -39,12 +39,15 @@ for chunk in result.chunks:
 - Defines the public RAG result model:
   - `ParseResult`
   - `RagChunk`
+  - `EvidenceUnit`
   - `Evidence`
   - `SourceInfo`
   - `SourceEvidence`
 - Supports UTF-8 text/Markdown parsing as the first contract fixture.
 - Selects a parser backend by suffix; `.md`, `.markdown`, and `.txt` are
   currently backed by the built-in Markdown backend.
+- Parser backends produce `EvidenceUnit` objects; the current default chunker
+  preserves one unit as one `RagChunk` before LLM enrichment.
 - Requires an LLM configuration and fails parsing when chunk enrichment is
   missing or invalid.
 - Converts simple Markdown tables into table evidence units with:
