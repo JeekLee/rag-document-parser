@@ -56,6 +56,14 @@ def test_regression_corpus_is_paired_with_pdf_counterparts():
     }
 
 
+def test_scanned_cover_letter_pdf_is_not_marked_hwp_body_comparable():
+    documents = {document["id"]: document for document in _manifest_documents()}
+    expected = documents["pdf-medical-aid-overpayment-deduction"]["expected"]
+
+    assert expected["pair_comparable"] is False
+    assert expected["comparison_scope"] == "scanned_cover_letter_pages"
+
+
 def test_supported_hwpx_corpus_emits_canonical_table_source():
     from rag_document_parser import HwpxBackend
 

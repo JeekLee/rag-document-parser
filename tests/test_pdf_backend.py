@@ -888,6 +888,145 @@ def test_pdf_backend_splits_sectioned_text_blocks(monkeypatch):
     ]
 
 
+def test_pdf_backend_splits_scanned_official_letter_ocr(monkeypatch):
+    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
+    from rag_document_parser.extract.formats.pdf import PdfBackend
+
+    scanned_page = _FakePage(
+        chars=[],
+        images=[{"x0": 0, "x1": 300, "y0": 0, "y1": 400}],
+    )
+    text = "\n".join(
+        [
+            '"긴급지원은 지역번호없이 129번으로"',
+            "보건복지부",
+            "수신자 수신자 참조",
+            "(경유)",
+            "제목 의료급여 과다본인부담금 공제 업무처리 요령",
+            "1. 적정의료급여 서비스 제공을 위해 노력하시는 귀 기관에 감사드립니다.",
+            "2. 의료급여법 제11조의3(급여대상 여부의 확인 등)의 신설로",
+            "의료급여기관이 수급권자에게 비용을 과다하게 징수한 것으로 확인되었습니다.",
+            "3. 이에 따라 붙임과 같이 업무처리요령을 송부합니다.",
+            "붙임 07115-의료급여 과다 본인부담금 공제 업무처리 요령. 끝.",
+        ]
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "pdfplumber",
+        SimpleNamespace(open=lambda stream: _FakePdf([scanned_page])),
+    )
+    monkeypatch.setattr(
+        pdf_backend,
+        "_render_page_to_png",
+        lambda data, page_idx, bbox, scale=2.0: b"rendered-page",
+    )
+
+    parsed = PdfBackend(max_ocr_workers=1, ocr_fn=lambda png, page_idx: text).parse(
+        b"%PDF-1.4 fake",
+        ".pdf",
+    )
+
+    assert [unit.source.text for unit in parsed.units] == [
+        '"긴급지원은 지역번호없이 129번으로"',
+        "보건복지부",
+        "수신자 수신자 참조",
+        "(경유)",
+        "제목 의료급여 과다본인부담금 공제 업무처리 요령",
+        "1. 적정의료급여 서비스 제공을 위해 노력하시는 귀 기관에 감사드립니다.",
+        (
+            "2. 의료급여법 제11조의3(급여대상 여부의 확인 등)의 신설로 "
+            "의료급여기관이 수급권자에게 비용을 과다하게 징수한 것으로 확인되었습니다."
+        ),
+        "3. 이에 따라 붙임과 같이 업무처리요령을 송부합니다.",
+        "붙임 07115-의료급여 과다 본인부담금 공제 업무처리 요령. 끝.",
+    ]
+
+
+def test_pdf_backend_splits_scanned_official_letter_continuation_ocr(monkeypatch):
+    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
+    from rag_document_parser.extract.formats.pdf import PdfBackend
+
+    scanned_page = _FakePage(
+        chars=[],
+        images=[{"x0": 0, "x1": 300, "y0": 0, "y1": 400}],
+    )
+    text = (
+        "보건복지부 수신자 보건복지콜센터장, 국민건강보험공단이사장, "
+        "건강보험심사평가원장 주무관 황영원 사회복지사무 김혜래 "
+        "시행 기초의료보장팀-4995 (2007.11.16.) 접수 의료급여1부-2970 "
+        "우 427-721 경기도 과천시 중앙동 1번지 / www.mohw.go.kr "
+        "전화 02-2110-6234 전송 02-503-5395 / na852@mohw.go.kr / 공개"
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "pdfplumber",
+        SimpleNamespace(open=lambda stream: _FakePdf([scanned_page])),
+    )
+    monkeypatch.setattr(
+        pdf_backend,
+        "_render_page_to_png",
+        lambda data, page_idx, bbox, scale=2.0: b"rendered-page",
+    )
+
+    parsed = PdfBackend(max_ocr_workers=1, ocr_fn=lambda png, page_idx: text).parse(
+        b"%PDF-1.4 fake",
+        ".pdf",
+    )
+
+    assert [unit.source.text for unit in parsed.units] == [
+        "보건복지부",
+        "수신자 보건복지콜센터장, 국민건강보험공단이사장, 건강보험심사평가원장",
+        "주무관 황영원 사회복지사무 김혜래",
+        "시행 기초의료보장팀-4995 (2007.11.16.)",
+        "접수 의료급여1부-2970",
+        "우 427-721 경기도 과천시 중앙동 1번지 / www.mohw.go.kr",
+        "전화 02-2110-6234 전송 02-503-5395 / na852@mohw.go.kr / 공개",
+    ]
+
+
+def test_pdf_backend_splits_multiline_official_letter_continuation_markers(monkeypatch):
+    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
+    from rag_document_parser.extract.formats.pdf import PdfBackend
+
+    scanned_page = _FakePage(
+        chars=[],
+        images=[{"x0": 0, "x1": 300, "y0": 0, "y1": 400}],
+    )
+    text = "\n".join(
+        [
+            "보건복지부",
+            "수신자 보건복지콜센터장, 국민건강보험공단이사장",
+            "시행 기초의료보장팀-4995 (2007.11.16.) 접수 의료급여1부-2970",
+            "우 427-721 경기도 과천시 중앙동 1번지 / www.mohw.go.kr",
+            "전화 02-2110-6234 전송 02-503-5395 / na852@mohw.go.kr / 공개",
+        ]
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "pdfplumber",
+        SimpleNamespace(open=lambda stream: _FakePdf([scanned_page])),
+    )
+    monkeypatch.setattr(
+        pdf_backend,
+        "_render_page_to_png",
+        lambda data, page_idx, bbox, scale=2.0: b"rendered-page",
+    )
+
+    parsed = PdfBackend(max_ocr_workers=1, ocr_fn=lambda png, page_idx: text).parse(
+        b"%PDF-1.4 fake",
+        ".pdf",
+    )
+
+    assert [unit.source.text for unit in parsed.units] == [
+        "보건복지부",
+        "수신자 보건복지콜센터장, 국민건강보험공단이사장",
+        "시행 기초의료보장팀-4995 (2007.11.16.)",
+        "접수 의료급여1부-2970",
+        "우 427-721 경기도 과천시 중앙동 1번지 / www.mohw.go.kr",
+        "전화 02-2110-6234 전송 02-503-5395 / na852@mohw.go.kr / 공개",
+    ]
+
+
 def test_pdf_backend_reports_missing_pdfplumber_dependency(monkeypatch):
     from rag_document_parser.extract.formats.pdf import PdfBackend
 

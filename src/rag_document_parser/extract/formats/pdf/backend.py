@@ -519,7 +519,9 @@ def _expand_text_segments(
 
 def _structured_text_parts(text: str) -> list[str] | None:
     return (
-        _official_notice_text_parts(text)
+        _scanned_official_letter_text_parts(text)
+        or _scanned_official_letter_continuation_parts(text)
+        or _official_notice_text_parts(text)
         or _related_basis_text_parts(text)
         or _sectioned_text_parts(text)
         or _short_heading_text_parts(text)
@@ -578,6 +580,108 @@ def _official_notice_text_parts(text: str) -> list[str] | None:
     if paragraph:
         parts.append(_join_pdf_text_lines(paragraph))
     return parts if len(parts) > 1 else None
+
+
+def _scanned_official_letter_text_parts(text: str) -> list[str] | None:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not _looks_like_scanned_official_letter(lines):
+        return None
+
+    parts: list[str] = []
+    paragraph: list[str] = []
+    for line in lines:
+        if _is_official_letter_boundary_line(line):
+            if paragraph:
+                parts.append(_join_pdf_text_lines(paragraph))
+                paragraph = []
+            if _is_numbered_paragraph_line(line):
+                paragraph = [line]
+            else:
+                parts.append(line)
+            continue
+        if paragraph:
+            paragraph.append(line)
+            continue
+        parts.append(line)
+
+    if paragraph:
+        parts.append(_join_pdf_text_lines(paragraph))
+    return parts if len(parts) > 1 else None
+
+
+def _looks_like_scanned_official_letter(lines: list[str]) -> bool:
+    return (
+        any(line.startswith("수신자") for line in lines)
+        and any(line.startswith("제목") for line in lines)
+        and any(_is_numbered_paragraph_line(line) for line in lines)
+    )
+
+
+def _is_official_letter_boundary_line(line: str) -> bool:
+    return (
+        _is_numbered_paragraph_line(line)
+        or line.startswith("붙임")
+        or line.startswith('"긴급지원')
+        or line == "보건복지부"
+        or line.startswith("수신자")
+        or line == "(경유)"
+        or line.startswith("제목")
+    )
+
+
+def _is_numbered_paragraph_line(line: str) -> bool:
+    return bool(re.match(r"^\d+\.\s+", line))
+
+
+def _scanned_official_letter_continuation_parts(text: str) -> list[str] | None:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(lines) > 1 and lines[0] == "보건복지부" and lines[1].startswith("수신자"):
+        return _split_official_letter_continuation_lines(lines)
+    if len(lines) != 1:
+        return None
+    line = lines[0]
+    if not (line.startswith("보건복지부 수신자 ") and " 시행 " in line and " 전화 " in line):
+        return None
+    parts = _split_official_letter_continuation_line(line)
+    return parts if len(parts) > 1 else None
+
+
+def _split_official_letter_continuation_lines(lines: list[str]) -> list[str]:
+    parts: list[str] = []
+    for line in lines:
+        split = _split_official_letter_continuation_line(line)
+        parts.extend(split if len(split) > 1 else [line])
+    return parts
+
+
+def _split_official_letter_continuation_line(line: str) -> list[str]:
+    markers = (
+        " 수신자 ",
+        " 주무관 ",
+        " 주주관 ",
+        " 주관 ",
+        " 시행 ",
+        " 접수 ",
+        " 우 ",
+        " 전화 ",
+    )
+    split_points = sorted(
+        index
+        for marker in markers
+        for index in [line.find(marker)]
+        if index > 0
+    )
+    parts: list[str] = []
+    start = 0
+    for index in split_points:
+        part = line[start:index].strip()
+        if part:
+            parts.append(part)
+        start = index + 1
+    tail = line[start:].strip()
+    if tail:
+        parts.append(tail)
+    return parts
 
 
 def _related_basis_text_parts(text: str) -> list[str] | None:
