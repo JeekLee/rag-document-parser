@@ -78,9 +78,20 @@ real HWPX file and upload the evidence outputs back to MinIO:
 docker exec clic-minio sh -lc \
   '/usr/bin/mc mb --ignore-existing local/rag-document-parser-test'
 
+docker exec clic-minio sh -lc \
+  '/usr/bin/mc anonymous set download local/rag-document-parser-test'
+
 uv run python scripts/validate_hwpx_clic_minio.py /path/to/sample.hwpx \
-  --source-name "sample.hwpx"
+  --source-name "sample.hwpx" \
+  --public-asset-endpoint "http://<browser-reachable-server>:10190"
 ```
+
+`--public-asset-endpoint` must point to the MinIO/S3 API endpoint reachable
+from the browser opening `evidence-units.html`; for local checks this can be
+`http://localhost:10190`, and for external checks it should be the server IP or
+DNS name plus the published S3 API port. Evidence JSON keeps canonical
+`s3://bucket/key` asset URIs; the generated HTML uses `public_url` only for
+browser rendering.
 
 The script writes and uploads:
 

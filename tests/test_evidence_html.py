@@ -114,3 +114,46 @@ def test_render_evidence_units_as_html_without_llm_enrichment():
     assert "외래" in html
     assert "s3://rag-assets/doc/assets/img-0001.png" in html
     assert "첨부 이미지" in html
+
+
+def test_render_evidence_image_uses_public_url_while_showing_source_uri():
+    from rag_document_parser.evidence_html import render_evidence_units_html
+
+    units = [
+        {
+            "id": "b1",
+            "type": "image",
+            "source": {"kind": "image", "text": "image: img-0001"},
+            "evidence": {
+                "kind": "image",
+                "format": "asset_ref",
+                "content": {
+                    "asset_id": "img-0001",
+                    "caption": "첨부 이미지",
+                },
+            },
+            "metadata": {},
+        }
+    ]
+
+    html = render_evidence_units_html(
+        units,
+        title="HWPX evidence",
+        assets=[
+            {
+                "id": "img-0001",
+                "uri": "s3://rag-assets/doc/assets/img-0001.png",
+                "public_url": "http://203.0.113.10:10190/rag-assets/doc/assets/img-0001.png",
+                "mime": "image/png",
+                "ext": "png",
+                "sha256": "def456",
+                "bytes": 10,
+            }
+        ],
+    )
+
+    assert (
+        'src="http://203.0.113.10:10190/rag-assets/doc/assets/img-0001.png"'
+        in html
+    )
+    assert "s3://rag-assets/doc/assets/img-0001.png" in html

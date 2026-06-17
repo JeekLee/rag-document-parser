@@ -14,7 +14,7 @@ from .models import (
     SourceInfo,
 )
 from .parser import RagDocumentParser
-from .storage import S3Config
+from .storage import S3Config, public_url_for_s3_uri
 
 __all__ = [
     "DocumentBackend",
@@ -32,4 +32,5 @@ __all__ = [
     "S3Config",
     "SourceEvidence",
     "SourceInfo",
+    "public_url_for_s3_uri",
 ]

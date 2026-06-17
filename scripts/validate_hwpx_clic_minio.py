@@ -13,7 +13,7 @@ from typing import Any
 from rag_document_parser import HwpxBackend, S3Config
 from rag_document_parser.backends import ParsedDocument
 from rag_document_parser.evidence_html import render_evidence_units_html
-from rag_document_parser.storage import put_object
+from rag_document_parser.storage import public_url_for_s3_uri, put_object
 
 
 def main() -> None:
@@ -37,7 +37,15 @@ def main() -> None:
     evidence_started = time.perf_counter()
     parsed = HwpxBackend().parse(raw, ".hwpx")
     evidence_elapsed = time.perf_counter() - evidence_started
-    uploaded_assets = _upload_assets(storage, parsed, document_sha256)
+    public_asset_endpoint = None
+    if args.html_asset_url_mode == "public":
+        public_asset_endpoint = args.public_asset_endpoint or args.s3_endpoint
+    uploaded_assets = _upload_assets(
+        storage,
+        parsed,
+        document_sha256,
+        public_endpoint=public_asset_endpoint,
+    )
 
     unit_dicts = [unit.to_dict() for unit in parsed.units]
     evidence_payload = {
@@ -124,6 +132,11 @@ def _metrics(
             "bytes": sum(len(asset.data) for asset in parsed.assets),
             "by_mime": dict(sorted(Counter(asset.mime for asset in parsed.assets).items())),
             "uris": [asset["uri"] for asset in uploaded_assets],
+            "public_urls": [
+                asset["public_url"]
+                for asset in uploaded_assets
+                if isinstance(asset.get("public_url"), str)
+            ],
         },
         "uploads": dict(uploads),
     }
@@ -133,23 +146,28 @@ def _upload_assets(
     storage: S3Config,
     parsed: ParsedDocument,
     document_sha256: str,
+    *,
+    public_endpoint: str | None = None,
 ) -> list[dict[str, Any]]:
     uploaded = []
     for asset in parsed.assets:
         ext = asset.ext.lstrip(".")
         key = f"{document_sha256}/assets/{asset.id}.{ext}"
         uri = put_object(storage, key, asset.data, asset.mime)
+        asset_payload: dict[str, Any] = {
+            "id": asset.id,
+            "kind": asset.kind,
+            "uri": uri,
+            "mime": asset.mime,
+            "ext": ext,
+            "sha256": hashlib.sha256(asset.data).hexdigest(),
+            "bytes": len(asset.data),
+            "metadata": dict(asset.metadata),
+        }
+        if public_endpoint:
+            asset_payload["public_url"] = public_url_for_s3_uri(uri, public_endpoint)
         uploaded.append(
-            {
-                "id": asset.id,
-                "kind": asset.kind,
-                "uri": uri,
-                "mime": asset.mime,
-                "ext": ext,
-                "sha256": hashlib.sha256(asset.data).hexdigest(),
-                "bytes": len(asset.data),
-                "metadata": dict(asset.metadata),
-            }
+            asset_payload
         )
     return uploaded
 
@@ -185,6 +203,17 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--s3-secret-key", default=os.getenv("RDP_S3_SECRET_KEY", "minioadmin"))
     parser.add_argument("--s3-region", default=os.getenv("RDP_S3_REGION", "us-east-1"))
     parser.add_argument("--s3-prefix", default=os.getenv("RDP_S3_PREFIX", "hwpx-validation"))
+    parser.add_argument(
+        "--html-asset-url-mode",
+        choices=("public", "s3"),
+        default=os.getenv("RDP_HTML_ASSET_URL_MODE", "public"),
+        help="Use public HTTP asset URLs in generated HTML, or keep raw s3:// URIs.",
+    )
+    parser.add_argument(
+        "--public-asset-endpoint",
+        default=os.getenv("RDP_PUBLIC_ASSET_ENDPOINT"),
+        help="Browser-reachable MinIO/S3 API endpoint used for public HTML asset URLs.",
+    )
     args = parser.parse_args()
     if not args.input.exists():
         parser.error(f"input does not exist: {args.input}")

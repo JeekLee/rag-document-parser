@@ -139,6 +139,7 @@ def _render_asset_ref(
 ) -> str:
     content = _merge_asset_content(content, assets_by_id)
     uri = str(content.get("uri", ""))
+    render_url = str(content.get("public_url") or content.get("preview_url") or uri)
     caption = str(content.get("caption") or content.get("asset_id") or "asset")
     mime = str(content.get("mime", ""))
     meta = " · ".join(
@@ -151,7 +152,7 @@ def _render_asset_ref(
         if item
     )
     if kind == "image":
-        if not uri:
+        if not render_url:
             return (
                 "<figure>"
                 f"<figcaption>{escape(caption)}</figcaption>"
@@ -160,16 +161,16 @@ def _render_asset_ref(
             )
         return (
             "<figure>"
-            f'<img src="{escape(uri)}" alt="{escape(caption)}" />'
+            f'<img src="{escape(render_url)}" alt="{escape(caption)}" />'
             f"<figcaption>{escape(caption)}</figcaption>"
-            f'<a href="{escape(uri)}">{escape(uri)}</a>'
+            f'<a href="{escape(render_url)}">{escape(uri or render_url)}</a>'
             f'<p class="asset-meta">{escape(meta)}</p>'
             "</figure>"
         )
     return (
         '<div class="asset-ref">'
         f"<strong>{escape(caption)}</strong>"
-        f'<a href="{escape(uri)}">{escape(uri)}</a>'
+        f'<a href="{escape(render_url)}">{escape(uri or render_url)}</a>'
         f'<p class="asset-meta">{escape(meta)}</p>'
         "</div>"
     )
@@ -198,6 +199,8 @@ def _merge_asset_content(
     return {
         **content,
         "uri": content.get("uri") or asset.get("uri"),
+        "public_url": content.get("public_url") or asset.get("public_url"),
+        "preview_url": content.get("preview_url") or asset.get("preview_url"),
         "mime": content.get("mime") or asset.get("mime"),
         "ext": content.get("ext") or asset.get("ext"),
         "sha256": content.get("sha256") or asset.get("sha256"),
