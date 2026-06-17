@@ -77,18 +77,26 @@ def _materialize_window(units: list[EvidenceUnit], raw_plan: Any) -> list[RagChu
         raise ValueError("chunk plan must be a list")
 
     by_id = {unit.id: unit for unit in units}
-    assigned: set[str] = set()
+    full_assigned: set[str] = set()
+    row_ranges_by_unit: dict[str, list[tuple[int, int]]] = {}
     chunks: list[RagChunk] = []
 
     for item in raw_plan:
         if not isinstance(item, dict):
             raise ValueError("chunk plan item must be an object")
-        _validate_plan_unit_ids(item, by_id)
 
         operations = item.get("operations")
         if not isinstance(operations, list) or not operations:
             raise ValueError("chunk plan item requires operations")
+        operation_unit_ids = _operation_unit_ids(operations, by_id)
+        _validate_plan_unit_ids(item, by_id, operation_unit_ids)
 
+        prior_covered = _covered_unit_ids(full_assigned, row_ranges_by_unit)
+        next_full_assigned = set(full_assigned)
+        next_row_ranges = {
+            unit_id: list(ranges)
+            for unit_id, ranges in row_ranges_by_unit.items()
+        }
         chunk_units: list[EvidenceUnit] = []
         evidence_items: list[EvidenceItem] = []
         source_parts: list[str] = []
@@ -101,19 +109,17 @@ def _materialize_window(units: list[EvidenceUnit], raw_plan: Any) -> list[RagChu
             unit_id = operation.get("unit_id")
             if not isinstance(unit_id, str) or unit_id not in by_id:
                 raise ValueError(f"unknown unit id: {unit_id!r}")
-            if unit_id in assigned:
-                raise ValueError(f"duplicate unit id: {unit_id}")
 
             unit = by_id[unit_id]
             evidence_item, source_text, normalized = _materialize_operation(unit, operation)
-            assigned.add(unit_id)
+            _register_assignment(unit, normalized, next_full_assigned, next_row_ranges)
             chunk_units.append(unit)
             evidence_items.append(evidence_item)
             if source_text:
                 source_parts.append(source_text)
             normalized_ops.append(normalized)
 
-        context_unit_ids = _context_unit_ids(item.get("context_unit_ids"), by_id, assigned)
+        context_unit_ids = _context_unit_ids(item.get("context_unit_ids"), by_id, prior_covered)
         chunks.append(
             _chunk_from_items(
                 len(chunks) + 1,
@@ -125,29 +131,46 @@ def _materialize_window(units: list[EvidenceUnit], raw_plan: Any) -> list[RagChu
                 context_unit_ids,
             )
         )
+        full_assigned = next_full_assigned
+        row_ranges_by_unit = next_row_ranges
 
-    missing = [unit.id for unit in units if unit.id not in assigned]
+    covered = _covered_unit_ids(full_assigned, row_ranges_by_unit)
+    missing = [unit.id for unit in units if unit.id not in covered]
     if missing:
         raise ValueError(f"chunk plan omitted units: {', '.join(missing)}")
     return chunks
 
 
+def _operation_unit_ids(
+    operations: list[Any],
+    by_id: dict[str, EvidenceUnit],
+) -> list[str]:
+    unit_ids: list[str] = []
+    for operation in operations:
+        if not isinstance(operation, dict):
+            raise ValueError("operation must be an object")
+        unit_id = operation.get("unit_id")
+        if not isinstance(unit_id, str) or unit_id not in by_id:
+            raise ValueError(f"unknown unit id: {unit_id!r}")
+        unit_ids.append(unit_id)
+    return unit_ids
+
+
 def _validate_plan_unit_ids(
     item: dict[str, Any],
     by_id: dict[str, EvidenceUnit],
+    operation_unit_ids: list[str],
 ) -> None:
-    unit_ids = item.get("unit_ids", [])
-    if unit_ids is None:
+    if "unit_ids" not in item:
         return
+    unit_ids = item.get("unit_ids")
     if not isinstance(unit_ids, list):
         raise ValueError("unit_ids must be a list")
-    seen: set[str] = set()
     for unit_id in unit_ids:
         if not isinstance(unit_id, str) or unit_id not in by_id:
             raise ValueError(f"unknown unit id: {unit_id!r}")
-        if unit_id in seen:
-            raise ValueError(f"duplicate unit id: {unit_id}")
-        seen.add(unit_id)
+    if unit_ids != operation_unit_ids:
+        raise ValueError("unit_ids must match operation unit_ids")
 
 
 def _materialize_operation(
@@ -169,29 +192,46 @@ def _materialize_operation(
         )
 
     if action == "include_rows":
-        ranges = operation.get("row_ranges")
+        ranges = _normalize_row_ranges(operation.get("row_ranges"))
         if unit.format != "structured_table" or not isinstance(unit.content, dict):
             raise ValueError(f"include_rows requires structured_table unit: {unit.id}")
-        if not isinstance(ranges, list):
-            raise ValueError("include_rows requires row_ranges")
 
         subset = _table_subset(unit.content, ranges)
+        row_ranges = [[start, end] for start, end in ranges]
         return (
             EvidenceItem(
                 type=unit.type,
                 format=unit.format,
                 content=subset,
                 source_unit_ids=[unit.id],
-                metadata={**dict(unit.metadata), "row_ranges": ranges},
+                metadata={**dict(unit.metadata), "row_ranges": row_ranges},
             ),
             _table_source_text(subset),
-            {"unit_id": unit.id, "action": "include_rows", "row_ranges": ranges},
+            {"unit_id": unit.id, "action": "include_rows", "row_ranges": row_ranges},
         )
 
     raise ValueError(f"unsupported action: {action!r}")
 
 
-def _table_subset(table: dict[str, Any], ranges: list[Any]) -> dict[str, Any]:
+def _normalize_row_ranges(value: Any) -> list[tuple[int, int]]:
+    if not isinstance(value, list):
+        raise ValueError("include_rows requires row_ranges")
+
+    ranges: list[tuple[int, int]] = []
+    for item in value:
+        if (
+            not isinstance(item, list)
+            or len(item) != 2
+            or type(item[0]) is not int
+            or type(item[1]) is not int
+            or item[0] > item[1]
+        ):
+            raise ValueError("row range must be [start, end] ints with start <= end")
+        ranges.append((item[0], item[1]))
+    return ranges
+
+
+def _table_subset(table: dict[str, Any], ranges: list[tuple[int, int]]) -> dict[str, Any]:
     selected: list[dict[str, Any]] = []
     rows = table.get("rows", [])
     if not isinstance(rows, list):
@@ -212,17 +252,53 @@ def _table_subset(table: dict[str, Any], ranges: list[Any]) -> dict[str, Any]:
     return subset
 
 
-def _row_selected(index: int, ranges: list[Any]) -> bool:
-    for item in ranges:
-        if (
-            isinstance(item, list)
-            and len(item) == 2
-            and isinstance(item[0], int)
-            and isinstance(item[1], int)
-            and item[0] <= index <= item[1]
-        ):
+def _row_selected(index: int, ranges: list[tuple[int, int]]) -> bool:
+    for start, end in ranges:
+        if start <= index <= end:
             return True
     return False
+
+
+def _register_assignment(
+    unit: EvidenceUnit,
+    operation: dict[str, Any],
+    full_assigned: set[str],
+    row_ranges_by_unit: dict[str, list[tuple[int, int]]],
+) -> None:
+    action = operation["action"]
+    if action == "include":
+        if unit.id in full_assigned:
+            raise ValueError(f"duplicate unit id: {unit.id}")
+        if unit.id in row_ranges_by_unit:
+            raise ValueError(f"full include conflicts with include_rows for unit: {unit.id}")
+        full_assigned.add(unit.id)
+        return
+
+    if action == "include_rows":
+        if unit.id in full_assigned:
+            raise ValueError(f"full include conflicts with include_rows for unit: {unit.id}")
+
+        existing = list(row_ranges_by_unit.get(unit.id, []))
+        ranges = [(item[0], item[1]) for item in operation["row_ranges"]]
+        for candidate in ranges:
+            if any(_ranges_overlap(candidate, current) for current in existing):
+                raise ValueError(f"include_rows ranges overlap for unit: {unit.id}")
+            existing.append(candidate)
+        row_ranges_by_unit[unit.id] = existing
+        return
+
+    raise ValueError(f"unsupported action: {action!r}")
+
+
+def _ranges_overlap(left: tuple[int, int], right: tuple[int, int]) -> bool:
+    return left[0] <= right[1] and right[0] <= left[1]
+
+
+def _covered_unit_ids(
+    full_assigned: set[str],
+    row_ranges_by_unit: dict[str, list[tuple[int, int]]],
+) -> set[str]:
+    return set(full_assigned) | set(row_ranges_by_unit)
 
 
 def _table_source_text(table: dict[str, Any]) -> str:
@@ -295,7 +371,7 @@ def _chunk_from_items(
     operations: list[dict[str, Any]],
     context_unit_ids: list[str],
 ) -> RagChunk:
-    source_unit_ids = [unit.id for unit in units]
+    source_unit_ids = _unique([unit.id for unit in units])
     title = plan.get("title") if isinstance(plan.get("title"), str) else ""
     summary = plan.get("summary") if isinstance(plan.get("summary"), str) else ""
     if not summary:
@@ -315,6 +391,7 @@ def _chunk_from_items(
         questions=questions,
         metadata={
             "source_unit_ids": source_unit_ids,
+            "source_units": _source_units(units),
             "context_unit_ids": context_unit_ids,
             "operations": operations,
             "title": title,
@@ -335,14 +412,14 @@ def _strings(value: Any) -> list[str]:
 def _context_unit_ids(
     value: Any,
     by_id: dict[str, EvidenceUnit],
-    assigned: set[str],
+    prior_assigned: set[str],
 ) -> list[str]:
     result: list[str] = []
     for unit_id in _strings(value):
         if unit_id not in by_id:
             raise ValueError(f"unknown context unit id: {unit_id!r}")
-        if unit_id not in assigned:
-            raise ValueError(f"context unit id must refer to an assigned unit: {unit_id}")
+        if unit_id not in prior_assigned:
+            raise ValueError(f"context unit id must refer to a prior assigned unit: {unit_id}")
         if unit_id not in result:
             result.append(unit_id)
     return result
@@ -354,6 +431,24 @@ def _unique(values: list[str]) -> list[str]:
         if value not in result:
             result.append(value)
     return result
+
+
+def _source_units(units: list[EvidenceUnit]) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for unit in units:
+        if unit.id in seen:
+            continue
+        seen.add(unit.id)
+        records.append(
+            {
+                "id": unit.id,
+                "type": unit.type,
+                "format": unit.format,
+                "metadata": dict(unit.metadata),
+            }
+        )
+    return records
 
 
 def _chunk_type(items: list[EvidenceItem]) -> str:
@@ -404,6 +499,7 @@ def _fallback_chunks(units: list[EvidenceUnit], reason: str) -> list[RagChunk]:
         metadata = {
             **dict(unit.metadata),
             "source_unit_ids": [unit.id],
+            "source_units": _source_units([unit]),
             "context_unit_ids": [],
             "_fallback_reason": reason,
             "common": common,

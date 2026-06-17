@@ -117,3 +117,211 @@ def test_agentic_chunker_materializes_table_row_subset():
     assert [row["index"] for row in table_item.content["rows"]] == [2]
     assert "row 2" in chunks[0].source.text
     assert "row 1" not in chunks[0].source.text
+
+
+def test_agentic_chunker_falls_back_without_dropping_units_on_invalid_plan():
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    units = [_text_unit("b1", "첫 번째 설명"), _text_unit("b2", "두 번째 설명")]
+
+    def plan_fn(window, cfg, max_units):
+        return [
+            {
+                "unit_ids": ["b1"],
+                "operations": [{"unit_id": "b1", "action": "include"}],
+                "summary": "첫 번째만 포함한다.",
+            }
+        ]
+
+    chunks = EvidenceUnitAgenticChunker(llm=None, plan_fn=plan_fn).chunk(units)
+
+    assert [chunk.metadata["source_unit_ids"] for chunk in chunks] == [["b1"], ["b2"]]
+    assert chunks[0].metadata["_fallback_reason"].startswith("chunk plan omitted units")
+    assert chunks[1].metadata["_fallback_reason"].startswith("chunk plan omitted units")
+
+
+def test_agentic_chunker_rejects_unit_ids_that_do_not_match_operations():
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    units = [_text_unit("b1", "첫 번째 설명"), _text_unit("b2", "두 번째 설명")]
+
+    def plan_fn(window, cfg, max_units):
+        return [
+            {
+                "unit_ids": ["b1"],
+                "operations": [
+                    {"unit_id": "b1", "action": "include"},
+                    {"unit_id": "b2", "action": "include"},
+                ],
+                "summary": "선언과 작업이 다르다.",
+            }
+        ]
+
+    chunks = EvidenceUnitAgenticChunker(llm=None, plan_fn=plan_fn).chunk(units)
+
+    assert [chunk.metadata["source_unit_ids"] for chunk in chunks] == [["b1"], ["b2"]]
+    assert "unit_ids must match operation unit_ids" in chunks[0].metadata["_fallback_reason"]
+
+
+def test_agentic_chunker_rejects_present_unit_ids_that_are_not_a_list():
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    def plan_fn(window, cfg, max_units):
+        return [
+            {
+                "unit_ids": None,
+                "operations": [{"unit_id": "b1", "action": "include"}],
+                "summary": "unit_ids가 목록이 아니다.",
+            }
+        ]
+
+    chunks = EvidenceUnitAgenticChunker(llm=None, plan_fn=plan_fn).chunk([_text_unit("b1", "설명")])
+
+    assert chunks[0].metadata["source_unit_ids"] == ["b1"]
+    assert "unit_ids must be a list" in chunks[0].metadata["_fallback_reason"]
+
+
+def test_agentic_chunker_splits_table_rows_across_chunks():
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    def plan_fn(window, cfg, max_units):
+        return [
+            {
+                "unit_ids": ["b2"],
+                "operations": [{"unit_id": "b2", "action": "include_rows", "row_ranges": [[1, 1]]}],
+                "summary": "A 항목만 제공한다.",
+            },
+            {
+                "unit_ids": ["b2"],
+                "operations": [{"unit_id": "b2", "action": "include_rows", "row_ranges": [[2, 2]]}],
+                "context_unit_ids": ["b2"],
+                "summary": "B 항목만 제공한다.",
+            },
+        ]
+
+    chunks = EvidenceUnitAgenticChunker(llm=None, plan_fn=plan_fn).chunk([_table_unit("b2")])
+
+    assert len(chunks) == 2
+    assert chunks[0].metadata["source_unit_ids"] == ["b2"]
+    assert chunks[1].metadata["source_unit_ids"] == ["b2"]
+    assert [row["index"] for row in chunks[0].evidence.items[0].content["rows"]] == [1]
+    assert [row["index"] for row in chunks[1].evidence.items[0].content["rows"]] == [2]
+    assert "_fallback_reason" not in chunks[0].metadata
+    assert "_fallback_reason" not in chunks[1].metadata
+
+
+def test_agentic_chunker_rejects_overlapping_table_row_ranges():
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    def plan_fn(window, cfg, max_units):
+        return [
+            {
+                "unit_ids": ["b2"],
+                "operations": [{"unit_id": "b2", "action": "include_rows", "row_ranges": [[1, 2]]}],
+                "summary": "전체 행을 부분 선택한다.",
+            },
+            {
+                "unit_ids": ["b2"],
+                "operations": [{"unit_id": "b2", "action": "include_rows", "row_ranges": [[2, 2]]}],
+                "summary": "겹치는 행을 선택한다.",
+            },
+        ]
+
+    chunks = EvidenceUnitAgenticChunker(llm=None, plan_fn=plan_fn).chunk([_table_unit("b2")])
+
+    assert len(chunks) == 1
+    assert chunks[0].metadata["source_unit_ids"] == ["b2"]
+    assert "overlap" in chunks[0].metadata["_fallback_reason"]
+
+
+def test_agentic_chunker_rejects_malformed_row_ranges():
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    def plan_fn(window, cfg, max_units):
+        return [
+            {
+                "unit_ids": ["b2"],
+                "operations": [
+                    {"unit_id": "b2", "action": "include_rows", "row_ranges": [[2, 2], ["bad", 3]]}
+                ],
+                "summary": "잘못된 행 범위를 포함한다.",
+            }
+        ]
+
+    chunks = EvidenceUnitAgenticChunker(llm=None, plan_fn=plan_fn).chunk([_table_unit("b2")])
+
+    assert len(chunks) == 1
+    assert chunks[0].metadata["source_unit_ids"] == ["b2"]
+    assert "row range must be [start, end] ints with start <= end" in chunks[0].metadata["_fallback_reason"]
+
+
+def test_agentic_chunker_rejects_full_include_and_row_subset_conflict():
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    def plan_fn(window, cfg, max_units):
+        return [
+            {
+                "unit_ids": ["b2"],
+                "operations": [{"unit_id": "b2", "action": "include"}],
+                "summary": "표 전체를 포함한다.",
+            },
+            {
+                "unit_ids": ["b2"],
+                "operations": [{"unit_id": "b2", "action": "include_rows", "row_ranges": [[1, 1]]}],
+                "summary": "표 일부도 포함한다.",
+            },
+        ]
+
+    chunks = EvidenceUnitAgenticChunker(llm=None, plan_fn=plan_fn).chunk([_table_unit("b2")])
+
+    assert len(chunks) == 1
+    assert "full include conflicts with include_rows" in chunks[0].metadata["_fallback_reason"]
+
+
+def test_agentic_chunker_preserves_source_unit_metadata_on_planned_and_fallback_chunks():
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    unit = _text_unit("b1", "메타데이터 설명")
+
+    def valid_plan_fn(window, cfg, max_units):
+        return [
+            {
+                "unit_ids": ["b1"],
+                "operations": [{"unit_id": "b1", "action": "include"}],
+                "summary": "메타데이터를 보존한다.",
+            }
+        ]
+
+    planned_chunks = EvidenceUnitAgenticChunker(llm=None, plan_fn=valid_plan_fn).chunk([unit])
+
+    assert planned_chunks[0].metadata["source_units"] == [
+        {"id": "b1", "type": "text", "format": "plain", "metadata": unit.metadata}
+    ]
+
+    def invalid_plan_fn(window, cfg, max_units):
+        return []
+
+    fallback_chunks = EvidenceUnitAgenticChunker(llm=None, plan_fn=invalid_plan_fn).chunk([unit])
+
+    assert fallback_chunks[0].metadata["source_units"] == [
+        {"id": "b1", "type": "text", "format": "plain", "metadata": unit.metadata}
+    ]
+
+
+def test_agentic_chunker_rejects_context_unit_from_current_chunk():
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    def plan_fn(window, cfg, max_units):
+        return [
+            {
+                "unit_ids": ["b1"],
+                "operations": [{"unit_id": "b1", "action": "include"}],
+                "context_unit_ids": ["b1"],
+                "summary": "현재 청크를 컨텍스트로 잘못 참조한다.",
+            }
+        ]
+
+    chunks = EvidenceUnitAgenticChunker(llm=None, plan_fn=plan_fn).chunk([_text_unit("b1", "현재 설명")])
+
+    assert len(chunks) == 1
+    assert "context unit id must refer to a prior assigned unit" in chunks[0].metadata["_fallback_reason"]
