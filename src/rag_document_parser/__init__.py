@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .chunk import EvidenceUnitAgenticChunker
 from .enrichment.llm import LlmConfig
 from .extract.backend import DocumentBackend, ParsedDocument
 from .extract.formats.hwp5 import Hwp5Backend
@@ -26,6 +27,7 @@ __all__ = [
     "Evidence",
     "EvidenceItem",
     "EvidenceUnit",
+    "EvidenceUnitAgenticChunker",
     "Hwp5Backend",
     "HwpxBackend",
     "LlmConfig",

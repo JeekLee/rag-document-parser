@@ -3,13 +3,15 @@ from __future__ import annotations
 
 def test_pipeline_layout_exports_stage_and_format_modules():
     from rag_document_parser import (
+        EvidenceItem,
+        EvidenceUnitAgenticChunker,
         Hwp5Backend,
         HwpxBackend,
         MarkdownBackend,
         PdfBackend,
         RagDocumentParser,
     )
-    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker as StageAgenticChunker
     from rag_document_parser.chunk.backend import Chunker
     from rag_document_parser.enrichment.backend import Enricher
     from rag_document_parser.enrichment.llm import LlmConfig
@@ -33,7 +35,9 @@ def test_pipeline_layout_exports_stage_and_format_modules():
     assert ParsedDocument.__name__ == "ParsedDocument"
     assert DocumentBackend.__name__ == "DocumentBackend"
     assert Chunker.__name__ == "Chunker"
+    assert EvidenceItem.__name__ == "EvidenceItem"
     assert EvidenceUnitAgenticChunker.__name__ == "EvidenceUnitAgenticChunker"
+    assert StageAgenticChunker is EvidenceUnitAgenticChunker
     assert Enricher.__name__ == "Enricher"
     assert LlmConfig.__name__ == "LlmConfig"
     assert Hwp5Backend.supported_suffixes == (".hwp",)
