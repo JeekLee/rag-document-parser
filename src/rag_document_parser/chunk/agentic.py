@@ -46,9 +46,7 @@ JSON 배열만 출력하세요:
     "questions": ["이 chunk로 답할 수 있는 질문"]
   }
 ]
-
-include_rows operation 예시:
-{"unit_id": {example_unit_id}, "action": "include_rows", "row_ranges": [[1, 3]]}
+{include_rows_example}
 """
 
 
@@ -604,8 +602,18 @@ def _plan_prompt(window: list[EvidenceUnit], max_units: int) -> str:
         "units": [_unit_payload(index, unit) for index, unit in enumerate(window)],
     }
     example_unit_id = json.dumps(window[0].id if window else "unit", ensure_ascii=False)
+    table_unit = next((unit for unit in window if unit.format == "structured_table"), None)
+    include_rows_example = ""
+    if table_unit is not None:
+        table_unit_id = json.dumps(table_unit.id, ensure_ascii=False)
+        include_rows_example = (
+            "\ninclude_rows operation 예시:\n"
+            f'{{"unit_id": {table_unit_id}, "action": "include_rows", "row_ranges": [[1, 3]]}}\n'
+        )
     return _PROMPT.replace("{max_units}", str(max_units)).replace(
         "{example_unit_id}", example_unit_id
+    ).replace(
+        "{include_rows_example}", include_rows_example
     ).replace(
         "{units}", json.dumps(payload, ensure_ascii=False, indent=2)
     )

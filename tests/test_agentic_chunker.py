@@ -158,10 +158,43 @@ def test_agentic_chunker_uses_rich_korean_llm_prompt_contract(monkeypatch):
     assert '      {"unit_id": "b2", "action": "include"}' in prompt
     assert '    "context_unit_ids": []' in prompt
     assert '"row_ranges": [[1, 3]]' in prompt
-    assert "포함" in prompt
+    assert "양 끝을 포함" in prompt
+    assert "inclusive [start, end]" in prompt
     assert "evidence content는 작성하지 않습니다" in prompt
     assert "evidence content는 unit에서 복사됩니다" in prompt
     assert chunks[0].summary == "표 전체를 제공한다."
+
+
+def test_agentic_chunker_prompt_uses_table_id_for_include_rows_example(monkeypatch):
+    from rag_document_parser import LlmConfig
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    calls = []
+
+    def fake_chat_json(prompt, cfg):
+        calls.append((prompt, cfg))
+        return [
+            {
+                "unit_ids": ["txt1", "tbl1"],
+                "operations": [
+                    {"unit_id": "txt1", "action": "include"},
+                    {"unit_id": "tbl1", "action": "include"},
+                ],
+                "summary": "텍스트와 표 요약",
+                "keywords": ["텍스트", "표"],
+                "questions": ["텍스트와 표에는 무엇이 있나요?"],
+            }
+        ]
+
+    monkeypatch.setattr("rag_document_parser.chunk.agentic.chat_json", fake_chat_json)
+    cfg = LlmConfig(url="http://llm.test/v1", api_key="key", model="model")
+
+    EvidenceUnitAgenticChunker(llm=cfg).chunk([_text_unit("txt1", "텍스트"), _table_unit("tbl1")])
+
+    prompt = calls[0][0]
+    assert '      {"unit_id": "txt1", "action": "include"}' in prompt
+    assert '{"unit_id": "tbl1", "action": "include_rows", "row_ranges": [[1, 3]]}' in prompt
+    assert '"unit_id": "txt1", "action": "include_rows"' not in prompt
 
 
 def test_agentic_chunker_prompt_example_uses_window_unit_id(monkeypatch):
