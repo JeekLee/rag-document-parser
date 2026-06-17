@@ -130,7 +130,11 @@ def _resolve_asset_evidence(
     assets_by_id: dict[str, DocumentAsset],
 ) -> Evidence:
     if evidence.format != "asset_ref":
-        return evidence
+        return Evidence(
+            kind=evidence.kind,
+            format=evidence.format,
+            content=_resolve_asset_refs_in_value(evidence.content, assets_by_id),
+        )
     if not isinstance(evidence.content, dict):
         raise ValueError("asset_ref evidence content must be an object")
     asset_id = evidence.content.get("asset_id")
@@ -152,6 +156,33 @@ def _resolve_asset_evidence(
             "bytes": asset.bytes,
         },
     )
+
+
+def _resolve_asset_refs_in_value(
+    value: Any,
+    assets_by_id: dict[str, DocumentAsset],
+) -> Any:
+    if isinstance(value, list):
+        return [_resolve_asset_refs_in_value(item, assets_by_id) for item in value]
+    if not isinstance(value, dict):
+        return value
+    nested = _nested_evidence(value)
+    if nested is not None:
+        return _resolve_asset_evidence(nested, assets_by_id).to_dict()
+    return {
+        key: _resolve_asset_refs_in_value(nested_value, assets_by_id)
+        for key, nested_value in value.items()
+    }
+
+
+def _nested_evidence(value: dict[str, Any]) -> Evidence | None:
+    kind = value.get("kind")
+    fmt = value.get("format")
+    if not isinstance(kind, str) or not isinstance(fmt, str):
+        return None
+    if "content" not in value:
+        return None
+    return Evidence(kind=kind, format=fmt, content=value["content"])
 
 
 def _enrich_chunks(chunks: list[RagChunk], llm: LlmConfig | None) -> list[RagChunk]:
