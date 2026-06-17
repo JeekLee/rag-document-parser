@@ -95,7 +95,14 @@ def _render_structured_table(
         html.append("<thead>")
         for row in header_rows:
             html.append("<tr>")
-            html.append(_render_table_cells(row.get("cells", []), "th", assets_by_id))
+            html.append(
+                _render_table_row_cells(
+                    row.get("cells", []),
+                    "th",
+                    assets_by_id,
+                    column_count=len(columns),
+                )
+            )
             html.append("</tr>")
         html.append("</thead>")
     elif columns:
@@ -107,7 +114,14 @@ def _render_structured_table(
     html.append("<tbody>")
     for row in rows:
         html.append("<tr>")
-        html.append(_render_table_cells(row.get("cells", []), "td", assets_by_id))
+        html.append(
+            _render_table_row_cells(
+                row.get("cells", []),
+                "td",
+                assets_by_id,
+                column_count=len(columns),
+            )
+        )
         if not row.get("cells") and columns:
             html.append(f'<td colspan="{len(columns)}">&nbsp;</td>')
         html.append("</tr>")
@@ -364,31 +378,52 @@ def _escape_multiline(text: str) -> str:
     return "<br>".join(escape(part) or "&nbsp;" for part in text.splitlines())
 
 
-def _render_table_cells(
+def _render_table_row_cells(
     cells: Any,
     tag: str,
     assets_by_id: dict[str, dict[str, Any]],
+    *,
+    column_count: int,
 ) -> str:
-    html = []
     if not isinstance(cells, list):
         return ""
-    for cell in cells:
-        if not isinstance(cell, dict):
-            continue
-        rowspan = _positive_int(cell.get("rowspan"))
-        colspan = _positive_int(cell.get("colspan"))
-        attrs = []
-        if rowspan > 1:
-            attrs.append(f'rowspan="{rowspan}"')
-        if colspan > 1:
-            attrs.append(f'colspan="{colspan}"')
-        attrs_text = (" " + " ".join(attrs)) if attrs else ""
-        children = _render_children(cell.get("children", []), assets_by_id)
-        text = escape(str(cell.get("text", "")))
-        if not text and not children:
-            text = "&nbsp;"
-        html.append(f"<{tag}{attrs_text}>{text}{children}</{tag}>")
+    html = []
+    current_column = 1
+    sorted_cells = sorted(
+        (cell for cell in cells if isinstance(cell, dict)),
+        key=lambda cell: _column_id_number(str(cell.get("column_id", "c1"))),
+    )
+    for cell in sorted_cells:
+        column_number = _column_id_number(str(cell.get("column_id", "c1")))
+        while current_column < column_number <= column_count:
+            html.append(f"<{tag}>&nbsp;</{tag}>")
+            current_column += 1
+        html.append(_render_table_cell(cell, tag, assets_by_id))
+        current_column = max(
+            current_column,
+            column_number + _positive_int(cell.get("colspan")),
+        )
     return "".join(html)
+
+
+def _render_table_cell(
+    cell: dict[str, Any],
+    tag: str,
+    assets_by_id: dict[str, dict[str, Any]],
+) -> str:
+    rowspan = _positive_int(cell.get("rowspan"))
+    colspan = _positive_int(cell.get("colspan"))
+    attrs = []
+    if rowspan > 1:
+        attrs.append(f'rowspan="{rowspan}"')
+    if colspan > 1:
+        attrs.append(f'colspan="{colspan}"')
+    attrs_text = (" " + " ".join(attrs)) if attrs else ""
+    children = _render_children(cell.get("children", []), assets_by_id)
+    text = escape(str(cell.get("text", "")))
+    if not text and not children:
+        text = "&nbsp;"
+    return f"<{tag}{attrs_text}>{text}{children}</{tag}>"
 
 
 def _render_children(
@@ -486,6 +521,13 @@ def _positive_int(value: Any) -> int:
     try:
         return max(1, int(value))
     except (TypeError, ValueError):
+        return 1
+
+
+def _column_id_number(column_id: str) -> int:
+    try:
+        return max(1, int(column_id.removeprefix("c")))
+    except ValueError:
         return 1
 
 

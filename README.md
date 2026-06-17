@@ -138,3 +138,17 @@ The script writes and uploads:
 - `evidence-units.html`
 - `metrics.json`
 - extracted image assets under `{document_sha256}/assets/`
+
+For HWP5 corpus checks, scan table extraction outliers from the same local
+MinIO corpus:
+
+```bash
+uv run python scripts/scan_hwp5_clic_minio.py \
+  --max-documents 300 \
+  --top 30 \
+  --output /tmp/hwp5-scan-300.json
+```
+
+The scanner reports per-document table counts, cell counts, blank ratios, span
+counts, and ranked outlier tables so parser changes can be compared against a
+stable corpus slice.

@@ -354,6 +354,40 @@ def test_hwp5_table_ignores_list_headers_outside_declared_dimensions():
     ]
 
 
+def test_hwp5_large_sparse_table_omits_blank_cells_from_evidence():
+    from rag_document_parser.extract.formats.hwp5.backend import _parse_section
+
+    records = b""
+    records += _table_ctrl(0)
+    records += _make_record(0x4D, 1, _table_body_payload(2, 25))
+    records += _make_record(0x48, 1, _list_header_payload(0, 0))
+    records += _make_record(0x43, 2, _u16("시작"))
+    records += _make_record(0x48, 1, _list_header_payload(0, 12))
+    records += _make_record(0x48, 1, _list_header_payload(0, 24))
+    records += _make_record(0x43, 2, _u16("끝"))
+    records += _make_record(0x48, 1, _list_header_payload(1, 0))
+    records += _make_record(0x43, 2, _u16("A"))
+    records += _make_record(0x48, 1, _list_header_payload(1, 12))
+    records += _make_record(0x48, 1, _list_header_payload(1, 24))
+    records += _make_record(0x43, 2, _u16("Z"))
+    records += _make_record(0x42, 0, b"")
+
+    table = _parse_section(records).to_document().units[0]
+    content = table.evidence.content
+
+    assert len(content["columns"]) == 25
+    assert content["compact"] == {"omitted_blank_cells": 46}
+    assert [cell["column_id"] for cell in content["header_rows"][0]["cells"]] == [
+        "c1",
+        "c25",
+    ]
+    assert [cell["column_id"] for cell in content["rows"][0]["cells"]] == [
+        "c1",
+        "c25",
+    ]
+    assert [cell["text"] for cell in content["rows"][0]["cells"]] == ["A", "Z"]
+
+
 def test_hwp5_real_fixture_keeps_form_table_blank_rows():
     pytest.importorskip("olefile")
 

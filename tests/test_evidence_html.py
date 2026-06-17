@@ -263,6 +263,50 @@ def test_render_structured_table_uses_header_rows_with_spans():
     assert '<th rowspan="2" colspan="2">관련 근거</th>' in html
 
 
+def test_render_structured_table_fills_column_gaps_from_cell_ids():
+    from rag_document_parser.evidence_html import render_evidence_html
+
+    html = render_evidence_html(
+        {
+            "kind": "table",
+            "format": "structured_table",
+            "content": {
+                "caption": None,
+                "columns": [
+                    {"id": "c1", "text": "A"},
+                    {"id": "c2", "text": ""},
+                    {"id": "c3", "text": ""},
+                    {"id": "c4", "text": "D"},
+                ],
+                "header_rows": [],
+                "rows": [
+                    {
+                        "index": 1,
+                        "cells": [
+                            {
+                                "column_id": "c1",
+                                "text": "left",
+                                "rowspan": 1,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                            {
+                                "column_id": "c4",
+                                "text": "right",
+                                "rowspan": 1,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                        ],
+                    }
+                ],
+            },
+        }
+    )
+
+    assert "<td>left</td><td>&nbsp;</td><td>&nbsp;</td><td>right</td>" in html
+
+
 def test_render_structured_diagram_shows_nodes_edges_and_mermaid():
     from rag_document_parser.evidence_html import render_evidence_html
 

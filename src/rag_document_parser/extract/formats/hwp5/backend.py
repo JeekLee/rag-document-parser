@@ -70,6 +70,7 @@ class _Cell:
     col_addr: int | None = None
     rowspan: int = 1
     colspan: int = 1
+    synthetic: bool = False
 
 
 @dataclass
@@ -655,10 +656,18 @@ def _structured_table(
     header_raw_rows = normalized[:header_count]
     data_raw_rows = normalized[header_count:]
     columns = _table_columns(actual_column_count, header_raw_rows)
+    omit_blank_cells = _should_omit_blank_cells(
+        normalized,
+        column_count=actual_column_count,
+    )
     header_rows = [
         {
             "index": index,
-            "cells": _evidence_cells(raw_cells, columns),
+            "cells": _evidence_cells(
+                raw_cells,
+                columns,
+                omit_blank_cells=omit_blank_cells,
+            ),
         }
         for index, raw_cells in enumerate(header_raw_rows, start=1)
     ]
@@ -670,24 +679,39 @@ def _structured_table(
         data_rows.append(
             {
                 "index": len(data_rows) + 1,
-                "cells": _evidence_cells(row, columns),
+                "cells": _evidence_cells(
+                    row,
+                    columns,
+                    omit_blank_cells=omit_blank_cells,
+                ),
             }
         )
 
-    return {
+    structured: dict[str, object] = {
         "caption": None,
         "columns": columns,
         "rows": data_rows,
         "header_rows": header_rows,
     }
+    omitted_count = _omitted_blank_cell_count(
+        normalized,
+        omit=omit_blank_cells,
+    )
+    if omitted_count:
+        structured["compact"] = {"omitted_blank_cells": omitted_count}
+    return structured
 
 
 def _evidence_cells(
     row: list[_Cell],
     columns: list[dict[str, str]],
+    *,
+    omit_blank_cells: bool = False,
 ) -> list[dict[str, object]]:
     cells: list[dict[str, object]] = []
     for cell in sorted(row, key=lambda item: item.col_addr or 0):
+        if omit_blank_cells and not cell.text.strip() and not cell.children:
+            continue
         column_index = cell.col_addr or 0
         column_id = (
             columns[column_index]["id"]
@@ -736,6 +760,7 @@ def _normalize_rows(
                 col_addr=col_addr,
                 rowspan=max(1, cell.rowspan),
                 colspan=max(1, cell.colspan),
+                synthetic=cell.synthetic,
             )
             row_map.setdefault(row_addr, []).append(cleaned)
             all_cells.append(cleaned)
@@ -764,10 +789,39 @@ def _normalize_rows(
         for col_addr in range(actual_column_count):
             if col_addr in occupied:
                 continue
-            materialized.append(_Cell(row_addr=row_index, col_addr=col_addr))
+            materialized.append(
+                _Cell(row_addr=row_index, col_addr=col_addr, synthetic=True)
+            )
         if materialized:
             normalized.append(sorted(materialized, key=lambda item: item.col_addr or 0))
     return normalized
+
+
+def _should_omit_blank_cells(
+    rows: list[list[_Cell]],
+    *,
+    column_count: int,
+) -> bool:
+    cells = [cell for row in rows for cell in row]
+    if column_count < 20 or len(cells) < 50:
+        return False
+    blank_count = _omitted_blank_cell_count(rows, omit=True)
+    return blank_count / len(cells) >= 0.5
+
+
+def _omitted_blank_cell_count(
+    rows: list[list[_Cell]],
+    *,
+    omit: bool,
+) -> int:
+    if not omit:
+        return 0
+    return sum(
+        1
+        for row in rows
+        for cell in row
+        if not cell.text.strip() and not cell.children
+    )
 
 
 def _covered_columns_from_rowspans(cells: list[_Cell], row_index: int) -> set[int]:
