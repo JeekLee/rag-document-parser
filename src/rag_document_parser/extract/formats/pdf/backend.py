@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import io
+import base64
+import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any, Callable
+from urllib import request
 
 from ....models import Evidence, EvidenceUnit, PendingAsset, SourceEvidence
 from ...backend import ParsedDocument
@@ -13,6 +16,8 @@ from ...backend import ParsedDocument
 _PAGE_NUM_RE = re.compile(r"(?m)^\s*(?:-\s*)?\d+\s*(?:-\s*)?$")
 _CJK = re.compile(r"[가-힣一-鿿㐀-䶿]")
 _MIN_IMAGE_AREA_PT2 = 2500
+_DEFAULT_RENDER_SCALE = 2.0
+_SCANNED_OCR_RENDER_SCALE = 3.0
 
 
 @dataclass(frozen=True)
@@ -45,11 +50,21 @@ class _OcrResults(dict[int, str]):
         self.failed_pages: list[dict[str, object]] = []
 
 
+@dataclass(frozen=True)
+class PdfOcrConfig:
+    url: str
+    api_key: str
+    model: str
+    temperature: float = 0.0
+    timeout: float = 120.0
+
+
 @dataclass
 class PdfBackend:
     supported_suffixes = (".pdf",)
     max_ocr_workers: int = 4
     ocr_fn: Callable[[bytes, int], str] | None = None
+    ocr_llm: PdfOcrConfig | None = None
 
     def parse(self, data: bytes, suffix: str) -> ParsedDocument:
         try:
@@ -75,7 +90,7 @@ class PdfBackend:
                         page_idx,
                         page,
                         warnings,
-                    ) if self.ocr_fn is not None else b""
+                    ) if self.ocr_fn is not None or self.ocr_llm is not None else b""
                     scanned.append((page_idx, png))
                     continue
 
@@ -181,6 +196,7 @@ class PdfBackend:
                 data,
                 self.max_ocr_workers,
                 self.ocr_fn,
+                self.ocr_llm,
             )
             for page_idx, text in ocr_by_page.items():
                 cleaned = _clean_text(text)
@@ -197,7 +213,11 @@ class PdfBackend:
             warnings.extend(_ocr_warnings(ocr_by_page.failed_pages))
 
         return ParsedDocument(
-            units=_segments_to_units(page_segments),
+            units=_segments_to_units(
+                _expand_text_segments(
+                    _merge_continuation_tables(page_segments)
+                )
+            ),
             assets=assets,
             quality_warnings=warnings,
         )
@@ -225,6 +245,7 @@ def _render_scanned_page_for_ocr(
             data,
             page_idx,
             (0.0, 0.0, float(page.width), float(page.height)),
+            scale=_SCANNED_OCR_RENDER_SCALE,
         )
     except ImportError:
         return b""
@@ -275,7 +296,7 @@ def _page_segments_ordered(
         )
         if structured is None:
             continue
-        text_box = _single_cell_text_table_text(structured)
+        text_box = _title_table_text(structured)
         if text_box is not None:
             segments.append(
                 _Segment(
@@ -432,6 +453,339 @@ def _segments_to_units(page_segments: list[list[_Segment]]) -> list[EvidenceUnit
     return units
 
 
+def _merge_continuation_tables(page_segments: list[list[_Segment]]) -> list[list[_Segment]]:
+    merged_pages: list[list[_Segment]] = [[] for _ in page_segments]
+    previous_table: _Segment | None = None
+
+    for page_idx, segments in enumerate(page_segments):
+        page_has_content_before_table = False
+        for segment in sorted(segments, key=lambda item: item.top):
+            if segment.kind != "table":
+                merged_pages[page_idx].append(segment)
+                if segment.kind in {"text", "image"}:
+                    page_has_content_before_table = True
+                    previous_table = None
+                continue
+
+            if (
+                previous_table is not None
+                and not page_has_content_before_table
+                and _is_table_continuation(previous_table.payload, segment.payload)
+            ):
+                _append_table_rows(previous_table.payload, segment.payload)
+                continue
+
+            merged_pages[page_idx].append(segment)
+            previous_table = segment
+
+    return merged_pages
+
+
+def _expand_text_segments(
+    page_segments: list[list[_Segment]],
+) -> list[list[_Segment]]:
+    expanded_pages: list[list[_Segment]] = []
+    for segments in page_segments:
+        expanded: list[_Segment] = []
+        for segment in segments:
+            if segment.kind != "text":
+                expanded.append(segment)
+                continue
+            parts = _revision_history_parts(str(segment.payload))
+            if parts is None:
+                text_parts = _structured_text_parts(str(segment.payload))
+                if text_parts is None:
+                    expanded.append(segment)
+                    continue
+                parts = [("text", part) for part in text_parts]
+            for part_index, (kind, payload) in enumerate(parts):
+                expanded.append(
+                    _Segment(
+                        top=segment.top + (part_index * 0.001),
+                        bottom=segment.bottom,
+                        kind=kind,
+                        payload=payload,
+                        page=segment.page,
+                    )
+                )
+                continue
+        expanded_pages.append(
+            _drop_duplicate_short_title_segments(
+                sorted(expanded, key=lambda item: item.top)
+            )
+        )
+    return expanded_pages
+
+
+def _structured_text_parts(text: str) -> list[str] | None:
+    return (
+        _official_notice_text_parts(text)
+        or _related_basis_text_parts(text)
+        or _sectioned_text_parts(text)
+        or _short_heading_text_parts(text)
+    )
+
+
+def _drop_duplicate_short_title_segments(segments: list[_Segment]) -> list[_Segment]:
+    result: list[_Segment] = []
+    index = 0
+    while index < len(segments):
+        segment = segments[index]
+        next_segment = segments[index + 1] if index + 1 < len(segments) else None
+        if _is_duplicate_short_title_segment(segment, next_segment):
+            index += 1
+            continue
+        result.append(segment)
+        index += 1
+    return result
+
+
+def _is_duplicate_short_title_segment(
+    segment: _Segment,
+    next_segment: _Segment | None,
+) -> bool:
+    if segment.kind != "text" or next_segment is None or next_segment.kind != "text":
+        return False
+    title = str(segment.payload).strip()
+    next_text = str(next_segment.payload).strip()
+    return (
+        0 < len(title) <= 30
+        and "\n" not in title
+        and title.endswith("대상")
+        and title in next_text
+        and bool(re.match(r"^[가-힣]\.", next_text))
+    )
+
+
+def _official_notice_text_parts(text: str) -> list[str] | None:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines or not lines[0].startswith("보건복지부 고시 "):
+        return None
+
+    parts = [lines[0]]
+    paragraph: list[str] = []
+    for line in lines[1:]:
+        if _is_standalone_notice_line(line):
+            if paragraph:
+                parts.append(_join_pdf_text_lines(paragraph))
+                paragraph = []
+            parts.append(line)
+            continue
+        paragraph.append(line)
+        if line.endswith("다."):
+            parts.append(_join_pdf_text_lines(paragraph))
+            paragraph = []
+    if paragraph:
+        parts.append(_join_pdf_text_lines(paragraph))
+    return parts if len(parts) > 1 else None
+
+
+def _related_basis_text_parts(text: str) -> list[str] | None:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(lines) < 3 or lines[1] != "1. 관련 근거":
+        return None
+    if not all(line.startswith("○") for line in lines[2:]):
+        return None
+    return lines
+
+
+def _sectioned_text_parts(text: str) -> list[str] | None:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(lines) < 2 or not any(_is_section_heading_line(line) for line in lines):
+        return None
+
+    parts: list[str] = []
+    paragraph: list[str] = []
+    for line in lines:
+        if _is_section_heading_line(line):
+            if paragraph:
+                parts.append(_join_pdf_text_lines(paragraph))
+                paragraph = []
+            parts.append(line)
+            continue
+        paragraph.append(line)
+    if paragraph:
+        parts.append(_join_pdf_text_lines(paragraph))
+    return parts if len(parts) > 1 else None
+
+
+def _is_section_heading_line(line: str) -> bool:
+    stripped = line.strip()
+    return (
+        stripped.startswith("□")
+        or stripped == "일반사항"
+        or stripped == "⋮"
+        or stripped.startswith("개정 ")
+        or (stripped.startswith("「") and stripped.endswith("Q&A"))
+        or (stripped.endswith("Q&A") and len(stripped) <= 60)
+        or (stripped.startswith("<") and stripped.endswith(">"))
+    )
+
+
+def _is_standalone_notice_line(line: str) -> bool:
+    return (
+        bool(re.match(r"^\d{4}년\s+\d{1,2}월\s+\d{1,2}일$", line))
+        or line == "보건복지부 장관"
+        or line.endswith("일부개정")
+    )
+
+
+def _short_heading_text_parts(text: str) -> list[str] | None:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(lines) < 2 or len(lines) > 3:
+        return None
+    if all(len(line) <= 40 and not line.endswith(("다.", ".")) for line in lines):
+        return lines
+    return None
+
+
+def _join_pdf_text_lines(lines: list[str]) -> str:
+    text = " ".join(line.strip() for line in lines if line.strip())
+    text = text.replace("세부 사항", "세부사항")
+    return text.strip()
+
+
+def _revision_history_parts(text: str) -> list[tuple[str, object]] | None:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    try:
+        marker_index = lines.index("관련 근거")
+    except ValueError:
+        return None
+
+    rows: list[dict[str, object]] = []
+    after_index = marker_index + 1
+    for line in lines[marker_index + 1:]:
+        row = _revision_history_row(line)
+        if row is None:
+            break
+        row["index"] = len(rows) + 1
+        rows.append(row)
+        after_index += 1
+    if len(rows) < 2:
+        return None
+
+    parts: list[tuple[str, object]] = [
+        ("text", line)
+        for line in lines[:marker_index]
+        if line
+    ]
+    parts.append(
+        (
+            "table",
+            {
+                "caption": None,
+                "columns": [
+                    {"id": "c1", "text": "개정일"},
+                    {"id": "c2", "text": "고시"},
+                    {"id": "c3", "text": "시행일"},
+                    {"id": "c4", "text": "관련 근거"},
+                ],
+                "header_rows": [
+                    {
+                        "index": 1,
+                        "cells": [
+                            _simple_cell("c1", "개정일"),
+                            _simple_cell("c2", "고시"),
+                            _simple_cell("c3", "시행일"),
+                            _simple_cell("c4", "관련 근거"),
+                        ],
+                    }
+                ],
+                "rows": rows,
+            },
+        )
+    )
+    parts.extend(("text", part) for part in _trailing_revision_texts(lines[after_index:]))
+    return parts
+
+
+_REVISION_LINE_RE = re.compile(
+    r"^(개정\s+[’']?\d{2,4}\.\d{1,2}\.\d{1,2}\.)"
+    r"(?:\s+(고시\s+제\d{4}-\d+호))?"
+    r"(?:\s+\(([^)]*시행)\))?"
+    r"\s*(.*)$"
+)
+
+
+def _revision_history_row(line: str) -> dict[str, object] | None:
+    match = _REVISION_LINE_RE.match(line)
+    if match is None:
+        return None
+    values = [(part or "").strip() for part in match.groups()]
+    return {
+        "index": 0,
+        "cells": [
+            _simple_cell("c1", values[0]),
+            _simple_cell("c2", values[1]),
+            _simple_cell("c3", values[2]),
+            _simple_cell("c4", values[3]),
+        ],
+    }
+
+
+def _simple_cell(column_id: str, text: str) -> dict[str, object]:
+    return {
+        "column_id": column_id,
+        "text": text,
+        "rowspan": 1,
+        "colspan": 1,
+        "children": [],
+    }
+
+
+def _trailing_revision_texts(lines: list[str]) -> list[str]:
+    result: list[str] = []
+    paragraph: list[str] = []
+    for line in lines:
+        if line.startswith("*"):
+            if paragraph:
+                result.append(_join_lines("\n".join(paragraph)))
+                paragraph = []
+            result.append(line)
+            continue
+        if line.startswith("※") and paragraph:
+            result.append(_join_lines("\n".join(paragraph)))
+            paragraph = [line]
+            continue
+        paragraph.append(line)
+    if paragraph:
+        result.append(_join_lines("\n".join(paragraph)))
+    return result
+
+
+def _is_table_continuation(
+    previous: dict[str, object],
+    current: dict[str, object],
+) -> bool:
+    previous_signature = _table_column_signature(previous)
+    return bool(previous_signature) and previous_signature == _table_column_signature(current)
+
+
+def _table_column_signature(table: dict[str, object]) -> tuple[str, ...]:
+    return tuple(
+        _normalize_header_text(str(column.get("text", "")))
+        for column in table.get("columns", [])
+    )
+
+
+def _append_table_rows(
+    target: dict[str, object],
+    continuation: dict[str, object],
+) -> None:
+    target_rows = target.get("rows")
+    continuation_rows = continuation.get("rows")
+    if not isinstance(target_rows, list) or not isinstance(continuation_rows, list):
+        return
+    for row in continuation_rows:
+        if not isinstance(row, dict):
+            continue
+        copied = dict(row)
+        copied["index"] = len(target_rows) + 1
+        target_rows.append(copied)
+    _merge_wrapped_table_rows(target)
+    _promote_code_table_leaf_headers(target)
+
+
 def _structured_table_from_pdf_table(
     page: object,
     tables: list[object],
@@ -448,28 +802,29 @@ def _structured_table_from_pdf_table(
     column_count = max((len(row) for row in raw_rows), default=0)
     if column_count == 0:
         return {"caption": None, "columns": [], "rows": []}
+    normalized_rows = [_pad_row(row, column_count) for row in raw_rows]
+    header_depth = _header_depth(normalized_rows)
 
-    columns = [
-        {
-            "id": f"c{index}",
-            "text": raw_rows[0][index - 1] if index - 1 < len(raw_rows[0]) else "",
-        }
-        for index in range(1, column_count + 1)
-    ]
+    columns = _columns_from_header_rows(normalized_rows[:header_depth], column_count)
     child_map = nested.children.get(table_idx, {})
-    header_cells = _row_evidence_cells(
-        page,
-        tables,
-        table_idx,
-        row_index=0,
-        raw_row=raw_rows[0],
-        columns=columns,
-        child_map=child_map,
-        nested=nested,
-        seen=seen | {table_idx},
-    )
+    header_rows: list[dict[str, object]] = []
+    for header_index, raw_row in enumerate(normalized_rows[:header_depth]):
+        header_cells = _row_evidence_cells(
+            page,
+            tables,
+            table_idx,
+            row_index=header_index,
+            raw_row=raw_row,
+            columns=columns,
+            child_map=child_map,
+            nested=nested,
+            seen=seen | {table_idx},
+        )
+        if header_cells:
+            header_rows.append({"index": header_index + 1, "cells": header_cells})
+
     rows: list[dict[str, object]] = []
-    for raw_index, raw_row in enumerate(raw_rows[1:], start=1):
+    for raw_index, raw_row in enumerate(normalized_rows[header_depth:], start=header_depth):
         cells = _row_evidence_cells(
             page,
             tables,
@@ -490,9 +845,336 @@ def _structured_table_from_pdf_table(
         "columns": columns,
         "rows": rows,
     }
-    if header_cells:
-        result["header_rows"] = [{"index": 1, "cells": header_cells}]
+    if header_rows:
+        result["header_rows"] = header_rows
+    _repair_table_of_contents(result, page)
+    _merge_wrapped_table_rows(result)
+    _promote_code_table_leaf_headers(result)
     return result
+
+
+def _merge_wrapped_table_rows(table: dict[str, object]) -> None:
+    if _is_table_of_contents(table):
+        return
+    rows = table.get("rows")
+    if not isinstance(rows, list) or len(rows) < 2:
+        return
+
+    merged: list[dict[str, object]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if merged and _is_wrapped_table_row(row):
+            _append_wrapped_row_cells(merged[-1], row)
+            continue
+        row["index"] = len(merged) + 1
+        merged.append(row)
+
+    table["rows"] = merged
+
+
+def _is_table_of_contents(table: dict[str, object]) -> bool:
+    columns = table.get("columns")
+    if not isinstance(columns, list):
+        return False
+    labels = [
+        _normalize_header_text(str(column.get("text", "")))
+        for column in columns
+        if isinstance(column, dict)
+    ]
+    return "제목" in labels and "페이지" in labels
+
+
+def _repair_table_of_contents(table: dict[str, object], page: object) -> None:
+    if not _is_table_of_contents(table):
+        return
+    rows = table.get("rows")
+    if not isinstance(rows, list) or not rows:
+        return
+
+    entries = _table_of_contents_entries(page)
+    if len(entries) < len(rows):
+        return
+
+    entry_index = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        cells = row.get("cells")
+        if not isinstance(cells, list) or len(cells) < 3:
+            continue
+        title = str(cells[1].get("text", "")) if isinstance(cells[1], dict) else ""
+        entry = _matching_table_of_contents_entry(title, entries, entry_index)
+        if entry is None:
+            continue
+        entry_index = entries.index(entry, entry_index) + 1
+        number, _title, page_number = entry
+        if isinstance(cells[0], dict) and not str(cells[0].get("text", "")).strip():
+            cells[0]["text"] = number
+        if isinstance(cells[-1], dict) and not str(cells[-1].get("text", "")).strip():
+            cells[-1]["text"] = page_number
+
+
+def _table_of_contents_entries(page: object) -> list[tuple[str, str, str]]:
+    try:
+        text = page.extract_text(x_tolerance=3, y_tolerance=3) or ""
+    except TypeError:
+        text = page.extract_text() or ""
+    except Exception:
+        return []
+
+    entries: list[tuple[str, str, str]] = []
+    for line in text.splitlines():
+        match = re.match(r"^\s*(\d{1,3})\s+(.+?)\s+(\d{1,4})\s*$", line)
+        if match is not None:
+            entries.append(tuple(part.strip() for part in match.groups()))
+    return entries
+
+
+def _matching_table_of_contents_entry(
+    title: str,
+    entries: list[tuple[str, str, str]],
+    start_index: int,
+) -> tuple[str, str, str] | None:
+    normalized_title = _compact_text(title)
+    for entry in entries[start_index:]:
+        if not normalized_title or normalized_title == _compact_text(entry[1]):
+            return entry
+    return None
+
+
+def _compact_text(text: str) -> str:
+    return re.sub(r"\s+", "", text)
+
+
+def _promote_code_table_leaf_headers(table: dict[str, object]) -> None:
+    columns = table.get("columns")
+    header_rows = table.get("header_rows")
+    rows = table.get("rows")
+    if (
+        not isinstance(columns, list)
+        or len(columns) < 2
+        or not isinstance(header_rows, list)
+        or len(header_rows) != 1
+        or not isinstance(rows, list)
+        or not rows
+    ):
+        return
+
+    labels = [
+        _normalize_header_text(str(column.get("text", "")))
+        for column in columns
+        if isinstance(column, dict)
+    ]
+    if len(labels) != len(columns) or labels[0] != "질병코드" or any(labels[1:]):
+        return
+
+    first_row = rows[0]
+    if not isinstance(first_row, dict):
+        return
+    first_cells = first_row.get("cells")
+    if not isinstance(first_cells, list) or len(first_cells) != len(columns):
+        return
+    leaf_values = [str(cell.get("text", "")).strip() for cell in first_cells]
+    if not leaf_values or not all(_looks_like_disease_code(value) for value in leaf_values):
+        return
+
+    for index, column in enumerate(columns):
+        if isinstance(column, dict):
+            column["text"] = f"질병코드 / {leaf_values[index]}"
+
+    header_rows[0] = {
+        "index": 1,
+        "cells": [
+            {
+                "column_id": "c1",
+                "text": "질병코드",
+                "rowspan": 1,
+                "colspan": len(columns),
+                "children": [],
+            }
+        ],
+    }
+    header_rows.append(
+        {
+            "index": 2,
+            "cells": [
+                _simple_cell(str(column.get("id", f"c{index + 1}")), leaf_values[index])
+                for index, column in enumerate(columns)
+                if isinstance(column, dict)
+            ],
+        }
+    )
+
+    table["rows"] = [
+        _reindexed_row(row, index + 1)
+        for index, row in enumerate(rows[1:])
+        if isinstance(row, dict)
+    ]
+
+
+def _looks_like_disease_code(value: str) -> bool:
+    return bool(re.fullmatch(r"[A-Z]\d{2}(?:\.\d+)?(?:~[A-Z]?\d{2}(?:\.\d+)?)?", value))
+
+
+def _reindexed_row(row: dict[str, object], index: int) -> dict[str, object]:
+    copied = dict(row)
+    copied["index"] = index
+    return copied
+
+
+def _is_wrapped_table_row(row: dict[str, object]) -> bool:
+    cells = row.get("cells")
+    if not isinstance(cells, list) or not cells:
+        return False
+
+    first = cells[0]
+    if _cell_has_content(first):
+        return False
+
+    content_cells = [
+        cell
+        for cell in cells
+        if isinstance(cell, dict) and _cell_has_content(cell)
+    ]
+    if not content_cells:
+        return False
+    if len(content_cells) == 1:
+        return True
+
+    second = cells[1] if len(cells) > 1 else None
+    if not _cell_has_text(second):
+        return False
+    return not _starts_new_table_subrow(str(second.get("text", "")))
+
+
+def _append_wrapped_row_cells(
+    target_row: dict[str, object],
+    wrapped_row: dict[str, object],
+) -> None:
+    target_cells = target_row.get("cells")
+    wrapped_cells = wrapped_row.get("cells")
+    if not isinstance(target_cells, list) or not isinstance(wrapped_cells, list):
+        return
+
+    target_by_column = {
+        str(cell.get("column_id")): cell
+        for cell in target_cells
+        if isinstance(cell, dict)
+    }
+    for wrapped_cell in wrapped_cells:
+        if not isinstance(wrapped_cell, dict) or not _cell_has_content(wrapped_cell):
+            continue
+        target_cell = target_by_column.get(str(wrapped_cell.get("column_id")))
+        if not isinstance(target_cell, dict):
+            continue
+        wrapped_text = str(wrapped_cell.get("text", "")).strip()
+        if wrapped_text:
+            target_text = str(target_cell.get("text", "")).strip()
+            target_cell["text"] = (
+                f"{target_text}\n{wrapped_text}"
+                if target_text
+                else wrapped_text
+            )
+        children = wrapped_cell.get("children")
+        if isinstance(children, list) and children:
+            target_children = target_cell.get("children")
+            if isinstance(target_children, list):
+                target_children.extend(children)
+                target_cell["children"] = _merge_nested_table_children(target_children)
+            else:
+                target_cell["children"] = _merge_nested_table_children(list(children))
+
+
+def _cell_has_content(cell: object) -> bool:
+    if not isinstance(cell, dict):
+        return False
+    return _cell_has_text(cell) or bool(cell.get("children"))
+
+
+def _cell_has_text(cell: object) -> bool:
+    return isinstance(cell, dict) and bool(str(cell.get("text", "")).strip())
+
+
+def _starts_new_table_subrow(text: str) -> bool:
+    normalized = text.lstrip()
+    return bool(re.match(r"(?:[-ㆍ•·]|[oO]\s|<)", normalized))
+
+
+def _pad_row(row: list[str], column_count: int) -> list[str]:
+    return [*row, *([""] * max(0, column_count - len(row)))]
+
+
+def _header_depth(rows: list[list[str]]) -> int:
+    if len(rows) < 2:
+        return 1
+    first = rows[0]
+    second = rows[1]
+    if not any(not cell.strip() for cell in first):
+        return 1
+    first_count = _non_empty_cell_count(first)
+    second_count = _non_empty_cell_count(second)
+    if second_count < 2:
+        return 1
+    if first_count < 2 and not _is_single_group_header_row(first):
+        return 1
+    if not _is_concise_header_row(second):
+        return 1
+    return 2
+
+
+def _is_single_group_header_row(row: list[str]) -> bool:
+    return (
+        len(row) >= 3
+        and _non_empty_cell_count(row) == 1
+        and _is_concise_header_row(row)
+    )
+
+
+def _non_empty_cell_count(row: list[str]) -> int:
+    return sum(1 for cell in row if cell.strip())
+
+
+def _is_concise_header_row(row: list[str], max_cell_chars: int = 32) -> bool:
+    values = [cell.strip() for cell in row if cell.strip()]
+    return bool(values) and all(len(value) <= max_cell_chars for value in values)
+
+
+def _columns_from_header_rows(
+    header_rows: list[list[str]],
+    column_count: int,
+) -> list[dict[str, str]]:
+    group_labels = (
+        _forward_fill_header_row(header_rows[0], column_count)
+        if len(header_rows) > 1
+        else _pad_row(header_rows[0], column_count)
+    )
+    columns: list[dict[str, str]] = []
+    for index in range(column_count):
+        parts: list[str] = []
+        for row_index, row in enumerate(header_rows):
+            value = _normalize_header_text(
+                group_labels[index] if row_index == 0 and len(header_rows) > 1 else row[index]
+            )
+            if value and value not in parts:
+                parts.append(value)
+        columns.append({"id": f"c{index + 1}", "text": " / ".join(parts)})
+    return columns
+
+
+def _forward_fill_header_row(row: list[str], column_count: int) -> list[str]:
+    result: list[str] = []
+    current = ""
+    for value in _pad_row(row, column_count):
+        normalized = _normalize_header_text(value)
+        if normalized:
+            current = normalized
+        result.append(current)
+    return result
+
+
+def _normalize_header_text(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def _row_evidence_cells(
@@ -520,6 +1202,7 @@ def _row_evidence_cells(
             )
             if child is not None
         ]
+        children = _merge_nested_table_children(children)
         if children:
             cell_bbox = row_cells[column_index] if column_index < len(row_cells) else None
             if cell_bbox is not None:
@@ -540,6 +1223,81 @@ def _row_evidence_cells(
             }
         )
     return cells
+
+
+def _merge_nested_table_children(
+    children: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    if len(children) < 2:
+        return children
+
+    merged: list[dict[str, object]] = []
+    for child in children:
+        if merged and _can_merge_nested_table_child(merged[-1], child):
+            _append_nested_child_rows(merged[-1]["content"], child["content"])
+            continue
+        merged.append(child)
+    return merged
+
+
+def _can_merge_nested_table_child(
+    previous: dict[str, object],
+    current: dict[str, object],
+) -> bool:
+    if previous.get("kind") != "table" or current.get("kind") != "table":
+        return False
+    previous_content = previous.get("content")
+    current_content = current.get("content")
+    if not isinstance(previous_content, dict) or not isinstance(current_content, dict):
+        return False
+    previous_columns = previous_content.get("columns")
+    current_columns = current_content.get("columns")
+    return (
+        isinstance(previous_columns, list)
+        and isinstance(current_columns, list)
+        and len(previous_columns) == len(current_columns)
+        and len(previous_columns) > 1
+    )
+
+
+def _append_nested_child_rows(
+    target: dict[str, object],
+    continuation: dict[str, object],
+) -> None:
+    target_columns = target.get("columns")
+    target_rows = target.get("rows")
+    continuation_columns = continuation.get("columns")
+    continuation_rows = continuation.get("rows")
+    if (
+        not isinstance(target_columns, list)
+        or not isinstance(target_rows, list)
+        or not isinstance(continuation_columns, list)
+        or not isinstance(continuation_rows, list)
+    ):
+        return
+
+    if _table_column_signature(target) != _table_column_signature(continuation):
+        target_rows.append(
+            {
+                "index": len(target_rows) + 1,
+                "cells": [
+                    _simple_cell(
+                        str(target_columns[index].get("id", f"c{index + 1}")),
+                        str(column.get("text", "")),
+                    )
+                    for index, column in enumerate(continuation_columns)
+                    if isinstance(column, dict)
+                ],
+            }
+        )
+
+    for row in continuation_rows:
+        if not isinstance(row, dict):
+            continue
+        copied = dict(row)
+        copied["index"] = len(target_rows) + 1
+        target_rows.append(copied)
+    _promote_code_table_leaf_headers(target)
 
 
 def _nested_table_child(
@@ -579,19 +1337,29 @@ def _row_cells(table: object, row_index: int) -> list[tuple[float, float, float,
     return list(getattr(rows[row_index], "cells", []) or [])
 
 
-def _single_cell_text_table_text(table: dict[str, object]) -> str | None:
+def _title_table_text(table: dict[str, object]) -> str | None:
     if table["rows"]:
         return None
     header_rows = table.get("header_rows")
     if not isinstance(header_rows, list) or len(header_rows) != 1:
         return None
     cells = header_rows[0].get("cells")
-    if not isinstance(cells, list) or len(cells) != 1:
+    if not isinstance(cells, list) or not cells:
         return None
-    cell = cells[0]
-    if not isinstance(cell, dict) or cell.get("children"):
+    if len(cells) > 3:
         return None
-    text = str(cell.get("text", "")).strip()
+    parts: list[str] = []
+    for cell in cells:
+        if not isinstance(cell, dict) or cell.get("children"):
+            return None
+        text = str(cell.get("text", "")).strip()
+        if text:
+            parts.append(text)
+    if not parts:
+        return None
+    text = _join_lines("\n".join(parts)).strip()
+    if len(cells) > 1 and len(text) > 40:
+        return None
     return text or None
 
 
@@ -688,10 +1456,35 @@ def _join_lines(text: str) -> str:
     return out
 
 
+def _join_cell_lines(text: str) -> str:
+    parts = text.split("\n")
+    if len(parts) == 1:
+        return text
+    out = parts[0]
+    for part in parts[1:]:
+        if _is_short_line_continuation(out, part):
+            out = out.rstrip() + part.lstrip()
+        else:
+            out = out.rstrip() + " " + part.lstrip()
+    return out
+
+
+def _is_short_line_continuation(previous: str, current: str) -> bool:
+    previous_token = previous.rstrip().rsplit(" ", 1)[-1]
+    current_token = current.lstrip().split(" ", 1)[0]
+    return (
+        bool(previous_token)
+        and bool(current_token)
+        and _CJK.search(previous_token[-1]) is not None
+        and _CJK.search(current_token[0]) is not None
+        and (len(previous_token) <= 1 or len(current_token) <= 1)
+    )
+
+
 def _clean_cell(cell: object) -> str:
     if cell is None:
         return ""
-    text = _join_lines(str(cell))
+    text = _join_cell_lines(str(cell))
     text = re.sub(
         r"(?<![가-힣])([가-힣])( [가-힣])+(?![가-힣])",
         lambda match: match.group(0).replace(" ", ""),
@@ -728,6 +1521,7 @@ def _ocr_pages(
     data: bytes,
     max_workers: int | None,
     ocr_fn: Callable[[bytes, int], str] | None,
+    ocr_llm: PdfOcrConfig | None,
 ) -> _OcrResults:
     if not scanned:
         return _OcrResults()
@@ -735,6 +1529,8 @@ def _ocr_pages(
     def run_ocr(png: bytes, page_idx: int) -> str:
         if ocr_fn is not None:
             return ocr_fn(png, page_idx)
+        if ocr_llm is not None:
+            return _ocr_page_with_vision(data, png, page_idx, ocr_llm)
         return _ocr_page(data, png, page_idx)
 
     if max_workers is None or max_workers <= 1 or len(scanned) == 1:
@@ -800,6 +1596,73 @@ def _ocr_page(data: bytes, png: bytes, page_idx: int, lang: str = "kor+eng") -> 
     if text:
         return text
     return _ocr_via_pdf2image(data, page_idx, lang)
+
+
+def _ocr_page_with_vision(
+    data: bytes,
+    png: bytes,
+    page_idx: int,
+    cfg: PdfOcrConfig,
+) -> str:
+    if png:
+        text = _vision_ocr_png(png, cfg)
+        if text:
+            return text
+    return _ocr_page(data, png, page_idx)
+
+
+_VISION_OCR_PROMPT = """\
+이 이미지는 스캔된 문서 페이지입니다.
+이미지에서 텍스트를 읽어 그대로 추출해 주세요.
+
+지침:
+- 원문의 줄바꿈과 문단 구조를 최대한 유지
+- 표는 텍스트 형태로 읽어서 그대로 출력
+- 텍스트 내용만 출력, 설명 없이"""
+
+
+def _vision_ocr_png(png: bytes, cfg: PdfOcrConfig) -> str:
+    b64 = base64.b64encode(png).decode("ascii")
+    body = {
+        "model": cfg.model,
+        "temperature": cfg.temperature,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{b64}"},
+                    },
+                    {"type": "text", "text": _VISION_OCR_PROMPT},
+                ],
+            }
+        ],
+    }
+    req = request.Request(
+        _chat_completions_url(cfg.url),
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {cfg.api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with request.urlopen(req, timeout=cfg.timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        return str(payload["choices"][0]["message"]["content"]).strip()
+    except Exception:
+        return ""
+
+
+def _chat_completions_url(url: str) -> str:
+    normalized = url.rstrip("/")
+    if normalized.endswith("/chat/completions"):
+        return normalized
+    if normalized.endswith("/v1"):
+        return f"{normalized}/chat/completions"
+    return f"{normalized}/v1/chat/completions"
 
 
 def _ocr_png(png: bytes, lang: str) -> str:
@@ -983,6 +1846,7 @@ def _render_page_to_png(
     data: bytes,
     page_idx: int,
     bbox: tuple[float, float, float, float],
+    scale: float = _DEFAULT_RENDER_SCALE,
 ) -> bytes:
     try:
         import fitz
@@ -995,7 +1859,7 @@ def _render_page_to_png(
     with fitz.open(stream=data, filetype="pdf") as doc:
         page = doc.load_page(page_idx)
         clip = fitz.Rect(*bbox)
-        pix = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0), clip=clip)
+        pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), clip=clip)
         return pix.tobytes("png")
 
 

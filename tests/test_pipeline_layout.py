@@ -7,6 +7,7 @@ def test_pipeline_layout_exports_stage_and_format_modules():
         HwpxBackend,
         MarkdownBackend,
         PdfBackend,
+        PdfOcrConfig,
         RagDocumentParser,
     )
     from rag_document_parser.chunk.backend import Chunker
@@ -18,7 +19,10 @@ def test_pipeline_layout_exports_stage_and_format_modules():
     from rag_document_parser.extract.formats.markdown.backend import (
         MarkdownBackend as StageMarkdownBackend,
     )
-    from rag_document_parser.extract.formats.pdf.backend import PdfBackend as StagePdfBackend
+    from rag_document_parser.extract.formats.pdf.backend import (
+        PdfBackend as StagePdfBackend,
+        PdfOcrConfig as StagePdfOcrConfig,
+    )
     from rag_document_parser.extract.registry import default_backends
     from rag_document_parser.pipeline.parser import RagDocumentParser as StageParser
 
@@ -29,6 +33,7 @@ def test_pipeline_layout_exports_stage_and_format_modules():
     assert StageHwpxBackend is HwpxBackend
     assert StageMarkdownBackend is MarkdownBackend
     assert StagePdfBackend is PdfBackend
+    assert StagePdfOcrConfig is PdfOcrConfig
     assert ParsedDocument.__name__ == "ParsedDocument"
     assert DocumentBackend.__name__ == "DocumentBackend"
     assert Chunker.__name__ == "Chunker"

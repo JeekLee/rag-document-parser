@@ -100,6 +100,30 @@ uv sync --extra pdf-ocr
 Korean language data, and Poppler must still be installed on the host if
 pytesseract/pdf2image OCR fallback is used.
 
+For scanned PDFs, `PdfBackend` can also call an OpenAI-compatible vision model
+before the local OCR fallback:
+
+```python
+import os
+
+from rag_document_parser import PdfBackend, PdfOcrConfig
+
+backend = PdfBackend(
+    ocr_llm=PdfOcrConfig(
+        url=os.environ.get("RDP_PDF_OCR_BASE_URL", "http://localhost:10080/v1"),
+        api_key=os.environ["RDP_PDF_OCR_API_KEY"],
+        model=os.environ.get("RDP_PDF_OCR_MODEL", "qwen3-vl-30b-a3b"),
+        timeout=240.0,
+    ),
+)
+
+result = backend.parse(raw_pdf_bytes, suffix=".pdf")
+```
+
+When both `ocr_fn` and `ocr_llm` are configured, `ocr_fn` takes precedence. If
+the vision OCR request fails or returns empty text, the backend falls back to
+the local pytesseract/pdf2image path.
+
 ## Next scope
 
 - Add the agentic chunking adapter that consumes `EvidenceUnit` objects and

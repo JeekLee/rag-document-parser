@@ -171,3 +171,127 @@ def test_supported_hwp5_and_pdf_corpus_extracts_evidence_units():
             assert unit.source.text.startswith("table: "), document["id"]
             assert unit.evidence.format == "structured_table", document["id"]
             assert isinstance(unit.evidence.content, dict), document["id"]
+
+
+def test_pdf_corpus_preserves_grouped_headers_and_reduces_fragmentation():
+    from rag_document_parser import PdfBackend
+
+    documents = {document["id"]: document for document in _manifest_documents()}
+    backend = PdfBackend()
+
+    benefit = backend.parse(
+        (CORPUS_DIR / str(documents["pdf-benefit-criteria-2024-278"]["path"])).read_bytes(),
+        ".pdf",
+    )
+    benefit_tables = [unit for unit in benefit.units if unit.type == "table"]
+    assert len(benefit.units) == 14
+    assert len(benefit_tables) <= 4
+    assert [len(unit.evidence.content["rows"]) for unit in benefit_tables] == [1, 1, 4]
+    assert all(
+        column["text"].strip()
+        for unit in benefit_tables
+        for column in unit.evidence.content["columns"]
+    )
+    assert any(
+        [column["text"] for column in unit.evidence.content["columns"]]
+        == [
+            "현행 / 항목",
+            "현행 / 제목",
+            "현행 / 세부인정사항",
+            "개정 / 항목",
+            "개정 / 제목",
+            "개정 / 세부인정사항",
+            "비고",
+        ]
+        for unit in benefit_tables
+    )
+    assert not any(
+        "col 2:" in line
+        for unit in benefit_tables
+        for line in unit.source.text.splitlines()
+        if line.startswith("row ")
+    )
+    disease_table = next(
+        child["content"]
+        for row in benefit_tables[1].evidence.content["rows"]
+        for cell in row["cells"]
+        for child in cell["children"]
+        if child["kind"] == "table"
+    )
+    assert [column["text"] for column in disease_table["columns"]] == [
+        "질병코드 / A04.7",
+        "질병코드 / G83.4",
+        "질병코드 / L89.2",
+        "질병코드 / M86~M87",
+        "질병코드 / S38.1",
+    ]
+    assert len(disease_table["header_rows"]) == 2
+    assert len(disease_table["rows"]) == 16
+
+    cesarean = backend.parse(
+        (CORPUS_DIR / str(documents["pdf-cesarean-copay-qa"]["path"])).read_bytes(),
+        ".pdf",
+    )
+    cesarean_tables = [unit for unit in cesarean.units if unit.type == "table"]
+    assert len(cesarean.units) == 11
+    assert len(cesarean_tables) == 2
+    assert [len(unit.evidence.content["rows"]) for unit in cesarean_tables] == [2, 9]
+    assert all(unit.evidence.content["rows"] for unit in cesarean_tables)
+    assert all(
+        [column["text"] for column in unit.evidence.content["columns"]]
+        == [
+            "연번",
+            "본인부담률 인하(5%) 관련 / 질의",
+            "본인부담률 인하(5%) 관련 / 답변",
+            "본인부담률 개정(5%→0%) 관련 / 개정(안)",
+        ]
+        for unit in cesarean_tables
+    )
+    assert not any(
+        "col 3:" in line
+        for unit in cesarean_tables
+        for line in unit.source.text.splitlines()
+        if line.startswith("row ")
+    )
+    assert not any(
+        unit.type == "text" and unit.source.text in {"질병군 적용 대상", "행위 적용 대상"}
+        for unit in cesarean.units
+    )
+
+
+def test_pdf_ultrasound_promotes_revision_history_text_to_table():
+    from rag_document_parser import PdfBackend
+
+    documents = {document["id"]: document for document in _manifest_documents()}
+    parsed = PdfBackend().parse(
+        (CORPUS_DIR / str(documents["pdf-ultrasound-qa"]["path"])).read_bytes(),
+        ".pdf",
+    )
+    tables = [unit for unit in parsed.units if unit.type == "table"]
+
+    assert [unit.type for unit in parsed.units[:3]] == ["text", "text", "table"]
+    assert parsed.units[0].source.text == "초음파 검사 질의응답"
+    assert parsed.units[1].source.text == "2024. 2."
+    revision_table = tables[0]
+    assert revision_table.metadata["table"]["row_count"] == 14
+    assert [column["text"] for column in revision_table.evidence.content["columns"]] == [
+        "개정일",
+        "고시",
+        "시행일",
+        "관련 근거",
+    ]
+    assert "고시 제2016-149호" in revision_table.source.text
+    assert "<하복부, 비뇨기 초음파 검사 급여기준 개선 관련 Q&A>" in (
+        revision_table.source.text
+    )
+    toc_table = tables[1].evidence.content
+    assert [cell["text"] for cell in toc_table["rows"][0]["cells"]] == [
+        "1",
+        "일반사항",
+        "1",
+    ]
+    assert [cell["text"] for cell in toc_table["rows"][-1]["cells"]] == [
+        "15",
+        "경부 초음파 관련 Q&A",
+        "39",
+    ]
