@@ -143,9 +143,9 @@ def test_pdf_backend_extracts_evidence_units_from_text_tables_images_and_ocr(
     text_unit = parsed.units[0]
     assert text_unit.source.kind == "text"
     assert text_unit.source.text == "요양급여 안내"
-    assert text_unit.evidence.kind == "text"
-    assert text_unit.evidence.format == "plain"
-    assert text_unit.evidence.content == "요양급여 안내"
+    assert text_unit.type == "text"
+    assert text_unit.format == "plain"
+    assert text_unit.content == "요양급여 안내"
     assert text_unit.metadata["common"] == {
         "chunk_kind": "text",
         "section_path": [],
@@ -154,22 +154,22 @@ def test_pdf_backend_extracts_evidence_units_from_text_tables_images_and_ocr(
 
     table = parsed.units[1]
     assert table.source.kind == "table"
-    assert table.evidence.kind == "table"
-    assert table.evidence.format == "structured_table"
-    assert table.evidence.content["columns"] == [
+    assert table.type == "table"
+    assert table.format == "structured_table"
+    assert table.content["columns"] == [
         {"id": "c1", "text": "구분"},
         {"id": "c2", "text": "세부"},
     ]
-    assert table.evidence.content["rows"][0]["cells"][0] == {
+    assert table.content["rows"][0]["cells"][0] == {
         "column_id": "c1",
         "text": "본인부담",
         "rowspan": 1,
         "colspan": 1,
         "children": [],
     }
-    detail_cell = table.evidence.content["rows"][0]["cells"][1]
+    detail_cell = table.content["rows"][0]["cells"][1]
     assert detail_cell["text"] == "기재형식 예시"
-    assert detail_cell["children"][0]["kind"] == "table"
+    assert detail_cell["children"][0]["type"] == "table"
     assert detail_cell["children"][0]["format"] == "structured_table"
     assert detail_cell["children"][0]["content"]["columns"] == [
         {"id": "c1", "text": "항목"},
@@ -190,9 +190,9 @@ def test_pdf_backend_extracts_evidence_units_from_text_tables_images_and_ocr(
 
     image = parsed.units[2]
     assert image.source.kind == "image"
-    assert image.evidence.kind == "image"
-    assert image.evidence.format == "asset_ref"
-    assert image.evidence.content == {"asset_id": "img-0001", "caption": None}
+    assert image.type == "image"
+    assert image.format == "asset_ref"
+    assert image.content == {"asset_id": "img-0001", "caption": None}
     assert parsed.assets[0].id == "img-0001"
     assert parsed.assets[0].data == PNG_BYTES
     assert parsed.assets[0].mime == "image/png"
@@ -200,7 +200,8 @@ def test_pdf_backend_extracts_evidence_units_from_text_tables_images_and_ocr(
 
     ocr_unit = parsed.units[3]
     assert ocr_unit.source.text == "스캔 OCR 본문"
-    assert ocr_unit.evidence.content == "스캔 OCR 본문"
+    assert ocr_unit.format == "plain"
+    assert ocr_unit.content == "스캔 OCR 본문"
     assert parsed.quality_warnings == []
 
 

@@ -6,7 +6,7 @@ import zipfile
 from dataclasses import dataclass
 from xml.etree import ElementTree as ET
 
-from ....models import Evidence, EvidenceUnit, PendingAsset, SourceEvidence
+from ....models import EvidenceUnit, PendingAsset, SourceEvidence
 from ...backend import ParsedDocument
 
 _HP = "http://www.hancom.co.kr/hwpml/2011/paragraph"
@@ -41,12 +41,9 @@ class HwpxBackend:
                                 EvidenceUnit(
                                     id=f"b{block_index}",
                                     type="text",
+                                    format="plain",
                                     source=SourceEvidence(kind="text", text=text_box),
-                                    evidence=Evidence(
-                                        kind="text",
-                                        format="plain",
-                                        content=text_box,
-                                    ),
+                                    content=text_box,
                                     metadata={
                                         "common": {
                                             "chunk_kind": "text",
@@ -64,15 +61,12 @@ class HwpxBackend:
                             EvidenceUnit(
                                 id=f"b{block_index}",
                                 type="table",
+                                format="structured_table",
                                 source=SourceEvidence(
                                     kind="table",
                                     text=_table_source_text(structured),
                                 ),
-                                evidence=Evidence(
-                                    kind="table",
-                                    format="structured_table",
-                                    content=structured,
-                                ),
+                                content=structured,
                                 metadata={
                                     "common": {
                                         "chunk_kind": "table",
@@ -104,15 +98,12 @@ class HwpxBackend:
                             EvidenceUnit(
                                 id=f"b{block_index}",
                                 type="image",
+                                format="asset_ref",
                                 source=SourceEvidence(
                                     kind="image",
                                     text=f"image: {asset_id}",
                                 ),
-                                evidence=Evidence(
-                                    kind="image",
-                                    format="asset_ref",
-                                    content={"asset_id": asset_id, "caption": None},
-                                ),
+                                content={"asset_id": asset_id, "caption": None},
                                 metadata={
                                     "common": {
                                         "chunk_kind": "image",
@@ -133,8 +124,9 @@ class HwpxBackend:
                         EvidenceUnit(
                             id=f"b{block_index}",
                             type="text",
+                            format="plain",
                             source=SourceEvidence(kind="text", text=text),
-                            evidence=Evidence(kind="text", format="plain", content=text),
+                            content=text,
                             metadata={
                                 "common": {
                                     "chunk_kind": "text",
@@ -430,7 +422,7 @@ def _table_cell(
             if nested is not None:
                 children.append(
                     {
-                        "kind": "table",
+                        "type": "table",
                         "format": "structured_table",
                         "content": _structured_table(nested, z, bin_data_map, assets),
                     }
@@ -444,7 +436,7 @@ def _table_cell(
                 assets.append(asset)
                 children.append(
                     {
-                        "kind": "image",
+                        "type": "image",
                         "format": "asset_ref",
                         "content": {"asset_id": asset_id, "caption": None},
                     }
@@ -535,7 +527,7 @@ def _table_source_cells(
         child_texts = [
             "nested table: " + _inline_table_source(child["content"])
             for child in cell["children"]
-            if child.get("kind") == "table"
+            if child.get("type", child.get("kind")) == "table"
         ]
         combined = "; ".join(part for part in [value, *child_texts] if part)
         if combined:

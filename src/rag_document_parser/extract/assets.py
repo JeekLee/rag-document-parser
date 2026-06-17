@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
-from ..models import DocumentAsset, Evidence, EvidenceUnit, PendingAsset
+from ..models import DocumentAsset, EvidenceUnit, PendingAsset
 from ..storage import S3Config, put_object as _put_object
 
 
@@ -43,45 +43,39 @@ def resolve_units(
             EvidenceUnit(
                 id=unit.id,
                 type=unit.type,
+                format=unit.format,
                 source=unit.source,
-                evidence=resolve_asset_evidence(unit.evidence, assets_by_id),
+                content=resolve_asset_content(unit.format, unit.content, assets_by_id),
                 metadata=dict(unit.metadata),
             )
         )
     return resolved
 
 
-def resolve_asset_evidence(
-    evidence: Evidence,
+def resolve_asset_content(
+    fmt: str,
+    content: Any,
     assets_by_id: dict[str, DocumentAsset],
-) -> Evidence:
-    if evidence.format != "asset_ref":
-        return Evidence(
-            kind=evidence.kind,
-            format=evidence.format,
-            content=resolve_asset_refs_in_value(evidence.content, assets_by_id),
-        )
-    if not isinstance(evidence.content, dict):
-        raise ValueError("asset_ref evidence content must be an object")
-    asset_id = evidence.content.get("asset_id")
+) -> Any:
+    if fmt != "asset_ref":
+        return resolve_asset_refs_in_value(content, assets_by_id)
+    if not isinstance(content, dict):
+        raise ValueError("asset_ref content must be an object")
+    asset_id = content.get("asset_id")
     if not isinstance(asset_id, str):
-        raise ValueError("asset_ref evidence requires asset_id")
+        raise ValueError("asset_ref content requires asset_id")
     try:
         asset = assets_by_id[asset_id]
     except KeyError as exc:
-        raise ValueError(f"asset_ref evidence points to unknown asset: {asset_id}") from exc
-    return Evidence(
-        kind=evidence.kind,
-        format=evidence.format,
-        content={
-            **evidence.content,
-            "uri": asset.uri,
-            "mime": asset.mime,
-            "ext": asset.ext,
-            "sha256": asset.sha256,
-            "bytes": asset.bytes,
-        },
-    )
+        raise ValueError(f"asset_ref content points to unknown asset: {asset_id}") from exc
+    return {
+        **content,
+        "uri": asset.uri,
+        "mime": asset.mime,
+        "ext": asset.ext,
+        "sha256": asset.sha256,
+        "bytes": asset.bytes,
+    }
 
 
 def resolve_asset_refs_in_value(
@@ -94,18 +88,23 @@ def resolve_asset_refs_in_value(
         return value
     nested = nested_evidence(value)
     if nested is not None:
-        return resolve_asset_evidence(nested, assets_by_id).to_dict()
+        evidence_type, fmt, nested_content = nested
+        return {
+            "type": evidence_type,
+            "format": fmt,
+            "content": resolve_asset_content(fmt, nested_content, assets_by_id),
+        }
     return {
         key: resolve_asset_refs_in_value(nested_value, assets_by_id)
         for key, nested_value in value.items()
     }
 
 
-def nested_evidence(value: dict[str, Any]) -> Evidence | None:
-    kind = value.get("kind")
+def nested_evidence(value: dict[str, Any]) -> tuple[str, str, Any] | None:
+    evidence_type = value.get("type", value.get("kind"))
     fmt = value.get("format")
-    if not isinstance(kind, str) or not isinstance(fmt, str):
+    if not isinstance(evidence_type, str) or not isinstance(fmt, str):
         return None
     if "content" not in value:
         return None
-    return Evidence(kind=kind, format=fmt, content=value["content"])
+    return evidence_type, fmt, value["content"]

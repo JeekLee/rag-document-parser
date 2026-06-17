@@ -99,7 +99,7 @@ def test_supported_hwpx_corpus_preserves_grouped_header_context():
         ".hwpx",
     )
     benefit_table = [unit for unit in benefit.units if unit.type == "table"][2]
-    assert [column["text"] for column in benefit_table.evidence.content["columns"]] == [
+    assert [column["text"] for column in benefit_table.content["columns"]] == [
         "현   행 / 항목",
         "현   행 / 제목",
         "현   행 / 세부인정사항",
@@ -118,7 +118,7 @@ def test_supported_hwpx_corpus_preserves_grouped_header_context():
         ".hwpx",
     )
     cesarean_table = [unit for unit in cesarean.units if unit.type == "table"][0]
-    assert [column["text"] for column in cesarean_table.evidence.content["columns"]] == [
+    assert [column["text"] for column in cesarean_table.content["columns"]] == [
         "연번",
         "본인부담률 인하(5%) 관련 / 질의",
         "본인부담률 인하(5%) 관련 / 답변",
@@ -165,9 +165,9 @@ def test_supported_hwp5_and_pdf_corpus_extracts_evidence_units():
 
         for unit in parsed.units:
             assert unit.source.text, document["id"]
-            assert unit.evidence.kind == unit.type, document["id"]
+            assert unit.type in {"text", "table", "image"}, document["id"]
             assert "common" in unit.metadata, document["id"]
         for unit in table_units:
             assert unit.source.text.startswith("table: "), document["id"]
-            assert unit.evidence.format == "structured_table", document["id"]
-            assert isinstance(unit.evidence.content, dict), document["id"]
+            assert unit.format == "structured_table", document["id"]
+            assert isinstance(unit.content, dict), document["id"]

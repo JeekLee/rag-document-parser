@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from ....models import Evidence, EvidenceUnit, PendingAsset, SourceEvidence
+from ....models import EvidenceUnit, PendingAsset, SourceEvidence
 from ...backend import ParsedDocument
 
 
@@ -352,8 +352,9 @@ def _segments_to_units(page_segments: list[list[_Segment]]) -> list[EvidenceUnit
                     EvidenceUnit(
                         id=f"b{block_index}",
                         type="text",
+                        format="plain",
                         source=SourceEvidence(kind="text", text=text),
-                        evidence=Evidence(kind="text", format="plain", content=text),
+                        content=text,
                         metadata={
                             "common": {
                                 "chunk_kind": "text",
@@ -374,15 +375,12 @@ def _segments_to_units(page_segments: list[list[_Segment]]) -> list[EvidenceUnit
                     EvidenceUnit(
                         id=f"b{block_index}",
                         type="table",
+                        format="structured_table",
                         source=SourceEvidence(
                             kind="table",
                             text=_table_source_text(table),
                         ),
-                        evidence=Evidence(
-                            kind="table",
-                            format="structured_table",
-                            content=table,
-                        ),
+                        content=table,
                         metadata={
                             "common": {
                                 "chunk_kind": "table",
@@ -407,15 +405,12 @@ def _segments_to_units(page_segments: list[list[_Segment]]) -> list[EvidenceUnit
                     EvidenceUnit(
                         id=f"b{block_index}",
                         type="image",
+                        format="asset_ref",
                         source=SourceEvidence(
                             kind="image",
                             text=f"image: {asset_id}",
                         ),
-                        evidence=Evidence(
-                            kind="image",
-                            format="asset_ref",
-                            content=dict(segment.payload),
-                        ),
+                        content=dict(segment.payload),
                         metadata={
                             "common": {
                                 "chunk_kind": "image",
@@ -553,7 +548,7 @@ def _nested_table_child(
     if structured is None:
         return None
     return {
-        "kind": "table",
+        "type": "table",
         "format": "structured_table",
         "content": structured,
     }
@@ -1077,7 +1072,7 @@ def _table_source_cells(
         child_texts = [
             "nested table: " + _inline_table_source(child["content"])
             for child in cell["children"]
-            if child.get("kind") == "table"
+            if child.get("type", child.get("kind")) == "table"
         ]
         combined = "; ".join(part for part in [value, *child_texts] if part)
         if combined:

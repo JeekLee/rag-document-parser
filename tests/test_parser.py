@@ -66,9 +66,9 @@ def test_parse_text_document_returns_evidence_units_without_llm(monkeypatch):
     assert not hasattr(text_unit, "keywords")
     assert not hasattr(text_unit, "questions")
     assert not hasattr(text_unit, "source_pointer")
-    assert text_unit.evidence.kind == "text"
-    assert text_unit.evidence.format == "plain"
-    assert text_unit.evidence.content == "코로나19 대면투약관리료는 다음 기준에 따라 산정한다."
+    assert text_unit.type == "text"
+    assert text_unit.format == "plain"
+    assert text_unit.content == "코로나19 대면투약관리료는 다음 기준에 따라 산정한다."
 
     assert table_unit.source.kind == "table"
     assert table_unit.source.text == (
@@ -76,9 +76,9 @@ def test_parse_text_document_returns_evidence_units_without_llm(monkeypatch):
         "columns: 대상 | 청구방법\n"
         "row 1: 대상=약국; 청구방법=대면투약관리료 코드로 청구"
     )
-    assert table_unit.evidence.kind == "table"
-    assert table_unit.evidence.format == "structured_table"
-    assert table_unit.evidence.content == {
+    assert table_unit.type == "table"
+    assert table_unit.format == "structured_table"
+    assert table_unit.content == {
         "caption": None,
         "columns": [
             {"id": "c1", "text": "대상"},
@@ -138,7 +138,8 @@ def test_markdown_backend_returns_evidence_units():
     text_unit, table_unit = parsed.units
     assert text_unit.type == "text"
     assert text_unit.source.text == "section: Section\nPlain paragraph."
-    assert text_unit.evidence.content == "Plain paragraph."
+    assert text_unit.format == "plain"
+    assert text_unit.content == "Plain paragraph."
     assert text_unit.metadata["common"] == {
         "chunk_kind": "text",
         "section_path": ["Section"],
@@ -147,8 +148,8 @@ def test_markdown_backend_returns_evidence_units():
 
     assert table_unit.type == "table"
     assert table_unit.source.text == "section: Section\ncolumns: A | B\nrow 1: A=one; B=two"
-    assert table_unit.evidence.format == "structured_table"
-    assert table_unit.evidence.content["columns"] == [
+    assert table_unit.format == "structured_table"
+    assert table_unit.content["columns"] == [
         {"id": "c1", "text": "A"},
         {"id": "c2", "text": "B"},
     ]
@@ -174,11 +175,9 @@ def test_parse_result_to_dict_is_json_serializable():
         "kind": "text",
         "text": "plain paragraph",
     }
-    assert payload["units"][0]["evidence"] == {
-        "kind": "text",
-        "format": "plain",
-        "content": "plain paragraph",
-    }
+    assert payload["units"][0]["format"] == "plain"
+    assert payload["units"][0]["content"] == "plain paragraph"
+    assert "evidence" not in payload["units"][0]
     assert json.loads(json.dumps(payload, ensure_ascii=False)) == payload
 
 
@@ -211,7 +210,6 @@ def test_parser_requires_object_storage_config_only():
 
 def test_custom_backend_can_be_registered_for_suffix():
     from rag_document_parser import (
-        Evidence,
         EvidenceUnit,
         RagDocumentParser,
         SourceEvidence,
@@ -231,8 +229,9 @@ def test_custom_backend_can_be_registered_for_suffix():
                     EvidenceUnit(
                         id="c1",
                         type="text",
+                        format="plain",
                         source=SourceEvidence(kind="text", text="custom text"),
-                        evidence=Evidence(kind="text", format="plain", content="custom text"),
+                        content="custom text",
                     )
                 ],
                 quality_warnings=[
@@ -286,7 +285,6 @@ def test_unsupported_suffix_fails_before_llm_call(monkeypatch):
 
 def test_image_assets_are_uploaded_to_s3_and_linked_in_evidence(monkeypatch):
     from rag_document_parser import (
-        Evidence,
         EvidenceUnit,
         PendingAsset,
         RagDocumentParser,
@@ -309,18 +307,15 @@ def test_image_assets_are_uploaded_to_s3_and_linked_in_evidence(monkeypatch):
                     EvidenceUnit(
                         id="img-unit-1",
                         type="image",
+                        format="asset_ref",
                         source=SourceEvidence(
                             kind="image",
                             text="summary: 요양급여 청구 절차를 보여주는 이미지",
                         ),
-                        evidence=Evidence(
-                            kind="image",
-                            format="asset_ref",
-                            content={
-                                "asset_id": "img-0001",
-                                "caption": "청구 절차 이미지",
-                            },
-                        ),
+                        content={
+                            "asset_id": "img-0001",
+                            "caption": "청구 절차 이미지",
+                        },
                         metadata={
                             "common": {
                                 "chunk_kind": "image",
@@ -365,7 +360,7 @@ def test_image_assets_are_uploaded_to_s3_and_linked_in_evidence(monkeypatch):
         "bytes": len(b"png bytes"),
         "metadata": {},
     }
-    assert result.units[0].evidence.content == {
+    assert result.units[0].content == {
         "asset_id": "img-0001",
         "caption": "청구 절차 이미지",
         "uri": f"s3://rag-assets/documents/{document_hash}/assets/img-0001.png",

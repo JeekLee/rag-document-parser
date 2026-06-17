@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ....models import Evidence, EvidenceUnit, SourceEvidence
+from ....models import EvidenceUnit, SourceEvidence
 from ...backend import ParsedDocument
 from .tables import structured_table, table_parts, table_source_text
 
@@ -36,7 +36,8 @@ def _units_from_markdown(markdown: str) -> list[EvidenceUnit]:
                     kind="text",
                     text=_with_section(section_path, text),
                 ),
-                evidence=Evidence(kind="text", format="plain", content=text),
+                format="plain",
+                content=text,
                 metadata={
                     "common": {
                         "chunk_kind": "text",
@@ -64,11 +65,8 @@ def _units_from_markdown(markdown: str) -> list[EvidenceUnit]:
                 id=block_id,
                 type="table",
                 source=SourceEvidence(kind="table", text=source_text),
-                evidence=Evidence(
-                    kind="table",
-                    format="structured_table",
-                    content=structured_table(headers, rows),
-                ),
+                format="structured_table",
+                content=structured_table(headers, rows),
                 metadata={
                     "common": {
                         "chunk_kind": "table",
