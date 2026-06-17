@@ -135,7 +135,17 @@ def _document_summary(
         for unit in units
         if unit.get("type") == "table"
     ]
+    diagram_profiles = [
+        _diagram_profile(unit)
+        for unit in units
+        if unit.get("type") == "diagram"
+    ]
     outliers = sorted(table_profiles, key=lambda table: table["score"], reverse=True)
+    diagram_outliers = sorted(
+        diagram_profiles,
+        key=lambda diagram: diagram["score"],
+        reverse=True,
+    )
     return {
         "source_uri": source_uri,
         "bytes": raw_bytes,
@@ -161,6 +171,28 @@ def _document_summary(
                 table
                 for table in outliers
                 if table["flags"]
+            ][:10],
+        },
+        "diagrams": {
+            "count": len(diagram_profiles),
+            "total_nodes": sum(diagram["nodes"] for diagram in diagram_profiles),
+            "total_bbox_nodes": sum(
+                diagram["bbox_nodes"]
+                for diagram in diagram_profiles
+            ),
+            "total_connectors": sum(
+                diagram["connectors"]
+                for diagram in diagram_profiles
+            ),
+            "total_edges": sum(diagram["edges"] for diagram in diagram_profiles),
+            "total_labeled_edges": sum(
+                diagram["labeled_edges"]
+                for diagram in diagram_profiles
+            ),
+            "outliers": [
+                diagram
+                for diagram in diagram_outliers
+                if diagram["flags"]
             ][:10],
         },
     }
@@ -216,6 +248,99 @@ def _cell_has_content(cell: dict[str, Any]) -> bool:
     return bool(text or children)
 
 
+def _diagram_profile(unit: dict[str, Any]) -> dict[str, Any]:
+    content = unit.get("evidence", {}).get("content", {})
+    nodes = [
+        node
+        for node in content.get("nodes", [])
+        if isinstance(node, dict)
+    ]
+    connectors = [
+        connector
+        for connector in content.get("connectors", [])
+        if isinstance(connector, dict)
+    ]
+    edges = [
+        edge
+        for edge in content.get("edges", [])
+        if isinstance(edge, dict)
+    ]
+    bbox_nodes = sum(1 for node in nodes if _node_has_bbox(node))
+    labeled_edges = sum(1 for edge in edges if str(edge.get("label", "")).strip())
+    edge_count = len(edges)
+    connector_count = len(connectors)
+    unlabeled_edges = max(0, edge_count - labeled_edges)
+    source_relation_lines = _source_relation_lines(unit.get("source", {}))
+    flags = _diagram_flags(
+        connectors=connector_count,
+        edges=edge_count,
+        unlabeled_edges=unlabeled_edges,
+    )
+    return {
+        "unit_id": str(unit.get("id", "")),
+        "nodes": len(nodes),
+        "bbox_nodes": bbox_nodes,
+        "bbox_node_ratio": round(bbox_nodes / len(nodes), 3) if nodes else 0.0,
+        "connectors": connector_count,
+        "edges": edge_count,
+        "labeled_edges": labeled_edges,
+        "unlabeled_edges": unlabeled_edges,
+        "source_relation_lines": source_relation_lines,
+        "connector_edge_ratio": (
+            round(edge_count / connector_count, 3)
+            if connector_count
+            else 0.0
+        ),
+        "score": (
+            connector_count * 3
+            + edge_count * 4
+            + unlabeled_edges * 3
+            + labeled_edges * 2
+            + source_relation_lines
+        ),
+        "flags": flags,
+    }
+
+
+def _node_has_bbox(node: dict[str, Any]) -> bool:
+    bbox = node.get("bbox")
+    if not isinstance(bbox, dict):
+        return False
+    try:
+        return int(bbox.get("width", 0)) > 0 and int(bbox.get("height", 0)) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _source_relation_lines(source: Any) -> int:
+    if not isinstance(source, dict):
+        return 0
+    text = str(source.get("text", ""))
+    return sum(1 for line in text.splitlines() if " -> " in line)
+
+
+def _diagram_flags(
+    *,
+    connectors: int,
+    edges: int,
+    unlabeled_edges: int,
+) -> list[str]:
+    flags: list[str] = []
+    if connectors:
+        flags.append("diagram_connectors")
+    if edges:
+        flags.append("inferred_edges")
+    if connectors and connectors > edges:
+        flags.append("connector_without_edges")
+    if unlabeled_edges:
+        flags.append("unlabeled_edges")
+    if connectors >= 10:
+        flags.append("many_connectors")
+    if edges >= 10:
+        flags.append("many_inferred_edges")
+    return flags
+
+
 def _table_flags(
     *,
     columns: int,
@@ -239,6 +364,7 @@ def _corpus_summary(documents: list[dict[str, Any]], *, top: int) -> dict[str, A
     unit_counts: Counter[str] = Counter()
     warning_types: Counter[str] = Counter()
     table_outliers: list[dict[str, Any]] = []
+    diagram_outliers: list[dict[str, Any]] = []
     for document in documents:
         unit_counts.update(document.get("unit_counts", {}))
         warning_types.update(document.get("warning_types", []))
@@ -249,7 +375,15 @@ def _corpus_summary(documents: list[dict[str, Any]], *, top: int) -> dict[str, A
                     **table,
                 }
             )
+        for diagram in document.get("diagrams", {}).get("outliers", []):
+            diagram_outliers.append(
+                {
+                    "source_uri": document["source_uri"],
+                    **diagram,
+                }
+            )
     table_outliers.sort(key=lambda table: table["score"], reverse=True)
+    diagram_outliers.sort(key=lambda diagram: diagram["score"], reverse=True)
     return {
         "unit_counts": dict(sorted(unit_counts.items())),
         "warning_types": dict(sorted(warning_types.items())),
@@ -259,6 +393,23 @@ def _corpus_summary(documents: list[dict[str, Any]], *, top: int) -> dict[str, A
             for document in documents
         ),
         "top_table_outliers": table_outliers[:top],
+        "total_diagrams": sum(
+            document.get("diagrams", {}).get("count", 0)
+            for document in documents
+        ),
+        "total_diagram_nodes": sum(
+            document.get("diagrams", {}).get("total_nodes", 0)
+            for document in documents
+        ),
+        "total_diagram_connectors": sum(
+            document.get("diagrams", {}).get("total_connectors", 0)
+            for document in documents
+        ),
+        "total_diagram_edges": sum(
+            document.get("diagrams", {}).get("total_edges", 0)
+            for document in documents
+        ),
+        "top_diagram_outliers": diagram_outliers[:top],
     }
 
 
