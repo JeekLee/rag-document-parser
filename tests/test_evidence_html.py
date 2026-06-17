@@ -261,3 +261,101 @@ def test_render_structured_table_uses_header_rows_with_spans():
     )
 
     assert '<th rowspan="2" colspan="2">관련 근거</th>' in html
+
+
+def test_render_structured_diagram_shows_nodes_edges_and_mermaid():
+    from rag_document_parser.evidence_html import render_evidence_html
+
+    html = render_evidence_html(
+        {
+            "kind": "diagram",
+            "format": "structured_diagram",
+            "content": {
+                "caption": None,
+                "nodes": [
+                    {"id": "n1", "shape_type": "label", "text": "수급권자"},
+                    {"id": "n2", "shape_type": "label", "text": "건강보험심사평가원"},
+                ],
+                "edges": [
+                    {
+                        "from": "n1",
+                        "to": "n2",
+                        "type": "arrow",
+                        "label": "신청",
+                        "confidence": "parsed",
+                    }
+                ],
+                "mermaid": "flowchart TD\n  n1[수급권자] --> n2[건강보험심사평가원]",
+            },
+        }
+    )
+
+    assert 'class="diagram-evidence"' in html
+    assert "수급권자" in html
+    assert "건강보험심사평가원" in html
+    assert "n1 → n2" in html
+    assert "신청" in html
+    assert "flowchart TD" in html
+    assert 'class="diagram-shape">label</span>' not in html
+
+
+def test_render_label_only_diagram_as_original_like_flowchart():
+    from rag_document_parser.evidence_html import render_evidence_html
+
+    labels = [
+        "업무처리 흐름도",
+        "< 과다본인부담금 확인절차 >",
+        "①급여대상여부확인신청",
+        "수급권자",
+        "건강보험심사평가원",
+        "②심사결정통보",
+        "의료급여기관",
+        "국민건강보험공단",
+        "수급권자",
+        "(국민건강보험공단 및 의료급여기관에는 과다 징수금액이 있는 경우에 한해 통보)",
+        "< 과다본인부담금 반환절차 >",
+        "①과다본인부담금 지체없이반환",
+        "의료급여기관",
+        "수급권자",
+        "⑤차기 지급진료비에서 공제 ②미반환시 신고",
+        "⑥공제금 지급 ③과다본인부담금",
+        "공제예정 통보",
+        "④과다본인부담금 공제요청",
+        "국민건강보험공단",
+        "건강보험심사평가원",
+        "⑦처리결과 통보",
+        "⑦처리결과",
+        "통보",
+        "보장기관",
+    ]
+
+    html = render_evidence_html(
+        {
+            "kind": "diagram",
+            "format": "structured_diagram",
+            "content": {
+                "caption": None,
+                "nodes": [
+                    {"id": f"n{index}", "shape_type": "label", "text": label}
+                    for index, label in enumerate(labels, start=1)
+                ],
+                "edges": [],
+                "mermaid": None,
+            },
+        }
+    )
+
+    assert 'class="diagram-evidence diagram-flowchart"' in html
+    assert '<ol class="diagram-nodes">' not in html
+    assert "<code>n1</code>" not in html
+    assert 'class="diagram-flowchart-title">업무처리 흐름도</div>' in html
+    assert (
+        'class="diagram-flowchart-section-title">&lt; 과다본인부담금 확인절차 &gt;'
+        in html
+    )
+    assert 'class="diagram-flowchart-step">①급여대상여부확인신청</div>' in html
+    assert 'class="diagram-flowchart-box">수급권자</div>' in html
+    assert 'class="diagram-flowchart-arrow">→</span>' in html
+    assert "⑥공제금 지급 ③과다본인부담금<br>공제예정 통보" in html
+    assert "⑦처리결과<br>통보" in html
+    assert 'class="diagram-flowchart-note">' in html

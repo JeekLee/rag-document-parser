@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import re
 from html import escape
 from typing import Any
+
+_DIAGRAM_STEP_RE = re.compile(r"^(?:[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]|\d+[.)])")
 
 
 def render_evidence_units_html(
@@ -44,6 +47,8 @@ def render_evidence_html(
     content = evidence.get("content")
     if kind == "table" and fmt == "structured_table" and isinstance(content, dict):
         return _render_structured_table(content, assets_by_id)
+    if kind == "diagram" and fmt == "structured_diagram" and isinstance(content, dict):
+        return _render_structured_diagram(content)
     if fmt == "asset_ref" and isinstance(content, dict):
         return _render_asset_ref(kind, content, assets_by_id)
     if isinstance(content, str):
@@ -112,6 +117,251 @@ def _render_structured_table(
     if not columns and not rows:
         return "<p class=\"empty-table\">빈 표</p>"
     return "".join(html)
+
+
+def _render_structured_diagram(diagram: dict[str, Any]) -> str:
+    nodes = [node for node in diagram.get("nodes", []) if isinstance(node, dict)]
+    edges = [edge for edge in diagram.get("edges", []) if isinstance(edge, dict)]
+    mermaid = diagram.get("mermaid")
+    if _is_label_only_diagram(nodes, edges, mermaid):
+        return _render_label_flowchart_diagram(nodes)
+
+    html = ['<section class="diagram-evidence">']
+    caption = str(diagram.get("caption") or "").strip()
+    if caption:
+        html.append(f"<h2>{escape(caption)}</h2>")
+    if nodes:
+        html.append('<ol class="diagram-nodes">')
+        for node in nodes:
+            node_id = escape(str(node.get("id", "")))
+            shape_type = str(node.get("shape_type", node.get("type", ""))).strip()
+            shape_badge = (
+                f' <span class="diagram-shape">{escape(shape_type)}</span>'
+                if shape_type and shape_type != "label"
+                else ""
+            )
+            text = escape(str(node.get("text", ""))) or "&nbsp;"
+            html.append(
+                "<li>"
+                f"<code>{node_id}</code>"
+                f"{shape_badge} "
+                f"<span>{text}</span>"
+                "</li>"
+            )
+        html.append("</ol>")
+    if edges:
+        html.append('<ul class="diagram-edges">')
+        for edge in edges:
+            from_id = escape(str(edge.get("from", "")))
+            to_id = escape(str(edge.get("to", "")))
+            label = str(edge.get("label", "")).strip()
+            confidence = str(edge.get("confidence", "")).strip()
+            details = " · ".join(
+                escape(value)
+                for value in [label, confidence]
+                if value
+            )
+            suffix = f" <span>{details}</span>" if details else ""
+            html.append(f"<li><code>{from_id} → {to_id}</code>{suffix}</li>")
+        html.append("</ul>")
+    if isinstance(mermaid, str) and mermaid.strip():
+        html.append(f'<pre class="mermaid">{escape(mermaid.strip())}</pre>')
+    if not nodes and not edges and not (isinstance(mermaid, str) and mermaid.strip()):
+        html.append('<p class="empty-diagram">빈 다이어그램</p>')
+    html.append("</section>")
+    return "".join(html)
+
+
+def _is_label_only_diagram(
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    mermaid: Any,
+) -> bool:
+    return (
+        bool(nodes)
+        and not edges
+        and not (isinstance(mermaid, str) and mermaid.strip())
+        and all(
+            str(node.get("shape_type", node.get("type", "label"))).strip()
+            in ("", "label")
+            for node in nodes
+        )
+    )
+
+
+def _render_label_flowchart_diagram(nodes: list[dict[str, Any]]) -> str:
+    texts = [
+        text
+        for text in (
+            str(node.get("text", "")).strip()
+            for node in nodes
+        )
+        if text
+    ]
+    title, sections = _label_diagram_outline(texts)
+    html = ['<section class="diagram-evidence diagram-flowchart">']
+    html.append('<div class="diagram-flowchart-page">')
+    if title:
+        html.append(
+            '<div class="diagram-flowchart-title">'
+            f"{_escape_multiline(' '.join(title))}"
+            "</div>"
+        )
+    for section in sections:
+        heading = str(section.get("title", "")).strip()
+        items = section.get("items", [])
+        html.append('<section class="diagram-flowchart-section">')
+        if heading:
+            html.append(
+                '<div class="diagram-flowchart-section-title">'
+                f"{escape(heading)}"
+                "</div>"
+            )
+        for group in _group_diagram_section_items(
+            [item for item in items if isinstance(item, str)]
+        ):
+            if group["kind"] == "note":
+                html.append(
+                    '<div class="diagram-flowchart-note">'
+                    f"{_escape_multiline(str(group['text']))}"
+                    "</div>"
+                )
+            else:
+                html.append(
+                    _render_diagram_flowchart_route(
+                        [str(step) for step in group.get("steps", [])],
+                        [str(actor) for actor in group.get("actors", [])],
+                    )
+                )
+        html.append("</section>")
+    if not title and not sections:
+        html.append('<p class="empty-diagram">빈 다이어그램</p>')
+    html.append("</div></section>")
+    return "".join(html)
+
+
+def _label_diagram_outline(texts: list[str]) -> tuple[list[str], list[dict[str, Any]]]:
+    title: list[str] = []
+    sections: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    for text in texts:
+        if _is_diagram_section_heading(text):
+            current = {"title": text, "items": []}
+            sections.append(current)
+            continue
+        if current is None:
+            title.append(text)
+        else:
+            current["items"].append(text)
+    if not sections and title:
+        sections.append({"title": "", "items": title})
+        title = []
+    return title, sections
+
+
+def _group_diagram_section_items(items: list[str]) -> list[dict[str, Any]]:
+    groups: list[dict[str, Any]] = []
+    pending_steps: list[str] = []
+    actors: list[str] = []
+
+    def flush_route() -> None:
+        nonlocal pending_steps, actors
+        if pending_steps or actors:
+            groups.append(
+                {
+                    "kind": "route",
+                    "steps": pending_steps,
+                    "actors": actors,
+                }
+            )
+        pending_steps = []
+        actors = []
+
+    for item in items:
+        text = item.strip()
+        if not text:
+            continue
+        if _is_diagram_note(text):
+            flush_route()
+            groups.append({"kind": "note", "text": text})
+            continue
+        if _is_diagram_step(text):
+            if actors:
+                flush_route()
+            pending_steps.append(text)
+            continue
+        if _looks_like_diagram_actor(text):
+            actors.append(text)
+            continue
+        if pending_steps and not actors:
+            pending_steps[-1] = f"{pending_steps[-1]}\n{text}"
+        else:
+            actors.append(text)
+    flush_route()
+    return groups
+
+
+def _render_diagram_flowchart_route(steps: list[str], actors: list[str]) -> str:
+    html = ['<div class="diagram-flowchart-route">']
+    if steps:
+        html.append('<div class="diagram-flowchart-steps">')
+        for step in steps:
+            html.append(
+                '<div class="diagram-flowchart-step">'
+                f"{_escape_multiline(step)}"
+                "</div>"
+            )
+        html.append("</div>")
+    if actors:
+        html.append('<div class="diagram-flowchart-box-row">')
+        for index, actor in enumerate(actors):
+            if index:
+                html.append('<span class="diagram-flowchart-arrow">→</span>')
+            html.append(
+                '<div class="diagram-flowchart-box">'
+                f"{_escape_multiline(actor)}"
+                "</div>"
+            )
+        html.append("</div>")
+    html.append("</div>")
+    return "".join(html)
+
+
+def _is_diagram_section_heading(text: str) -> bool:
+    stripped = text.strip()
+    return stripped.startswith("<") and stripped.endswith(">")
+
+
+def _is_diagram_note(text: str) -> bool:
+    stripped = text.strip()
+    return (
+        (stripped.startswith("(") and stripped.endswith(")"))
+        or (stripped.startswith("[") and stripped.endswith("]"))
+    )
+
+
+def _is_diagram_step(text: str) -> bool:
+    return bool(_DIAGRAM_STEP_RE.match(text.strip()))
+
+
+def _looks_like_diagram_actor(text: str) -> bool:
+    stripped = text.strip()
+    if _is_diagram_step(stripped) or _is_diagram_note(stripped):
+        return False
+    return any(
+        token in stripped
+        for token in [
+            "기관",
+            "공단",
+            "권자",
+            "보장기관",
+            "심사평가원",
+        ]
+    )
+
+
+def _escape_multiline(text: str) -> str:
+    return "<br>".join(escape(part) or "&nbsp;" for part in text.splitlines())
 
 
 def _render_table_cells(
@@ -305,6 +555,103 @@ td {
 th {
   background: #ededdf;
 }
+.diagram-evidence {
+  border: 1px solid #d8d8d2;
+  border-radius: 4px;
+  padding: 12px;
+}
+.diagram-flowchart {
+  background: #f7f7f5;
+}
+.diagram-flowchart-page {
+  background: #fff;
+  border: 1px solid #c9c9c2;
+  padding: 22px;
+}
+.diagram-flowchart-title {
+  margin: 0 0 18px;
+  text-align: center;
+  font-size: 18px;
+  font-weight: 700;
+}
+.diagram-flowchart-section {
+  margin-top: 18px;
+}
+.diagram-flowchart-section-title {
+  margin: 0 0 12px;
+  text-align: center;
+  font-weight: 700;
+}
+.diagram-flowchart-route {
+  margin: 12px 0;
+}
+.diagram-flowchart-steps {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.diagram-flowchart-step {
+  border: 1px solid #b9b9b2;
+  border-radius: 999px;
+  background: #f7f7f5;
+  padding: 3px 10px;
+  font-size: 12px;
+  text-align: center;
+}
+.diagram-flowchart-box-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.diagram-flowchart-box {
+  min-width: 132px;
+  min-height: 36px;
+  border: 1.5px solid #1d1d1f;
+  background: #fff;
+  padding: 7px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  line-height: 1.25;
+}
+.diagram-flowchart-arrow {
+  color: #1d1d1f;
+  font-size: 18px;
+  line-height: 1;
+}
+.diagram-flowchart-note {
+  max-width: 760px;
+  margin: 10px auto 14px;
+  color: #4d4d4d;
+  font-size: 12px;
+  text-align: center;
+}
+.diagram-nodes,
+.diagram-edges {
+  margin: 0;
+  padding-left: 24px;
+}
+.diagram-nodes li,
+.diagram-edges li {
+  margin: 4px 0;
+}
+.diagram-shape {
+  color: #666;
+  font-size: 12px;
+}
+.mermaid {
+  margin: 12px 0 0;
+  padding: 8px;
+  overflow-x: auto;
+  background: #f7f7f5;
+  border: 1px solid #e0e0da;
+  border-radius: 4px;
+}
 .nested-evidence {
   margin-top: 8px;
 }
@@ -325,5 +672,14 @@ img {
 }
 code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (max-width: 720px) {
+  .diagram-flowchart-page {
+    padding: 14px;
+  }
+  .diagram-flowchart-box {
+    min-width: 108px;
+    max-width: 100%;
+  }
 }
 """

@@ -158,6 +158,14 @@ def test_supported_hwp5_and_pdf_corpus_extracts_evidence_units():
         assert len(parsed.units) >= expected["min_units"], document["id"]
         assert len(table_units) >= expected["min_tables"], document["id"]
         assert len(parsed.assets) >= expected.get("min_assets", 0), document["id"]
+        assert (
+            sum(
+                1
+                for unit in parsed.units
+                if unit.metadata.get("common", {}).get("chunk_kind") == "diagram"
+            )
+            >= expected.get("min_diagram_units", 0)
+        ), document["id"]
         if expected.get("requires_ocr"):
             assert len(parsed.units) == expected["scanned_pages"], document["id"]
             assert all(unit.type == "text" for unit in parsed.units), document["id"]
