@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
-from .models import Evidence, ParseResult, RagChunk, SourceInfo, SourcePointer
+from .models import Evidence, ParseResult, RagChunk, SourceEvidence, SourceInfo
 
 
 @dataclass
@@ -31,52 +31,38 @@ class RagDocumentParser:
         )
         return ParseResult(
             source=source_info,
-            chunks=_chunks_from_markdown(markdown, sha256),
+            chunks=_chunks_from_markdown(markdown),
         )
 
 
-@dataclass(frozen=True)
-class _Line:
-    text: str
-    start: int
-    end: int
-
-
-def _chunks_from_markdown(markdown: str, sha256: str) -> list[RagChunk]:
+def _chunks_from_markdown(markdown: str) -> list[RagChunk]:
     chunks: list[RagChunk] = []
     section_path: list[str] = []
-    paragraph_lines: list[_Line] = []
-    table_lines: list[_Line] = []
+    paragraph_lines: list[str] = []
+    table_lines: list[str] = []
     block_index = 1
     table_index = 1
 
     def flush_paragraph() -> None:
         nonlocal block_index
-        meaningful = [line for line in paragraph_lines if line.text.strip()]
-        text = " ".join(line.text.strip() for line in meaningful).strip()
+        meaningful = [line for line in paragraph_lines if line.strip()]
+        text = " ".join(line.strip() for line in meaningful).strip()
         paragraph_lines.clear()
         if not text:
             return
         chunk_id = f"b{block_index}"
         block_index += 1
-        char_start = _content_start(meaningful[0])
-        char_end = _content_end(meaningful[-1])
         chunks.append(
             RagChunk(
                 id=chunk_id,
                 type="text",
-                source=text,
-                embedding_text=_with_section(section_path, text),
-                evidence=Evidence(format="plain", content=text),
-                source_pointer=SourcePointer(
-                    sha256=sha256,
-                    char_start=char_start,
-                    char_end=char_end,
-                    byte_start=_byte_offset(markdown, char_start),
-                    byte_end=_byte_offset(markdown, char_end),
+                source=SourceEvidence(
+                    kind="text",
+                    text=text,
                     section_path=list(section_path),
-                    block_id=chunk_id,
                 ),
+                embedding_text=_with_section(section_path, text),
+                evidence=Evidence(kind="text", format="plain", content=text),
                 metadata={
                     "common": {
                         "chunk_kind": "text",
@@ -89,8 +75,7 @@ def _chunks_from_markdown(markdown: str, sha256: str) -> list[RagChunk]:
 
     def flush_table() -> None:
         nonlocal block_index, table_index
-        meaningful = [line for line in table_lines if line.text.strip()]
-        lines = [line.text for line in meaningful]
+        lines = [line for line in table_lines if line.strip()]
         table_lines.clear()
         if not lines:
             return
@@ -99,25 +84,23 @@ def _chunks_from_markdown(markdown: str, sha256: str) -> list[RagChunk]:
         block_index += 1
         table_index += 1
         headers, rows = _table_parts(lines)
-        char_start = meaningful[0].start
-        char_end = meaningful[-1].end
+        table_source_text = _table_source_text(headers, rows)
         chunks.append(
             RagChunk(
                 id=block_id,
                 type="table",
-                source="\n".join(lines),
-                embedding_text=_table_llm_text(lines, section_path),
-                evidence=Evidence(format="markdown_table", content="\n".join(lines)),
-                source_pointer=SourcePointer(
-                    sha256=sha256,
-                    char_start=char_start,
-                    char_end=char_end,
-                    byte_start=_byte_offset(markdown, char_start),
-                    byte_end=_byte_offset(markdown, char_end),
+                source=SourceEvidence(
+                    kind="table",
+                    text=table_source_text,
                     section_path=list(section_path),
-                    block_id=block_id,
-                    table_id=table_id,
-                    row_range=(1, max(1, len(rows))),
+                    headers=headers,
+                    rows=_source_rows(headers, rows),
+                ),
+                embedding_text=_table_llm_text(lines, section_path),
+                evidence=Evidence(
+                    kind="table",
+                    format="markdown_table",
+                    content="\n".join(lines),
                 ),
                 metadata={
                     "common": {
@@ -134,8 +117,8 @@ def _chunks_from_markdown(markdown: str, sha256: str) -> list[RagChunk]:
             )
         )
 
-    for item in _iter_lines(markdown):
-        line = item.text
+    for line in markdown.splitlines():
+        line = line.rstrip()
         if line.lstrip().startswith("#"):
             flush_paragraph()
             flush_table()
@@ -145,46 +128,18 @@ def _chunks_from_markdown(markdown: str, sha256: str) -> list[RagChunk]:
             continue
         if line.lstrip().startswith("|"):
             flush_paragraph()
-            table_lines.append(item)
+            table_lines.append(line)
             continue
         if table_lines:
             flush_table()
         if line.strip():
-            paragraph_lines.append(item)
+            paragraph_lines.append(line)
         else:
             flush_paragraph()
 
     flush_paragraph()
     flush_table()
     return chunks
-
-
-def _iter_lines(markdown: str) -> list[_Line]:
-    lines: list[_Line] = []
-    offset = 0
-    for raw in markdown.splitlines(keepends=True):
-        text = raw.rstrip("\r\n")
-        start = offset
-        end = start + len(text)
-        lines.append(_Line(text=text, start=start, end=end))
-        offset += len(raw)
-    if not markdown:
-        return []
-    if markdown and not markdown.endswith(("\n", "\r")) and not lines:
-        lines.append(_Line(text=markdown, start=0, end=len(markdown)))
-    return lines
-
-
-def _content_start(line: _Line) -> int:
-    return line.start + len(line.text) - len(line.text.lstrip())
-
-
-def _content_end(line: _Line) -> int:
-    return line.start + len(line.text.rstrip())
-
-
-def _byte_offset(text: str, char_offset: int) -> int:
-    return len(text[:char_offset].encode())
 
 
 def _with_section(section_path: list[str], text: str) -> str:
@@ -217,6 +172,34 @@ def _table_parts(lines: list[str]) -> tuple[list[str], list[list[str]]]:
     if len(rows) < 3:
         return [], []
     return rows[0], rows[2:]
+
+
+def _source_rows(headers: list[str], rows: list[list[str]]) -> list[dict[str, object]]:
+    source_rows: list[dict[str, object]] = []
+    for index, row in enumerate(rows, start=1):
+        source_rows.append(
+            {
+                "index": index,
+                "cells": {
+                    header: value
+                    for header, value in zip(headers, row, strict=False)
+                },
+            }
+        )
+    return source_rows
+
+
+def _table_source_text(headers: list[str], rows: list[list[str]]) -> str:
+    parts: list[str] = []
+    for row in rows:
+        cells = [
+            f"{header}={value}"
+            for header, value in zip(headers, row, strict=False)
+            if value
+        ]
+        if cells:
+            parts.append("; ".join(cells))
+    return "\n".join(parts)
 
 
 def _split_table_row(line: str) -> list[str]:
