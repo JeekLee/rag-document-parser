@@ -595,7 +595,7 @@ def _diagram_source_text(diagram: dict[str, object]) -> str:
     nodes = diagram.get("nodes", [])
     if not isinstance(nodes, list):
         return ""
-    return "\n".join(
+    lines = [
         text
         for text in (
             str(node.get("text", "")).strip()
@@ -603,7 +603,31 @@ def _diagram_source_text(diagram: dict[str, object]) -> str:
             if isinstance(node, dict)
         )
         if text
-    )
+    ]
+    edge_lines = _diagram_edge_source_lines(diagram.get("edges", []))
+    if edge_lines:
+        lines.append("relations:")
+        lines.extend(edge_lines)
+    return "\n".join(lines)
+
+
+def _diagram_edge_source_lines(edges: object) -> list[str]:
+    if not isinstance(edges, list):
+        return []
+    lines = []
+    for edge in edges:
+        if not isinstance(edge, dict):
+            continue
+        from_id = str(edge.get("from", "")).strip()
+        to_id = str(edge.get("to", "")).strip()
+        if not from_id or not to_id:
+            continue
+        label = str(edge.get("label", "")).strip()
+        line = f"{from_id} -> {to_id}"
+        if label:
+            line = f"{line}: {label}"
+        lines.append(line)
+    return lines
 
 
 def _parse_section(

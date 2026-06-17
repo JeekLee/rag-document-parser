@@ -606,6 +606,8 @@ def test_hwp5_diagram_labels_inferred_edges_from_step_text():
     assert edge["from"] == "n2"
     assert edge["to"] == "n3"
     assert edge["label"] == "①신청"
+    assert "relations:" in document.units[0].source.text
+    assert "n2 -> n3: ①신청" in document.units[0].source.text
 
 
 def test_hwp5_real_fixture_groups_flowchart_labels():
