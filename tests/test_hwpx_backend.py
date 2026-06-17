@@ -134,8 +134,13 @@ def test_hwpx_backend_parses_text_table_nested_table_and_image_asset():
         {"id": "c1", "text": "항목"},
         {"id": "c2", "text": "금액"},
     ]
-    assert "nested table" in table.source.text
-    assert "외래" in table.source.text
+    assert table.source.text == (
+        "table: 2 columns\n"
+        "header 1: col 1: 구분; col 2: 세부\n"
+        "row 1: 구분: 본인부담; "
+        "세부: nested table: table: 2 columns / "
+        "header 1: col 1: 항목; col 2: 금액 / row 1: 항목: 외래; 금액: 1000"
+    )
 
     image = parsed.units[2]
     assert image.source.kind == "image"
@@ -329,7 +334,12 @@ def test_hwpx_table_uses_cell_addresses_and_spans_for_grid_width():
         ("c4", "1차 QA", 3),
     ]
     assert sum(cell["colspan"] for cell in cells) == len(content["columns"])
-    assert "Column " not in parsed.units[0].source.text
+    assert parsed.units[0].source.text == (
+        "table: 6 columns\n"
+        "header 1: cols 3-4: 관련 근거\n"
+        "row 1: col 1: 개정 ’16.11.7.; col 2: 고시 제2016-149호; "
+        "관련 근거: (2016.10.01.시행); cols 4-6: 1차 QA"
+    )
 
 
 def test_hwpx_single_cell_text_table_is_emitted_as_text_unit():
