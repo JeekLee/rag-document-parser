@@ -604,11 +604,12 @@ def _plan_prompt(window: list[EvidenceUnit], max_units: int) -> str:
     example_unit_id = json.dumps(window[0].id if window else "unit", ensure_ascii=False)
     table_unit = next((unit for unit in window if unit.format == "structured_table"), None)
     include_rows_example = ""
-    if table_unit is not None:
+    row_range = _example_row_range(table_unit) if table_unit is not None else None
+    if table_unit is not None and row_range is not None:
         table_unit_id = json.dumps(table_unit.id, ensure_ascii=False)
         include_rows_example = (
             "\ninclude_rows operation 예시:\n"
-            f'{{"unit_id": {table_unit_id}, "action": "include_rows", "row_ranges": [[1, 3]]}}\n'
+            f'{{"unit_id": {table_unit_id}, "action": "include_rows", "row_ranges": [{row_range}]}}\n'
         )
     return _PROMPT.replace("{max_units}", str(max_units)).replace(
         "{example_unit_id}", example_unit_id
@@ -617,6 +618,21 @@ def _plan_prompt(window: list[EvidenceUnit], max_units: int) -> str:
     ).replace(
         "{units}", json.dumps(payload, ensure_ascii=False, indent=2)
     )
+
+
+def _example_row_range(unit: EvidenceUnit) -> list[int] | None:
+    if not isinstance(unit.content, dict):
+        return None
+    rows = unit.content.get("rows")
+    if not isinstance(rows, list):
+        return None
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        index = row.get("index")
+        if type(index) is int:
+            return [index, index]
+    return None
 
 
 def _unit_payload(index: int, unit: EvidenceUnit) -> dict[str, Any]:
