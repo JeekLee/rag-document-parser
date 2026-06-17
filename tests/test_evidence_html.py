@@ -521,6 +521,67 @@ def test_render_structured_diagram_marks_arrow_connectors():
     assert 'marker-end="url(#diagram-arrow)"' in html
 
 
+def test_render_structured_diagram_places_step_labels_near_connectors():
+    from rag_document_parser.evidence_html import render_evidence_html
+
+    html = render_evidence_html(
+        {
+            "kind": "diagram",
+            "format": "structured_diagram",
+            "content": {
+                "caption": None,
+                "nodes": [
+                    {"id": "n1", "shape_type": "label", "text": "업무처리 흐름도"},
+                    {"id": "n2", "shape_type": "label", "text": "①신청"},
+                    {
+                        "id": "n3",
+                        "shape_type": "label",
+                        "text": "수급권자",
+                        "bbox": {
+                            "x": 100,
+                            "y": 100,
+                            "width": 200,
+                            "height": 100,
+                            "unit": "hwp",
+                        },
+                    },
+                    {
+                        "id": "n4",
+                        "shape_type": "label",
+                        "text": "심사평가원",
+                        "bbox": {
+                            "x": 500,
+                            "y": 100,
+                            "width": 200,
+                            "height": 100,
+                            "unit": "hwp",
+                        },
+                    },
+                ],
+                "connectors": [
+                    {
+                        "id": "c1",
+                        "type": "line",
+                        "points": [
+                            {"x": 300, "y": 150},
+                            {"x": 500, "y": 150},
+                        ],
+                    }
+                ],
+                "edges": [],
+                "mermaid": None,
+            },
+        }
+    )
+
+    assert (
+        'class="diagram-connector-label" style="left:50.000%;top:50.000%"'
+        in html
+    )
+    assert 'class="diagram-positioned-label">①신청</span>' not in html
+    assert "업무처리 흐름도" in html
+
+
 def test_render_label_only_diagram_as_original_like_flowchart():
     from rag_document_parser.evidence_html import render_evidence_html
 

@@ -245,6 +245,9 @@ def _render_positioned_label_diagram(
         for node in nodes
         if _node_bbox(node) is None and str(node.get("text", "")).strip()
     ]
+    strip_labels, connector_labels = _split_unpositioned_diagram_labels(unpositioned)
+    paired_connector_labels = connector_labels[: len(connector_lines)]
+    strip_labels.extend(connector_labels[len(connector_lines) :])
     x_values = [
         value
         for _, bbox in positioned
@@ -265,9 +268,9 @@ def _render_positioned_label_diagram(
     canvas_height = max(max_y - min_y, 1.0)
 
     html = ['<section class="diagram-positioned">']
-    if unpositioned:
+    if strip_labels:
         html.append('<div class="diagram-positioned-labels">')
-        for text in unpositioned:
+        for text in strip_labels:
             html.append(
                 '<span class="diagram-positioned-label">'
                 f"{_escape_multiline(text)}"
@@ -299,6 +302,16 @@ def _render_positioned_label_diagram(
                 f'x2="{x2:.3f}%" y2="{y2:.3f}%"{marker}></line>'
             )
         html.append("</svg>")
+    for text, line in zip(paired_connector_labels, connector_lines, strict=False):
+        start, end = line["points"]
+        label_x = ((start["x"] + end["x"]) / 2 - min_x) / canvas_width * 100
+        label_y = ((start["y"] + end["y"]) / 2 - min_y) / canvas_height * 100
+        html.append(
+            '<div class="diagram-connector-label" '
+            f'style="left:{label_x:.3f}%;top:{label_y:.3f}%">'
+            f"{_escape_multiline(text)}"
+            "</div>"
+        )
     for node, bbox in positioned:
         left = (bbox["x"] - min_x) / canvas_width * 100
         top = (bbox["y"] - min_y) / canvas_height * 100
@@ -314,6 +327,26 @@ def _render_positioned_label_diagram(
         )
     html.append("</div></section>")
     return "".join(html)
+
+
+def _split_unpositioned_diagram_labels(
+    texts: list[str],
+) -> tuple[list[str], list[str]]:
+    strip_labels: list[str] = []
+    connector_labels: list[str] = []
+    for text in texts:
+        if _is_diagram_step(text):
+            connector_labels.append(text)
+            continue
+        if (
+            connector_labels
+            and not _is_diagram_section_heading(text)
+            and not _is_diagram_note(text)
+        ):
+            connector_labels[-1] = f"{connector_labels[-1]}\n{text}"
+            continue
+        strip_labels.append(text)
+    return strip_labels, connector_labels
 
 
 def _node_bbox(node: dict[str, Any]) -> dict[str, float] | None:
@@ -822,6 +855,7 @@ th {
   width: 100%;
   height: 100%;
   pointer-events: none;
+  z-index: 0;
 }
 .diagram-connectors line {
   stroke: #3f4a54;
@@ -831,8 +865,22 @@ th {
 .diagram-connectors marker path {
   fill: #3f4a54;
 }
+.diagram-connector-label {
+  position: absolute;
+  z-index: 1;
+  max-width: 180px;
+  transform: translate(-50%, -50%);
+  border: 1px solid #c9c9c2;
+  background: rgba(255, 255, 255, 0.94);
+  padding: 2px 6px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.25;
+  word-break: keep-all;
+}
 .diagram-positioned-node {
   position: absolute;
+  z-index: 2;
   box-sizing: border-box;
   border: 1.5px solid #1d1d1f;
   background: #fff;
