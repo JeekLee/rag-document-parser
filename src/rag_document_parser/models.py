@@ -6,11 +6,13 @@ from typing import Any
 
 @dataclass(frozen=True)
 class Evidence:
+    kind: str
     format: str
     content: str
 
     def to_dict(self) -> dict[str, str]:
         return {
+            "kind": self.kind,
             "format": self.format,
             "content": self.content,
         }
@@ -37,53 +39,51 @@ class SourceInfo:
 
 
 @dataclass(frozen=True)
-class SourcePointer:
-    sha256: str
-    char_start: int | None = None
-    char_end: int | None = None
-    byte_start: int | None = None
-    byte_end: int | None = None
-    page: int | None = None
-    bbox: list[float] | None = None
+class SourceEvidence:
+    kind: str
+    text: str
     section_path: list[str] = field(default_factory=list)
-    block_id: str | None = None
-    table_id: str | None = None
-    row_range: tuple[int, int] | None = None
+    headers: list[str] = field(default_factory=list)
+    rows: list[dict[str, Any]] = field(default_factory=list)
+    caption: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "sha256": self.sha256,
-            "char_start": self.char_start,
-            "char_end": self.char_end,
-            "byte_start": self.byte_start,
-            "byte_end": self.byte_end,
-            "page": self.page,
-            "bbox": list(self.bbox) if self.bbox else None,
+        payload: dict[str, Any] = {
+            "kind": self.kind,
+            "text": self.text,
             "section_path": list(self.section_path),
-            "block_id": self.block_id,
-            "table_id": self.table_id,
-            "row_range": list(self.row_range) if self.row_range else None,
         }
+        if self.headers:
+            payload["headers"] = list(self.headers)
+        if self.rows:
+            payload["rows"] = [
+                {
+                    "index": row["index"],
+                    "cells": dict(row["cells"]),
+                }
+                for row in self.rows
+            ]
+        if self.caption is not None:
+            payload["caption"] = self.caption
+        return payload
 
 
 @dataclass(frozen=True)
 class RagChunk:
     id: str
     type: str
-    source: str
+    source: SourceEvidence
     embedding_text: str
     evidence: Evidence
-    source_pointer: SourcePointer
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "type": self.type,
-            "source": self.source,
+            "source": self.source.to_dict(),
             "embedding_text": self.embedding_text,
             "evidence": self.evidence.to_dict(),
-            "source_pointer": self.source_pointer.to_dict(),
             "metadata": dict(self.metadata),
         }
 
