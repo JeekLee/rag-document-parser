@@ -11,14 +11,21 @@ grounding, and user-facing evidence display.
 ```python
 import os
 
-from rag_document_parser import LlmConfig, RagDocumentParser
+from rag_document_parser import LlmConfig, RagDocumentParser, S3Config
 
 parser = RagDocumentParser(
     llm=LlmConfig(
         url="https://api.openai.com/v1",
         api_key=os.environ["OPENAI_API_KEY"],
         model="gpt-4.1-mini",
-    )
+    ),
+    object_storage=S3Config(
+        endpoint=os.environ["S3_ENDPOINT"],
+        bucket=os.environ["S3_BUCKET"],
+        access_key=os.environ["S3_ACCESS_KEY"],
+        secret_key=os.environ["S3_SECRET_KEY"],
+        prefix="rag-document-parser",
+    ),
 )
 
 result = parser.parse(raw_bytes, suffix=".md")
@@ -32,6 +39,9 @@ for chunk in result.chunks:
     }
     send_to_llm(chunk.source)
     store_evidence(chunk.evidence)
+
+for asset in result.assets:
+    register_asset(asset.uri)
 ```
 
 ## Current scope
@@ -41,8 +51,13 @@ for chunk in result.chunks:
   - `RagChunk`
   - `EvidenceUnit`
   - `Evidence`
+  - `PendingAsset`
+  - `DocumentAsset`
   - `SourceInfo`
   - `SourceEvidence`
+  - `S3Config`
+- Requires S3-compatible object storage; binary assets are uploaded and exposed
+  as asset references instead of being embedded in source or evidence.
 - Supports UTF-8 text/Markdown parsing as the first contract fixture.
 - Selects a parser backend by suffix; `.md`, `.markdown`, and `.txt` are
   currently backed by the built-in Markdown backend.
