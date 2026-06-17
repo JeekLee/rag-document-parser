@@ -154,10 +154,97 @@ def test_agentic_chunker_uses_rich_korean_llm_prompt_contract(monkeypatch):
     assert '"내용"' in prompt
     assert "{{" not in prompt
     assert "}}" not in prompt
-    assert '    "unit_ids": ["b1"]' in prompt
+    assert '    "unit_ids": ["b2"]' in prompt
+    assert '      {"unit_id": "b2", "action": "include"}' in prompt
+    assert '    "context_unit_ids": []' in prompt
+    assert '"row_ranges": [[1, 3]]' in prompt
+    assert "포함" in prompt
     assert "evidence content는 작성하지 않습니다" in prompt
     assert "evidence content는 unit에서 복사됩니다" in prompt
     assert chunks[0].summary == "표 전체를 제공한다."
+
+
+def test_agentic_chunker_prompt_example_uses_window_unit_id(monkeypatch):
+    from rag_document_parser import LlmConfig
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    calls = []
+
+    def fake_chat_json(prompt, cfg):
+        calls.append((prompt, cfg))
+        return [
+            {
+                "unit_ids": ["u99"],
+                "operations": [{"unit_id": "u99", "action": "include"}],
+                "summary": "다른 문장 요약",
+                "keywords": ["다른"],
+                "questions": ["다른 문장은 무엇인가요?"],
+            }
+        ]
+
+    monkeypatch.setattr("rag_document_parser.chunk.agentic.chat_json", fake_chat_json)
+    cfg = LlmConfig(url="http://llm.test/v1", api_key="key", model="model")
+
+    chunks = EvidenceUnitAgenticChunker(llm=cfg).chunk([_text_unit("u99", "다른 문장")])
+
+    prompt = calls[0][0]
+    assert '"unit_ids": ["u99"]' in prompt
+    assert '"unit_id": "u99"' in prompt
+    assert '"unit_ids": ["b1"]' not in prompt
+    assert chunks[0].metadata["source_unit_ids"] == ["u99"]
+
+
+def test_agentic_chunker_prompt_compacts_asset_metadata(monkeypatch):
+    from rag_document_parser import EvidenceUnit, LlmConfig, SourceEvidence
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    calls = []
+    long_alt = "설명" * 180
+
+    unit = EvidenceUnit(
+        id="img1",
+        type="image",
+        format="png",
+        source=SourceEvidence(kind="image", text="이미지 설명"),
+        content={"asset_id": "asset-1"},
+        metadata={
+            "common": {"chunk_kind": "image", "section_path": [], "display_format": "png"},
+            "asset": {
+                "asset_id": "asset-1",
+                "kind": "image",
+                "mime": "image/png",
+                "alt": long_alt,
+                "nested": {"ignored": True},
+                "extra": "ignored",
+            },
+        },
+    )
+
+    def fake_chat_json(prompt, cfg):
+        calls.append((prompt, cfg))
+        return [
+            {
+                "unit_ids": ["img1"],
+                "operations": [{"unit_id": "img1", "action": "include"}],
+                "summary": "이미지 요약",
+                "keywords": ["이미지"],
+                "questions": ["이미지는 무엇인가요?"],
+            }
+        ]
+
+    monkeypatch.setattr("rag_document_parser.chunk.agentic.chat_json", fake_chat_json)
+    cfg = LlmConfig(url="http://llm.test/v1", api_key="key", model="model")
+
+    EvidenceUnitAgenticChunker(llm=cfg).chunk([unit])
+
+    prompt = calls[0][0]
+    assert '"asset_id": "asset-1"' in prompt
+    assert '"kind": "image"' in prompt
+    assert '"mime": "image/png"' in prompt
+    assert long_alt not in prompt
+    assert f'"alt": "{long_alt[:299]}…"' in prompt
+    assert '"nested"' not in prompt
+    assert '"extra"' not in prompt
 
 
 def test_agentic_chunker_materializes_cross_kind_chunk_from_plan():

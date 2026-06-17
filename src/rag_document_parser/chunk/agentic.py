@@ -23,6 +23,8 @@ _PROMPT = """\
 - 모든 unit은 누락 없이 evidence로 포함되어야 합니다.
 - structured_table은 include_rows로 여러 chunk에 분해할 수 있습니다.
 - include_rows row range는 겹치지 않아야 하며 table row 범위 안에 있어야 합니다.
+- include_rows의 row_ranges는 양 끝을 포함하는 inclusive [start, end] 쌍 목록입니다.
+- context_unit_ids는 선택 사항이며 이미 이전 chunk에서 evidence로 포함된 unit id만 작성합니다.
 - text, table, image를 같은 chunk에 묶을 수 있습니다.
 - 원문에 없는 사실을 summary, keywords, questions에 추가하지 않습니다.
 - 한 chunk는 가능하면 unit {max_units}개 이하로 유지합니다.
@@ -33,16 +35,20 @@ Unit 목록:
 JSON 배열만 출력하세요:
 [
   {
-    "unit_ids": ["b1"],
+    "unit_ids": [{example_unit_id}],
     "operations": [
-      {"unit_id": "b1", "action": "include"}
+      {"unit_id": {example_unit_id}, "action": "include"}
     ],
+    "context_unit_ids": [],
     "title": "제목",
     "summary": "요약",
     "keywords": ["키워드"],
     "questions": ["이 chunk로 답할 수 있는 질문"]
   }
 ]
+
+include_rows operation 예시:
+{"unit_id": {example_unit_id}, "action": "include_rows", "row_ranges": [[1, 3]]}
 """
 
 
@@ -597,7 +603,10 @@ def _plan_prompt(window: list[EvidenceUnit], max_units: int) -> str:
         "max_units_per_chunk": max_units,
         "units": [_unit_payload(index, unit) for index, unit in enumerate(window)],
     }
+    example_unit_id = json.dumps(window[0].id if window else "unit", ensure_ascii=False)
     return _PROMPT.replace("{max_units}", str(max_units)).replace(
+        "{example_unit_id}", example_unit_id
+    ).replace(
         "{units}", json.dumps(payload, ensure_ascii=False, indent=2)
     )
 
@@ -614,7 +623,7 @@ def _unit_payload(index: int, unit: EvidenceUnit) -> dict[str, Any]:
         "section_path": common.get("section_path", []) if isinstance(common, dict) else [],
         "source_preview": _truncate(unit.source.text, 900),
         "table": _compact_table(table),
-        "asset": dict(asset) if isinstance(asset, dict) else {},
+        "asset": _compact_asset(asset),
     }
 
 
@@ -628,6 +637,23 @@ def _compact_table(table: Any) -> dict[str, Any]:
         result["headers"] = [str(header)[:80] for header in table["headers"][:12]]
     if "row_count" in table:
         result["row_count"] = table["row_count"]
+    return result
+
+
+def _compact_asset(asset: Any) -> dict[str, Any]:
+    if not isinstance(asset, dict):
+        return {}
+    result: dict[str, Any] = {}
+    for key in ("asset_id", "kind", "mime", "ext", "uri", "public_url", "alt", "caption"):
+        if key not in asset:
+            continue
+        value = asset[key]
+        if value is None:
+            result[key] = None
+        elif isinstance(value, str):
+            result[key] = _truncate(value, 300)
+        elif type(value) in (int, float, bool):
+            result[key] = value
     return result
 
 
