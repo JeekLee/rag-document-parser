@@ -74,7 +74,8 @@ def _render_evidence_unit(
         "content": unit.get("content"),
     }
     legacy_evidence = unit.get("evidence")
-    if isinstance(legacy_evidence, dict):
+    has_direct_shape = "content" in unit or "format" in unit or "type" in unit
+    if not has_direct_shape and isinstance(legacy_evidence, dict):
         evidence = legacy_evidence
     source = unit.get("source", {})
     source_text = source.get("text", "") if isinstance(source, dict) else ""

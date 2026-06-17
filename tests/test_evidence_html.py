@@ -156,13 +156,38 @@ def test_render_composite_chunk_evidence_items():
     assert html.count("<table") == 1
 
 
+def test_render_evidence_unit_prefers_direct_content_over_legacy_evidence():
+    from rag_document_parser.evidence_html import render_evidence_units_html
+
+    html = render_evidence_units_html(
+        [
+            {
+                "id": "b1",
+                "type": "text",
+                "format": "plain",
+                "source": {"kind": "text", "text": "direct source"},
+                "content": "direct content",
+                "evidence": {
+                    "kind": "text",
+                    "format": "plain",
+                    "content": "legacy content",
+                },
+                "metadata": {},
+            }
+        ],
+        title="direct precedence",
+    )
+
+    assert "direct content" in html
+    assert "legacy content" not in html
+
+
 def test_render_evidence_image_uses_public_url_while_showing_source_uri():
     from rag_document_parser.evidence_html import render_evidence_units_html
 
     units = [
         {
             "id": "b1",
-            "type": "image",
             "source": {"kind": "image", "text": "image: img-0001"},
             "evidence": {
                 "kind": "image",
