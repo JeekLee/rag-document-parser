@@ -159,12 +159,17 @@ def _gso_line_with_bbox(
     y: int,
     width: int,
     height: int,
+    link_type: int = 0,
 ) -> bytes:
     return b"".join(
         [
             _gso_ctrl_with_bbox(level, x=x, y=y, width=width, height=height),
             _make_record(0x4C, level + 1, b"nil$"),
-            _make_record(0x4E, level + 1, struct.pack("<5i", 0, 0, 100, 100, 0)),
+            _make_record(
+                0x4E,
+                level + 1,
+                struct.pack("<5i", 0, 0, 100, 100, link_type),
+            ),
         ]
     )
 
@@ -545,6 +550,64 @@ def test_hwp5_diagram_keeps_line_connectors_with_bounding_boxes():
     ]
 
 
+def test_hwp5_diagram_infers_edges_from_connector_endpoints():
+    from rag_document_parser.extract.formats.hwp5.backend import _parse_section
+
+    records = b""
+    records += _gso_ctrl_with_bbox(0, x=100, y=100, width=200, height=100)
+    records += _make_record(0x43, 1, _u16("수급권자"))
+    records += _gso_line_with_bbox(
+        0,
+        x=300,
+        y=145,
+        width=200,
+        height=10,
+        link_type=1,
+    )
+    records += _gso_ctrl_with_bbox(0, x=500, y=100, width=200, height=100)
+    records += _make_record(0x43, 1, _u16("심사평가원"))
+
+    document = _parse_section(records).to_document()
+    content = document.units[0].evidence.content
+
+    assert content["edges"] == [
+        {
+            "from": "n1",
+            "to": "n2",
+            "type": "arrow",
+            "label": "",
+            "confidence": "inferred_geometry",
+            "connector_id": "c1",
+        }
+    ]
+
+
+def test_hwp5_diagram_labels_inferred_edges_from_step_text():
+    from rag_document_parser.extract.formats.hwp5.backend import _parse_section
+
+    records = b""
+    records += _make_record(0x43, 0, _u16("①신청"))
+    records += _gso_ctrl_with_bbox(0, x=100, y=100, width=200, height=100)
+    records += _make_record(0x43, 1, _u16("수급권자"))
+    records += _gso_line_with_bbox(
+        0,
+        x=300,
+        y=145,
+        width=200,
+        height=10,
+        link_type=1,
+    )
+    records += _gso_ctrl_with_bbox(0, x=500, y=100, width=200, height=100)
+    records += _make_record(0x43, 1, _u16("심사평가원"))
+
+    document = _parse_section(records).to_document()
+    edge = document.units[0].evidence.content["edges"][0]
+
+    assert edge["from"] == "n2"
+    assert edge["to"] == "n3"
+    assert edge["label"] == "①신청"
+
+
 def test_hwp5_real_fixture_groups_flowchart_labels():
     pytest.importorskip("olefile")
 
@@ -566,8 +629,11 @@ def test_hwp5_real_fixture_groups_flowchart_labels():
     diagram = drawing_units[0]
     assert diagram.type == "diagram"
     assert diagram.evidence.format == "structured_diagram"
-    assert diagram.evidence.content["edges"] == []
-    assert diagram.evidence.content["mermaid"] is None
+    content = diagram.evidence.content
+    assert len(content["edges"]) == 11
+    assert content["edges"][0]["label"] == "①급여대상여부확인신청"
+    assert any(edge["type"] == "arrow" for edge in content["edges"])
+    assert content["mermaid"] is None
     assert "업무처리 흐름도" in diagram.source.text
     assert "< 과다본인부담금 확인절차 >" in diagram.source.text
     assert "건강보험심사평가원" in diagram.source.text

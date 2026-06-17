@@ -465,6 +465,72 @@ def test_render_structured_diagram_draws_positioned_connectors():
     )
 
 
+def test_render_structured_diagram_keeps_positioned_layout_with_inferred_edges():
+    from rag_document_parser.evidence_html import render_evidence_html
+
+    html = render_evidence_html(
+        {
+            "kind": "diagram",
+            "format": "structured_diagram",
+            "content": {
+                "caption": None,
+                "nodes": [
+                    {
+                        "id": "n1",
+                        "shape_type": "label",
+                        "text": "수급권자",
+                        "bbox": {
+                            "x": 100,
+                            "y": 100,
+                            "width": 200,
+                            "height": 100,
+                            "unit": "hwp",
+                        },
+                    },
+                    {
+                        "id": "n2",
+                        "shape_type": "label",
+                        "text": "심사평가원",
+                        "bbox": {
+                            "x": 500,
+                            "y": 100,
+                            "width": 200,
+                            "height": 100,
+                            "unit": "hwp",
+                        },
+                    },
+                ],
+                "connectors": [
+                    {
+                        "id": "c1",
+                        "type": "line",
+                        "arrow": True,
+                        "points": [
+                            {"x": 300, "y": 150},
+                            {"x": 500, "y": 150},
+                        ],
+                    }
+                ],
+                "edges": [
+                    {
+                        "from": "n1",
+                        "to": "n2",
+                        "type": "arrow",
+                        "label": "",
+                        "confidence": "inferred_geometry",
+                        "connector_id": "c1",
+                    }
+                ],
+                "mermaid": None,
+            },
+        }
+    )
+
+    assert 'class="diagram-positioned"' in html
+    assert 'class="diagram-connectors"' in html
+    assert '<ul class="diagram-edges">' not in html
+
+
 def test_render_structured_diagram_marks_arrow_connectors():
     from rag_document_parser.evidence_html import render_evidence_html
 

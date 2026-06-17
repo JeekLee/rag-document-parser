@@ -217,11 +217,20 @@ def _is_positionable_label_diagram(
     connectors: list[dict[str, Any]],
 ) -> bool:
     return (
-        _is_label_only_diagram(nodes, edges, mermaid)
+        bool(nodes)
+        and not (isinstance(mermaid, str) and mermaid.strip())
+        and all(_is_label_shape_node(node) for node in nodes)
         and (
             sum(1 for node in nodes if _node_bbox(node) is not None) >= 2
             or any(_connector_line(connector) is not None for connector in connectors)
         )
+    )
+
+
+def _is_label_shape_node(node: dict[str, Any]) -> bool:
+    return (
+        str(node.get("shape_type", node.get("type", "label"))).strip()
+        in ("", "label")
     )
 
 

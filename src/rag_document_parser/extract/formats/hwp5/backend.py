@@ -22,6 +22,9 @@ _TAG_SHAPE_PICTURE = 0x55
 _CTRL_TABLE = b" lbt"
 _CTRL_GSO = b" osg"
 _PICTURE_BIN_DATA_ID_OFFSET = 71
+_DIAGRAM_STEP_LABEL_RE = re.compile(
+    r"^(?:[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]|\d+[.)])"
+)
 
 
 @dataclass(frozen=True)
@@ -417,20 +420,22 @@ def _structured_diagram(
         for line in (_clean_text(part) for part in text.splitlines())
         if line
     ]
+    nodes: list[dict[str, object]] = [
+        {
+            "id": f"n{index}",
+            "shape_type": "label",
+            "text": label,
+            "bbox": bboxes[index - 1] if bboxes and index <= len(bboxes) else None,
+            "metadata": {"source": "hwp5_drawing_text"},
+        }
+        for index, label in enumerate(labels, start=1)
+    ]
+    connector_items = connectors or []
     return {
         "caption": None,
-        "nodes": [
-            {
-                "id": f"n{index}",
-                "shape_type": "label",
-                "text": label,
-                "bbox": bboxes[index - 1] if bboxes and index <= len(bboxes) else None,
-                "metadata": {"source": "hwp5_drawing_text"},
-            }
-            for index, label in enumerate(labels, start=1)
-        ],
-        "edges": [],
-        "connectors": connectors or [],
+        "nodes": nodes,
+        "edges": _infer_connector_edges(nodes, connector_items),
+        "connectors": connector_items,
         "mermaid": None,
     }
 
@@ -447,6 +452,143 @@ def _structured_connector(
         "arrow": line.arrow,
         "metadata": {"source": "hwp5_gso_line"},
     }
+
+
+def _infer_connector_edges(
+    nodes: list[dict[str, object]],
+    connectors: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    bbox_nodes = [
+        (str(node.get("id", "")), bbox)
+        for node in nodes
+        if (bbox := _diagram_node_bbox(node)) is not None
+    ]
+    if len(bbox_nodes) < 2:
+        return []
+
+    edges: list[dict[str, object]] = []
+    seen: set[tuple[str, str, str]] = set()
+    edge_labels = _diagram_connector_labels(nodes)
+    for connector_index, connector in enumerate(connectors):
+        points = connector.get("points")
+        if not isinstance(points, list) or len(points) < 2:
+            continue
+        start = _diagram_point(points[0])
+        end = _diagram_point(points[1])
+        if start is None or end is None:
+            continue
+        from_id = _nearest_node_id(start, bbox_nodes)
+        to_id = _nearest_node_id(end, bbox_nodes)
+        if from_id is None or to_id is None or from_id == to_id:
+            continue
+        connector_id = str(connector.get("id", ""))
+        key = (from_id, to_id, connector_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        edges.append(
+            {
+                "from": from_id,
+                "to": to_id,
+                "type": "arrow" if connector.get("arrow") else "line",
+                "label": (
+                    edge_labels[connector_index]
+                    if connector_index < len(edge_labels)
+                    else ""
+                ),
+                "confidence": "inferred_geometry",
+                "connector_id": connector_id,
+            }
+        )
+    return edges
+
+
+def _diagram_connector_labels(nodes: list[dict[str, object]]) -> list[str]:
+    labels: list[str] = []
+    for node in nodes:
+        if _diagram_node_bbox(node) is not None:
+            continue
+        text = str(node.get("text", "")).strip()
+        if not text:
+            continue
+        if _is_diagram_step_label(text):
+            labels.append(text)
+            continue
+        if (
+            labels
+            and not _is_diagram_section_heading(text)
+            and not _is_diagram_note(text)
+        ):
+            labels[-1] = f"{labels[-1]}\n{text}"
+    return labels
+
+
+def _is_diagram_step_label(text: str) -> bool:
+    return bool(_DIAGRAM_STEP_LABEL_RE.match(text.strip()))
+
+
+def _is_diagram_section_heading(text: str) -> bool:
+    stripped = text.strip()
+    return stripped.startswith("<") and stripped.endswith(">")
+
+
+def _is_diagram_note(text: str) -> bool:
+    stripped = text.strip()
+    return (
+        (stripped.startswith("(") and stripped.endswith(")"))
+        or (stripped.startswith("[") and stripped.endswith("]"))
+    )
+
+
+def _diagram_node_bbox(
+    node: dict[str, object],
+) -> dict[str, int] | None:
+    bbox = node.get("bbox")
+    if not isinstance(bbox, dict):
+        return None
+    x = _bbox_int(bbox, "x")
+    y = _bbox_int(bbox, "y")
+    width = _bbox_int(bbox, "width")
+    height = _bbox_int(bbox, "height")
+    if width <= 0 or height <= 0:
+        return None
+    return {"x": x, "y": y, "width": width, "height": height}
+
+
+def _diagram_point(point: object) -> dict[str, int] | None:
+    if not isinstance(point, dict):
+        return None
+    try:
+        return {"x": int(point["x"]), "y": int(point["y"])}
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _nearest_node_id(
+    point: dict[str, int],
+    bbox_nodes: list[tuple[str, dict[str, int]]],
+) -> str | None:
+    best_id: str | None = None
+    best_distance: int | None = None
+    for node_id, bbox in bbox_nodes:
+        distance = _point_bbox_distance_squared(point, bbox)
+        if best_distance is None or distance < best_distance:
+            best_id = node_id
+            best_distance = distance
+    return best_id
+
+
+def _point_bbox_distance_squared(
+    point: dict[str, int],
+    bbox: dict[str, int],
+) -> int:
+    min_x = bbox["x"]
+    max_x = bbox["x"] + bbox["width"]
+    min_y = bbox["y"]
+    max_y = bbox["y"] + bbox["height"]
+    dx = max(min_x - point["x"], 0, point["x"] - max_x)
+    dy = max(min_y - point["y"], 0, point["y"] - max_y)
+    return dx * dx + dy * dy
 
 
 def _diagram_source_text(diagram: dict[str, object]) -> str:
