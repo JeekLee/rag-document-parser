@@ -442,10 +442,7 @@ def _table_source_text(table: dict[str, object]) -> str:
     }
     lines: list[str] = []
     if columns:
-        lines.append(
-            "columns: "
-            + " | ".join(_column_source_label(column) for column in columns)
-        )
+        lines.append(f"table: {len(columns)} columns")
     for header_row in table.get("header_rows", []):
         cells = _table_source_cells(
             header_row["cells"],
@@ -453,7 +450,7 @@ def _table_source_text(table: dict[str, object]) -> str:
             use_header_labels=False,
         )
         if cells:
-            lines.append(f"header row {header_row['index']}: " + "; ".join(cells))
+            lines.append(f"header {header_row['index']}: " + "; ".join(cells))
     for row in rows:
         cells = _table_source_cells(
             row["cells"],
@@ -491,7 +488,7 @@ def _table_source_cells(
         ]
         combined = "; ".join(part for part in [value, *child_texts] if part)
         if combined:
-            result.append(f"{header}={combined}")
+            result.append(f"{header}: {combined}")
     return result
 
 
@@ -511,7 +508,7 @@ def _cell_coordinate_label(column_id: str, colspan: int) -> str:
     start = _column_id_number(column_id)
     if colspan <= 1:
         return _column_coordinate_label(column_id)
-    return f"col {start}-col {start + colspan - 1}"
+    return f"cols {start}-{start + colspan - 1}"
 
 
 def _column_coordinate_label(column_id: str) -> str:

@@ -1,0 +1,116 @@
+{
+  "version": 1,
+  "documents": [
+    {
+      "id": "hwpx-ultrasound-qa",
+      "pair_id": "ultrasound-qa",
+      "format": "hwpx",
+      "path": "hwpx/ultrasound-qa.hwpx",
+      "source_uri": "s3://md-converter-test/01_image/(제2024-22호)+초음파검사+급여기준+관련+질의응답(전체합본).hwpx",
+      "original_name": "(제2024-22호)+초음파검사+급여기준+관련+질의응답(전체합본).hwpx",
+      "bytes": 291140,
+      "sha256": "aa95d7c0ae31b9c6b8d1c1dd498530a2a437eedb056b0209a71b46faeadc77ef",
+      "parser_supported": true,
+      "purpose": "Complex HWPX tables with merged cells and embedded images.",
+      "expected": {
+        "min_units": 64,
+        "min_tables": 22,
+        "requires_colspan_source": true
+      }
+    },
+    {
+      "id": "pdf-ultrasound-qa",
+      "pair_id": "ultrasound-qa",
+      "format": "pdf",
+      "path": "pdf/ultrasound-qa.pdf",
+      "source_uri": "s3://md-converter-test/01_image/(제2024-22호)+초음파검사+급여기준+관련+질의응답(전체합본).pdf",
+      "original_name": "(제2024-22호)+초음파검사+급여기준+관련+질의응답(전체합본).pdf",
+      "bytes": 698770,
+      "sha256": "c7e380bdb2248ee999efdc7b0abc52bb6b3e9b8de8ea4503c30ac036b6930b41",
+      "parser_supported": false,
+      "purpose": "PDF pair for the ultrasound HWPX regression document."
+    },
+    {
+      "id": "hwpx-benefit-criteria-2024-278",
+      "pair_id": "benefit-criteria-2024-278",
+      "format": "hwpx",
+      "path": "hwpx/benefit-criteria-2024-278.hwpx",
+      "source_uri": "s3://clic/raw/20241227-2-0001/(제2024-278호)「요양급여의+적용기준+및+방법에+관한+세부사항」.hwpx",
+      "original_name": "(제2024-278호)「요양급여의+적용기준+및+방법에+관한+세부사항」.hwpx",
+      "bytes": 65090,
+      "sha256": "e2eca90dc12e6c8fe5ca11f248cd1e201292c819710b70f796b9c626b54c1f78",
+      "parser_supported": true,
+      "purpose": "Shorter HWPX notice with normal three-column criteria tables.",
+      "expected": {
+        "min_units": 14,
+        "min_tables": 3,
+        "requires_colspan_source": true
+      }
+    },
+    {
+      "id": "pdf-benefit-criteria-2024-278",
+      "pair_id": "benefit-criteria-2024-278",
+      "format": "pdf",
+      "path": "pdf/benefit-criteria-2024-278.pdf",
+      "source_uri": "s3://clic/raw/20241227-2-0001/(제2024-278호)「요양급여의+적용기준+및+방법에+관한+세부사항」.pdf",
+      "original_name": "(제2024-278호)「요양급여의+적용기준+및+방법에+관한+세부사항」.pdf",
+      "bytes": 203976,
+      "sha256": "e551390788315ab3ece5052cedba409e0644e9cb412d66e50a179dfaf92cd70a",
+      "parser_supported": false,
+      "purpose": "PDF pair for the 2024-278 HWPX regression document."
+    },
+    {
+      "id": "hwpx-cesarean-copay-qa",
+      "pair_id": "cesarean-copay-qa",
+      "format": "hwpx",
+      "path": "hwpx/cesarean-copay-qa.hwpx",
+      "source_uri": "s3://clic/raw/20241227-2-0001/제왕절개 본인부담률 개정 관련 질의응답 개정.hwpx",
+      "original_name": "제왕절개 본인부담률 개정 관련 질의응답 개정.hwpx",
+      "bytes": 42782,
+      "sha256": "db984ad6cad3bca187bd07a68f008e0f7d8053894ffe4ac4419fd5272b23f24c",
+      "parser_supported": true,
+      "purpose": "Compact HWPX Q&A table with multi-row and multi-column headers.",
+      "expected": {
+        "min_units": 11,
+        "min_tables": 2,
+        "requires_colspan_source": true
+      }
+    },
+    {
+      "id": "pdf-cesarean-copay-qa",
+      "pair_id": "cesarean-copay-qa",
+      "format": "pdf",
+      "path": "pdf/cesarean-copay-qa.pdf",
+      "source_uri": "s3://clic/raw/20241227-2-0001/제왕절개 본인부담률 개정 관련 질의응답 개정.pdf",
+      "original_name": "제왕절개 본인부담률 개정 관련 질의응답 개정.pdf",
+      "bytes": 209411,
+      "sha256": "b7a5d806613046567370392730b5b9bd9984cca5b1aa38bed407bc5de80cd3c0",
+      "parser_supported": false,
+      "purpose": "PDF pair for the cesarean copay HWPX regression document."
+    },
+    {
+      "id": "hwp-medical-aid-overpayment-deduction",
+      "pair_id": "medical-aid-overpayment-deduction",
+      "format": "hwp",
+      "path": "hwp/medical-aid-overpayment-deduction.hwp",
+      "source_uri": "s3://clic/raw/20071116-502-0001/의료급여 과다본인부담금 공제의뢰 업무처리요령.hwp",
+      "original_name": "의료급여 과다본인부담금 공제의뢰 업무처리요령.hwp",
+      "bytes": 114688,
+      "sha256": "40b29956a44a07d9ac68b37db5c66a92a780f494a177bd828c4169eace638565",
+      "parser_supported": false,
+      "purpose": "Legacy HWP sample paired with PDF for upcoming backend work."
+    },
+    {
+      "id": "pdf-medical-aid-overpayment-deduction",
+      "pair_id": "medical-aid-overpayment-deduction",
+      "format": "pdf",
+      "path": "pdf/medical-aid-overpayment-deduction.pdf",
+      "source_uri": "s3://clic/raw/20071116-502-0001/의료급여 과다본인부담금 공제 업무처리 요령.pdf",
+      "original_name": "의료급여 과다본인부담금 공제 업무처리 요령.pdf",
+      "bytes": 29777,
+      "sha256": "2b87928b60cb6723cd799a79bbbfb6f83b8ce167712912ef13f40cf0a0e43ef2",
+      "parser_supported": false,
+      "purpose": "PDF pair for the medical aid overpayment HWP regression document."
+    }
+  ]
+}
