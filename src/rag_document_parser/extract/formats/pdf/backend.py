@@ -888,6 +888,8 @@ def _append_table_rows(
         target_rows.append(copied)
     _merge_wrapped_table_rows(target)
     _promote_code_table_leaf_headers(target)
+    _promote_ultrasound_code_matrix(target)
+    _expand_parallel_code_action_rows(target)
 
 
 def _structured_table_from_pdf_table(
@@ -954,6 +956,8 @@ def _structured_table_from_pdf_table(
     _repair_table_of_contents(result, page)
     _merge_wrapped_table_rows(result)
     _promote_code_table_leaf_headers(result)
+    _promote_ultrasound_code_matrix(result)
+    _expand_parallel_code_action_rows(result)
     return result
 
 
@@ -1119,6 +1123,261 @@ def _promote_code_table_leaf_headers(table: dict[str, object]) -> None:
 
 def _looks_like_disease_code(value: str) -> bool:
     return bool(re.fullmatch(r"[A-Z]\d{2}(?:\.\d+)?(?:~[A-Z]?\d{2}(?:\.\d+)?)?", value))
+
+
+def _promote_ultrasound_code_matrix(table: dict[str, object]) -> None:
+    columns = table.get("columns")
+    rows = table.get("rows")
+    if (
+        not isinstance(columns, list)
+        or [str(column.get("text", "")) for column in columns if isinstance(column, dict)]
+        != ["구분", "EDI코드"]
+        or not isinstance(rows, list)
+        or len(rows) < 3
+    ):
+        return
+
+    row_cells = [_row_cell_texts(row) for row in rows]
+    if len(row_cells[0]) != 2 or set(_edi_codes(row_cells[0][1])) != {"EB401", "EB402"}:
+        return
+
+    promoted_rows: list[dict[str, object]] = []
+    for cells in row_cells[1:]:
+        if len(cells) != 2:
+            return
+        promoted = _ultrasound_code_rows(cells[0], cells[1])
+        if promoted is None:
+            return
+        for group, label, code in promoted:
+            promoted_rows.append(
+                {
+                    "index": len(promoted_rows) + 1,
+                    "cells": [
+                        _simple_cell("c1", group),
+                        _simple_cell("c2", label),
+                        _simple_cell("c3", code),
+                    ],
+                }
+            )
+
+    if not promoted_rows:
+        return
+
+    table["columns"] = [
+        {"id": "c1", "text": "구분 / 기본 초음파"},
+        {"id": "c2", "text": "구분 / 단순초음파(Ⅰ) / 단순초음파(Ⅱ)"},
+        {"id": "c3", "text": "EDI코드 / EB401 / EB402"},
+    ]
+    table["header_rows"] = [
+        {
+            "index": 1,
+            "cells": [
+                {
+                    "column_id": "c1",
+                    "text": "구분",
+                    "rowspan": 1,
+                    "colspan": 2,
+                    "children": [],
+                },
+                _simple_cell("c3", "EDI코드"),
+            ],
+        },
+        {
+            "index": 2,
+            "cells": [
+                _simple_cell("c1", "기본 초음파"),
+                _simple_cell("c2", "단순초음파(Ⅰ)"),
+                _simple_cell("c3", "EB401"),
+            ],
+        },
+        {
+            "index": 3,
+            "cells": [
+                _simple_cell("c2", "단순초음파(Ⅱ)"),
+                _simple_cell("c3", "EB402"),
+            ],
+        },
+    ]
+    table["rows"] = promoted_rows
+
+
+def _row_cell_texts(row: object) -> list[str]:
+    if not isinstance(row, dict):
+        return []
+    cells = row.get("cells")
+    if not isinstance(cells, list):
+        return []
+    return [
+        str(cell.get("text", "")).strip()
+        for cell in cells
+        if isinstance(cell, dict)
+    ]
+
+
+def _ultrasound_code_rows(
+    label_text: str,
+    code_text: str,
+) -> list[tuple[str, str, str]] | None:
+    codes = _edi_codes(code_text)
+    if len(codes) < 2:
+        return None
+    group_word = _ultrasound_group_word(label_text)
+    if not group_word:
+        return None
+
+    labels = _known_ultrasound_labels(codes)
+    if labels is None:
+        labels = _ultrasound_labels_from_text(label_text, group_word, len(codes))
+    if len(labels) != len(codes) or any(not label for label in labels):
+        return None
+
+    rows: list[tuple[str, str, str]] = []
+    for index, (label, code) in enumerate(zip(labels, codes, strict=True)):
+        group = f"{group_word} 초음파" if index == 0 else ""
+        rows.append((group, label, code))
+    return rows
+
+
+def _ultrasound_group_word(text: str) -> str:
+    padded = f" {text} "
+    for word in ("진단", "제한적", "특수"):
+        if f" {word} " in padded:
+            return word
+    return ""
+
+
+def _known_ultrasound_labels(codes: list[str]) -> list[str] | None:
+    labels: list[str] = []
+    for code in codes:
+        label = _ULTRASOUND_EDI_LABELS.get(_base_ultrasound_edi_code(code))
+        if label is None:
+            return None
+        labels.append(label)
+    return labels
+
+
+def _base_ultrasound_edi_code(code: str) -> str:
+    return code[:-3] if code.endswith("001") else code
+
+
+def _ultrasound_labels_from_text(
+    label_text: str,
+    group_word: str,
+    count: int,
+) -> list[str]:
+    without_group = re.sub(
+        rf"(^|\s){re.escape(group_word)}(?=\s|$)",
+        " ",
+        label_text,
+        count=1,
+    ).strip()
+    without_separator = re.sub(
+        r"\s+초음파\s+",
+        " ",
+        without_group,
+        count=1,
+    ).strip()
+    return _split_ultrasound_label_tail(without_separator, count)
+
+
+def _split_ultrasound_label_tail(text: str, count: int) -> list[str]:
+    if count <= 0:
+        return []
+    tokens = text.split()
+    if count == 1:
+        return [text.strip()]
+    if len(tokens) <= count:
+        return tokens
+    return [*tokens[: count - 1], " ".join(tokens[count - 1:])]
+
+
+_ULTRASOUND_EDI_LABELS = {
+    "EB411": "안구",
+    "EB412": "안와",
+    "EB414": "갑상선·부갑상선",
+    "EB415": "갑상선·부갑상선 제외한 경부",
+    "EB421": "유방·액와부-일반",
+    "EB422": "흉벽, 흉막, 늑골 등",
+    "EB423": "유방·액와부-정밀",
+    "EB424": "자동유방초음파",
+    "EB430": "선천성 심질환 경흉부",
+    "EB431": "경흉부-단순",
+    "EB432": "경흉부-일반",
+    "EB433": "경흉부-전문",
+    "EB434": "부하-약물부하",
+    "EB435": "부하-운동부하",
+    "EB436": "태아정밀",
+    "EB441": "간·담낭·담도·비장·췌장(일반)",
+    "EB442": "간·담낭·담도·비장·췌장(정밀)",
+    "EB443": "충수",
+    "EB444": "소장·대장",
+    "EB445": "서혜부",
+    "EB446": "직장·항문",
+    "EB447": "항문",
+    "EB448": "신장·부신·방광",
+    "EB449": "신장·부신",
+    "EB450": "방광",
+    "EB610": "선천성 심질환 경식도",
+    "EB611": "경식도",
+    "EB612": "심장내",
+}
+
+
+def _edi_codes(text: str) -> list[str]:
+    return re.findall(r"\bEB\d{3}(?:001)?\b", text)
+
+
+def _expand_parallel_code_action_rows(table: dict[str, object]) -> None:
+    columns = table.get("columns")
+    rows = table.get("rows")
+    if (
+        not isinstance(columns, list)
+        or [str(column.get("text", "")) for column in columns if isinstance(column, dict)]
+        != ["분류", "코드", "행위명"]
+        or not isinstance(rows, list)
+    ):
+        return
+
+    expanded_rows: list[dict[str, object]] = []
+    changed = False
+    for row in rows:
+        cells = _row_cell_texts(row)
+        if len(cells) != 3:
+            continue
+        codes = _parallel_cell_parts(cells[1])
+        actions = _parallel_cell_parts(cells[2])
+        if len(codes) == len(actions) and len(codes) > 1:
+            changed = True
+            for index, (code, action) in enumerate(zip(codes, actions, strict=True)):
+                expanded_rows.append(
+                    {
+                        "index": len(expanded_rows) + 1,
+                        "cells": [
+                            _simple_cell("c1", cells[0] if index == 0 else ""),
+                            _simple_cell("c2", code),
+                            _simple_cell("c3", action),
+                        ],
+                    }
+                )
+            continue
+        if isinstance(row, dict):
+            copied = dict(row)
+            copied["index"] = len(expanded_rows) + 1
+            expanded_rows.append(copied)
+
+    if changed:
+        table["rows"] = expanded_rows
+
+
+def _parallel_cell_parts(text: str) -> list[str]:
+    line_parts = [part.strip() for part in text.splitlines() if part.strip()]
+    if len(line_parts) > 1:
+        return line_parts
+    return _slash_parts(text)
+
+
+def _slash_parts(text: str) -> list[str]:
+    return [part.strip() for part in re.split(r"\s*/\s*", text) if part.strip()]
 
 
 def _reindexed_row(row: dict[str, object], index: int) -> dict[str, object]:
@@ -1402,6 +1661,8 @@ def _append_nested_child_rows(
         copied["index"] = len(target_rows) + 1
         target_rows.append(copied)
     _promote_code_table_leaf_headers(target)
+    _promote_ultrasound_code_matrix(target)
+    _expand_parallel_code_action_rows(target)
 
 
 def _nested_table_child(

@@ -668,6 +668,293 @@ def test_pdf_backend_restores_cell_line_break_spaces():
     assert pdf_backend._clean_cell("급여대\n상") == "급여대상"
 
 
+def test_pdf_backend_promotes_ultrasound_code_matrix_rows():
+    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
+
+    table = {
+        "caption": None,
+        "columns": [
+            {"id": "c1", "text": "구분"},
+            {"id": "c2", "text": "EDI코드"},
+        ],
+        "header_rows": [
+            {
+                "index": 1,
+                "cells": [
+                    pdf_backend._simple_cell("c1", "구분"),
+                    pdf_backend._simple_cell("c2", "EDI코드"),
+                ],
+            }
+        ],
+        "rows": [
+            {
+                "index": 1,
+                "cells": [
+                    pdf_backend._simple_cell(
+                        "c1",
+                        "기본 단순초음파(Ⅰ) 초음파 단순초음파(Ⅱ)",
+                    ),
+                    pdf_backend._simple_cell("c2", "EB401 EB402"),
+                ],
+            },
+            {
+                "index": 2,
+                "cells": [
+                    pdf_backend._simple_cell(
+                        "c1",
+                        "유방·액와부-일반 진단 유방·액와부-정밀 초음파 자동유방초음파 흉벽, 흉막, 늑골 등",
+                    ),
+                    pdf_backend._simple_cell("c2", "EB421 EB423 EB424 EB422"),
+                ],
+            },
+            {
+                "index": 3,
+                "cells": [
+                    pdf_backend._simple_cell(
+                        "c1",
+                        "유방·액와부-일반 제한적 유방·액와부-정밀 초음파 자동유방초음파 흉벽, 흉막, 늑골 등",
+                    ),
+                    pdf_backend._simple_cell(
+                        "c2",
+                        "EB421001 EB423001 EB424001 EB422001",
+                    ),
+                ],
+            },
+        ],
+    }
+
+    pdf_backend._promote_ultrasound_code_matrix(table)
+
+    assert [column["text"] for column in table["columns"]] == [
+        "구분 / 기본 초음파",
+        "구분 / 단순초음파(Ⅰ) / 단순초음파(Ⅱ)",
+        "EDI코드 / EB401 / EB402",
+    ]
+    assert [[cell["text"] for cell in row["cells"]] for row in table["rows"]] == [
+        ["진단 초음파", "유방·액와부-일반", "EB421"],
+        ["", "유방·액와부-정밀", "EB423"],
+        ["", "자동유방초음파", "EB424"],
+        ["", "흉벽, 흉막, 늑골 등", "EB422"],
+        ["제한적 초음파", "유방·액와부-일반", "EB421001"],
+        ["", "유방·액와부-정밀", "EB423001"],
+        ["", "자동유방초음파", "EB424001"],
+        ["", "흉벽, 흉막, 늑골 등", "EB422001"],
+    ]
+
+
+def test_pdf_backend_promotes_ultrasound_code_matrix_rows_with_leading_group():
+    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
+
+    table = {
+        "caption": None,
+        "columns": [
+            {"id": "c1", "text": "구분"},
+            {"id": "c2", "text": "EDI코드"},
+        ],
+        "header_rows": [
+            {
+                "index": 1,
+                "cells": [
+                    pdf_backend._simple_cell("c1", "구분"),
+                    pdf_backend._simple_cell("c2", "EDI코드"),
+                ],
+            }
+        ],
+        "rows": [
+            {
+                "index": 1,
+                "cells": [
+                    pdf_backend._simple_cell(
+                        "c1",
+                        "기본 단순초음파(Ⅰ) 초음파 단순초음파(Ⅱ)",
+                    ),
+                    pdf_backend._simple_cell("c2", "EB401 EB402"),
+                ],
+            },
+            {
+                "index": 2,
+                "cells": [
+                    pdf_backend._simple_cell(
+                        "c1",
+                        "진단 간·담낭·담도·비장·췌장(일반) 초음파 간·담낭·담도·비장·췌장(정밀)",
+                    ),
+                    pdf_backend._simple_cell("c2", "EB441 EB442"),
+                ],
+            },
+            {
+                "index": 3,
+                "cells": [
+                    pdf_backend._simple_cell(
+                        "c1",
+                        "제한적 간·담낭·담도·비장·췌장(일반) 초음파 간·담낭·담도·비장·췌장(정밀)",
+                    ),
+                    pdf_backend._simple_cell("c2", "EB441001 EB442001"),
+                ],
+            },
+        ],
+    }
+
+    pdf_backend._promote_ultrasound_code_matrix(table)
+
+    assert [[cell["text"] for cell in row["cells"]] for row in table["rows"]] == [
+        ["진단 초음파", "간·담낭·담도·비장·췌장(일반)", "EB441"],
+        ["", "간·담낭·담도·비장·췌장(정밀)", "EB442"],
+        ["제한적 초음파", "간·담낭·담도·비장·췌장(일반)", "EB441001"],
+        ["", "간·담낭·담도·비장·췌장(정밀)", "EB442001"],
+    ]
+
+
+def test_pdf_backend_promotes_ultrasound_code_matrix_rows_with_known_heart_labels():
+    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
+
+    table = {
+        "caption": None,
+        "columns": [
+            {"id": "c1", "text": "구분"},
+            {"id": "c2", "text": "EDI코드"},
+        ],
+        "header_rows": [
+            {
+                "index": 1,
+                "cells": [
+                    pdf_backend._simple_cell("c1", "구분"),
+                    pdf_backend._simple_cell("c2", "EDI코드"),
+                ],
+            }
+        ],
+        "rows": [
+            {
+                "index": 1,
+                "cells": [
+                    pdf_backend._simple_cell(
+                        "c1",
+                        "기본 단순초음파(Ⅰ) 초음파 단순초음파(Ⅱ)",
+                    ),
+                    pdf_backend._simple_cell("c2", "EB401 EB402"),
+                ],
+            },
+            {
+                "index": 2,
+                "cells": [
+                    pdf_backend._simple_cell(
+                        "c1",
+                        "선천성 심질환 경흉부 경흉부-단순 경흉부-일반 진단 경흉부-전문 초음파 부하-약물부하 부하-운동부하 태아정밀",
+                    ),
+                    pdf_backend._simple_cell(
+                        "c2",
+                        "EB430 EB431 EB432 EB433 EB434 EB435 EB436",
+                    ),
+                ],
+            },
+            {
+                "index": 3,
+                "cells": [
+                    pdf_backend._simple_cell(
+                        "c1",
+                        "선천성 심질환 경식도 특수 경식도 초음파 심장내",
+                    ),
+                    pdf_backend._simple_cell("c2", "EB610 EB611 EB612"),
+                ],
+            },
+        ],
+    }
+
+    pdf_backend._promote_ultrasound_code_matrix(table)
+
+    assert [[cell["text"] for cell in row["cells"]] for row in table["rows"]] == [
+        ["진단 초음파", "선천성 심질환 경흉부", "EB430"],
+        ["", "경흉부-단순", "EB431"],
+        ["", "경흉부-일반", "EB432"],
+        ["", "경흉부-전문", "EB433"],
+        ["", "부하-약물부하", "EB434"],
+        ["", "부하-운동부하", "EB435"],
+        ["", "태아정밀", "EB436"],
+        ["특수 초음파", "선천성 심질환 경식도", "EB610"],
+        ["", "경식도", "EB611"],
+        ["", "심장내", "EB612"],
+    ]
+
+
+def test_pdf_backend_expands_parallel_code_action_rows():
+    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
+
+    table = {
+        "caption": None,
+        "columns": [
+            {"id": "c1", "text": "분류"},
+            {"id": "c2", "text": "코드"},
+            {"id": "c3", "text": "행위명"},
+        ],
+        "rows": [
+            {
+                "index": 1,
+                "cells": [
+                    pdf_backend._simple_cell("c1", "(Ⅰ)"),
+                    pdf_backend._simple_cell("c2", "M6850 / C8040 / C8060"),
+                    pdf_backend._simple_cell(
+                        "c3",
+                        "낭종흡인요법 / 흉막천자 / 심낭천자",
+                    ),
+                ],
+            },
+            {
+                "index": 2,
+                "cells": [
+                    pdf_backend._simple_cell("c1", ""),
+                    pdf_backend._simple_cell("c2", "C8100"),
+                    pdf_backend._simple_cell("c3", "더글라스와천자"),
+                ],
+            },
+        ],
+    }
+
+    pdf_backend._expand_parallel_code_action_rows(table)
+
+    assert [[cell["text"] for cell in row["cells"]] for row in table["rows"]] == [
+        ["(Ⅰ)", "M6850", "낭종흡인요법"],
+        ["", "C8040", "흉막천자"],
+        ["", "C8060", "심낭천자"],
+        ["", "C8100", "더글라스와천자"],
+    ]
+
+
+def test_pdf_backend_expands_parallel_code_action_rows_split_by_lines():
+    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
+
+    table = {
+        "caption": None,
+        "columns": [
+            {"id": "c1", "text": "분류"},
+            {"id": "c2", "text": "코드"},
+            {"id": "c3", "text": "행위명"},
+        ],
+        "rows": [
+            {
+                "index": 1,
+                "cells": [
+                    pdf_backend._simple_cell("c1", "(Ⅰ)"),
+                    pdf_backend._simple_cell(
+                        "c2",
+                        "M6850\nC8040\nO1901 O1903 O1905",
+                    ),
+                    pdf_backend._simple_cell(
+                        "c3",
+                        "낭종흡인요법\n흉막천자\n부분체외순환",
+                    ),
+                ],
+            }
+        ],
+    }
+
+    pdf_backend._expand_parallel_code_action_rows(table)
+
+    assert [[cell["text"] for cell in row["cells"]] for row in table["rows"]] == [
+        ["(Ⅰ)", "M6850", "낭종흡인요법"],
+        ["", "C8040", "흉막천자"],
+        ["", "O1901 O1903 O1905", "부분체외순환"],
+    ]
+
+
 def test_pdf_backend_promotes_revision_history_text_to_table(monkeypatch):
     from rag_document_parser.extract.formats.pdf import PdfBackend
 
