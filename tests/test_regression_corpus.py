@@ -85,3 +85,42 @@ def test_supported_hwpx_corpus_emits_canonical_table_source():
             assert any("cols " in unit.source.text for unit in table_units), (
                 document["id"]
             )
+
+
+def test_supported_hwpx_corpus_preserves_grouped_header_context():
+    from rag_document_parser import HwpxBackend
+
+    documents = {document["id"]: document for document in _manifest_documents()}
+    benefit_path = CORPUS_DIR / str(
+        documents["hwpx-benefit-criteria-2024-278"]["path"]
+    )
+    benefit = HwpxBackend().parse(
+        benefit_path.read_bytes(),
+        ".hwpx",
+    )
+    benefit_table = [unit for unit in benefit.units if unit.type == "table"][2]
+    assert [column["text"] for column in benefit_table.evidence.content["columns"]] == [
+        "현   행 / 항목",
+        "현   행 / 제목",
+        "현   행 / 세부인정사항",
+        "개   정 / 항목",
+        "개   정 / 제목",
+        "개   정 / 세부인정사항",
+        "비고",
+    ]
+    assert "row 1: 현   행: I. 행위 일반사항; 개   정: I. 행위 일반사항" in (
+        benefit_table.source.text
+    )
+
+    cesarean_path = CORPUS_DIR / str(documents["hwpx-cesarean-copay-qa"]["path"])
+    cesarean = HwpxBackend().parse(
+        cesarean_path.read_bytes(),
+        ".hwpx",
+    )
+    cesarean_table = [unit for unit in cesarean.units if unit.type == "table"][0]
+    assert [column["text"] for column in cesarean_table.evidence.content["columns"]] == [
+        "연번",
+        "본인부담률 인하(5%) 관련 / 질의",
+        "본인부담률 인하(5%) 관련 / 답변",
+        "본인부담률 개정(5%→0%) 관련 / 개정(안)",
+    ]
