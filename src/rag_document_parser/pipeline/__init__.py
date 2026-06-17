@@ -1,5 +1,5 @@
 from __future__ import annotations
 
-from .pipeline.parser import RagDocumentParser
+from .parser import RagDocumentParser
 
 __all__ = ["RagDocumentParser"]

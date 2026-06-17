@@ -61,6 +61,26 @@ for asset in result.assets:
   - user-facing evidence payloads
   - `agentic-chunker`-compatible metadata such as `common.chunk_kind`
 
+## Internal pipeline layout
+
+The package is organized around the document pipeline:
+
+```text
+input -> extract EvidenceUnit -> chunk -> enrichment -> ChunkList
+```
+
+- `input/`: raw input normalization and suffix normalization.
+- `extract/`: EvidenceUnit extraction, asset upload/resolve, backend registry.
+- `extract/formats/<format>/backend.py`: format-specific extraction entrypoints
+  for Markdown, HWPX, HWP5, and PDF.
+- `pipeline/`: orchestration for the public parser API.
+- `chunk/`: chunker protocol and future agentic chunking adapter.
+- `enrichment/`: LLM client and future chunk enrichment logic.
+
+Legacy import modules such as `rag_document_parser.parser`,
+`rag_document_parser.backends`, `rag_document_parser.hwpx`, and
+`rag_document_parser.llm` remain as compatibility shims.
+
 ## Next scope
 
 - Move HWP/PDF parsing code in from `md-converter`.
