@@ -94,6 +94,41 @@ def test_parse_text_document_returns_llm_enriched_chunks(monkeypatch):
     }
 
 
+def test_markdown_backend_returns_evidence_units():
+    from rag_document_parser import EvidenceUnit, MarkdownBackend
+
+    raw = (
+        "# Section\n\n"
+        "Plain paragraph.\n\n"
+        "| A | B |\n"
+        "| --- | --- |\n"
+        "| one | two |\n"
+    ).encode()
+
+    parsed = MarkdownBackend().parse(raw, ".md")
+
+    assert not hasattr(parsed, "chunks")
+    assert [unit.id for unit in parsed.units] == ["b1", "b2"]
+    assert all(isinstance(unit, EvidenceUnit) for unit in parsed.units)
+
+    text_unit, table_unit = parsed.units
+    assert text_unit.type == "text"
+    assert text_unit.source.text == "Plain paragraph."
+    assert text_unit.evidence.content == "Plain paragraph."
+    assert text_unit.metadata["common"] == {
+        "chunk_kind": "text",
+        "section_path": ["Section"],
+        "display_format": "plain",
+    }
+
+    assert table_unit.type == "table"
+    assert table_unit.source.headers == ["A", "B"]
+    assert table_unit.source.rows == [
+        {"index": 1, "cells": {"A": "one", "B": "two"}}
+    ]
+    assert table_unit.evidence.format == "markdown_table"
+
+
 def test_parse_result_to_dict_is_json_serializable(monkeypatch):
     from rag_document_parser import LlmConfig, RagDocumentParser
 
@@ -183,8 +218,8 @@ def test_parse_fails_when_llm_enrichment_is_invalid(monkeypatch):
 def test_custom_backend_can_be_registered_for_suffix(monkeypatch):
     from rag_document_parser import (
         Evidence,
+        EvidenceUnit,
         LlmConfig,
-        RagChunk,
         RagDocumentParser,
         SourceEvidence,
     )
@@ -208,13 +243,12 @@ def test_custom_backend_can_be_registered_for_suffix(monkeypatch):
         def parse(self, data: bytes, suffix: str) -> ParsedDocument:
             self.calls.append((data, suffix))
             return ParsedDocument(
-                chunks=[
-                    RagChunk(
+                units=[
+                    EvidenceUnit(
                         id="c1",
                         type="text",
                         source=SourceEvidence(kind="text", text="custom text"),
                         evidence=Evidence(kind="text", format="plain", content="custom text"),
-                        summary="",
                     )
                 ],
                 quality_warnings=[
