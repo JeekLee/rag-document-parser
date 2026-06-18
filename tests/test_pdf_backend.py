@@ -36,17 +36,38 @@ class _FakePage:
     width = 300.0
     height = 400.0
 
-    def __init__(self, *, chars, images, tables=(), crop_text=None, full_text=None):
+    def __init__(
+        self,
+        *,
+        chars,
+        images,
+        tables=(),
+        crop_text=None,
+        full_text=None,
+        rects=(),
+        lines=(),
+        curves=(),
+    ):
         self.chars = chars
         self.images = images
         self._tables = list(tables)
         self._crop_text = crop_text or {}
         self._full_text = full_text
+        self.rects = list(rects)
+        self.lines = list(lines)
+        self.curves = list(curves)
 
     def crop(self, bbox):
+        x0 = int(round(bbox[0]))
         top = int(round(bbox[1]))
+        x1 = int(round(bbox[2]))
         bottom = int(round(bbox[3]))
-        return _FakeCrop(self._crop_text.get((top, bottom), ""))
+        return _FakeCrop(
+            self._crop_text.get(
+                (x0, top, x1, bottom),
+                self._crop_text.get((top, bottom), ""),
+            )
+        )
 
     def extract_text(self, **kwargs):
         return self._full_text
@@ -222,6 +243,242 @@ def test_pdf_backend_extracts_evidence_units_from_text_tables_images_and_ocr(
     assert ocr_unit.format == "plain"
     assert ocr_unit.content == "스캔 OCR 본문"
     assert parsed.quality_warnings == []
+
+
+def test_pdf_backend_extracts_vector_diagram_with_fallback_asset(monkeypatch):
+    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
+    from rag_document_parser.extract.formats.pdf import PdfBackend
+
+    page = _FakePage(
+        chars=[{"text": "가"} for _ in range(40)],
+        images=[],
+        rects=[
+            {"x0": 20, "top": 100, "x1": 100, "bottom": 150},
+            {"x0": 180, "top": 100, "x1": 270, "bottom": 150},
+        ],
+        lines=[
+            {"x0": 100, "top": 125, "x1": 180, "bottom": 125},
+        ],
+        crop_text={
+            (20, 100, 100, 150): "수급권자",
+            (180, 100, 270, 150): "심사평가원",
+        },
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "pdfplumber",
+        SimpleNamespace(open=lambda stream: _FakePdf([page])),
+    )
+    monkeypatch.setattr(
+        pdf_backend,
+        "_render_page_to_png",
+        lambda data, page_idx, bbox, scale=2.0: PNG_BYTES,
+        raising=False,
+    )
+
+    parsed = PdfBackend().parse(b"%PDF-1.4 fake", ".pdf")
+
+    assert [unit.type for unit in parsed.units] == ["diagram"]
+    diagram = parsed.units[0]
+    assert diagram.format == "structured_diagram"
+    assert diagram.source.kind == "diagram"
+    assert [node["text"] for node in diagram.content["nodes"]] == [
+        "수급권자",
+        "심사평가원",
+    ]
+    assert diagram.content["edges"] == [
+        {
+            "from": "n1",
+            "to": "n2",
+            "type": "line",
+            "label": "",
+            "confidence": "inferred_geometry",
+            "connector_id": "c1",
+        }
+    ]
+    assert diagram.content["asset_id"] == "img-0001"
+    assert parsed.assets[0].metadata["source"] == "diagram_fallback"
+    assert diagram.metadata["diagram"]["confidence"] == "medium"
+    assert parsed.quality_warnings == [
+        {
+            "type": "pdf_diagram_inferred",
+            "severity": "low",
+            "page": 1,
+            "message": "PDF vector diagram structure was inferred from shapes and text bounding boxes.",
+        }
+    ]
+
+
+def test_pdf_backend_keeps_unstructured_diagram_fallback_as_diagram_unit(monkeypatch):
+    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
+    from rag_document_parser.extract.formats.pdf import PdfBackend
+
+    page = _FakePage(
+        chars=[{"text": "가"} for _ in range(40)],
+        images=[],
+        rects=[
+            {"x0": 20, "top": 100, "x1": 80, "bottom": 140},
+            {"x0": 100, "top": 100, "x1": 160, "bottom": 140},
+            {"x0": 180, "top": 100, "x1": 240, "bottom": 140},
+        ],
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "pdfplumber",
+        SimpleNamespace(open=lambda stream: _FakePdf([page])),
+    )
+    monkeypatch.setattr(
+        pdf_backend,
+        "_render_page_to_png",
+        lambda data, page_idx, bbox, scale=2.0: PNG_BYTES,
+        raising=False,
+    )
+
+    parsed = PdfBackend().parse(b"%PDF-1.4 fake", ".pdf")
+
+    assert [unit.type for unit in parsed.units] == ["diagram"]
+    diagram = parsed.units[0]
+    assert diagram.format == "structured_diagram"
+    assert diagram.source.text == "diagram image: img-0001"
+    assert diagram.content["nodes"] == []
+    assert diagram.content["asset_id"] == "img-0001"
+    assert parsed.quality_warnings == [
+        {
+            "type": "pdf_diagram_structuring_failed",
+            "severity": "medium",
+            "page": 1,
+            "message": "PDF diagram was preserved as a fallback image because vector structure could not be inferred.",
+        }
+    ]
+
+
+def test_pdf_backend_nests_images_inside_table_cells(monkeypatch):
+    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
+    from rag_document_parser.extract.formats.pdf import PdfBackend
+
+    table = _FakeTable(
+        bbox=(0.0, 80.0, 300.0, 220.0),
+        row_cells=[
+            [(0.0, 80.0, 100.0, 120.0), (100.0, 80.0, 300.0, 120.0)],
+            [(0.0, 120.0, 100.0, 220.0), (100.0, 120.0, 300.0, 220.0)],
+        ],
+        extracted=[
+            ["구분", "이미지"],
+            ["급여기준", ""],
+        ],
+    )
+    page = _FakePage(
+        chars=[{"text": "가"} for _ in range(40)],
+        images=[{"name": "Im1", "x0": 120, "x1": 180, "top": 140, "bottom": 190}],
+        tables=[table],
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "pdfplumber",
+        SimpleNamespace(open=lambda stream: _FakePdf([page])),
+    )
+    monkeypatch.setattr(pdf_backend, "_pdf_reader", lambda data: object())
+    monkeypatch.setattr(
+        pdf_backend,
+        "_extract_page_images",
+        lambda data, page_idx, page, start_idx, reader=None: [
+            (
+                140.0,
+                SimpleNamespace(
+                    data=PNG_BYTES,
+                    mime="image/png",
+                    ext="png",
+                    is_diagram=False,
+                    metadata={
+                        "source": "embedded",
+                        "name": "Im1",
+                        "bbox": (120.0, 140.0, 180.0, 190.0),
+                    },
+                ),
+            )
+        ],
+        raising=False,
+    )
+
+    parsed = PdfBackend().parse(b"%PDF-1.4 fake", ".pdf")
+
+    assert [unit.type for unit in parsed.units] == ["table"]
+    image_cell = parsed.units[0].content["rows"][0]["cells"][1]
+    assert image_cell["children"] == [
+        {
+            "type": "image",
+            "format": "asset_ref",
+            "content": {"asset_id": "img-0001", "caption": None},
+            "metadata": {
+                "source": "pdf_table_cell_image",
+                "bbox": (120.0, 140.0, 180.0, 190.0),
+                "confidence": "medium",
+            },
+        }
+    ]
+    assert parsed.assets[0].id == "img-0001"
+    assert "image: img-0001" in parsed.units[0].source.text
+    assert parsed.quality_warnings == [
+        {
+            "type": "pdf_table_cell_image_inferred",
+            "severity": "low",
+            "page": 1,
+            "message": "PDF image was assigned to a table cell by bounding-box containment.",
+        }
+    ]
+
+
+def test_pdf_backend_restores_ocr_markdown_table_as_structured_table(monkeypatch):
+    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
+    from rag_document_parser.extract.formats.pdf import PdfBackend
+
+    scanned_page = _FakePage(
+        chars=[],
+        images=[{"x0": 0, "x1": 300, "y0": 0, "y1": 400}],
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "pdfplumber",
+        SimpleNamespace(open=lambda stream: _FakePdf([scanned_page])),
+    )
+    monkeypatch.setattr(
+        pdf_backend,
+        "_render_page_to_png",
+        lambda data, page_idx, bbox, scale=2.0: b"rendered-page",
+        raising=False,
+    )
+
+    parsed = PdfBackend(
+        max_ocr_workers=1,
+        ocr_fn=lambda png, page_idx: (
+            "| 구분 | 금액 |\n"
+            "| --- | --- |\n"
+            "| 외래 | 1000 |\n"
+            "| 입원 | 2000 |"
+        ),
+    ).parse(b"%PDF-1.4 fake", ".pdf")
+
+    assert [unit.type for unit in parsed.units] == ["table"]
+    table = parsed.units[0]
+    assert table.format == "structured_table"
+    assert table.content["columns"] == [
+        {"id": "c1", "text": "구분"},
+        {"id": "c2", "text": "금액"},
+    ]
+    assert [
+        [cell["text"] for cell in row["cells"]]
+        for row in table.content["rows"]
+    ] == [["외래", "1000"], ["입원", "2000"]]
+    assert table.metadata["pdf"]["ocr"] is True
+    assert table.metadata["pdf"]["confidence"] == "medium"
+    assert parsed.quality_warnings == [
+        {
+            "type": "pdf_ocr_table_inferred",
+            "severity": "low",
+            "page": 1,
+            "message": "OCR text was converted to structured_table from a detected pipe table.",
+        }
+    ]
 
 
 def test_pdf_backend_merges_nested_table_continuations(monkeypatch):

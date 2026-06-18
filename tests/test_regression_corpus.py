@@ -267,6 +267,12 @@ def test_supported_hwp5_and_pdf_corpus_extracts_evidence_units():
             assert unit.source.text, document["id"]
             assert unit.type in {"text", "table", "image", "diagram"}, document["id"]
             assert "common" in unit.metadata, document["id"]
+            if document["format"] == "pdf" and unit.type in {
+                "table",
+                "image",
+                "diagram",
+            }:
+                assert "confidence" in unit.metadata.get("pdf", {}), document["id"]
         for unit in table_units:
             assert unit.source.text.startswith("table: "), document["id"]
             assert unit.format == "structured_table", document["id"]
