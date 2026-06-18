@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import re
 import zipfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Callable
 from xml.etree import ElementTree as ET
@@ -515,7 +516,7 @@ def _public_structured_table(table: dict[str, object]) -> dict[str, object]:
 
 
 def _without_table_grid_fields(value: object) -> Any:
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return {
             key: _without_table_grid_fields(child)
             for key, child in value.items()
@@ -536,7 +537,7 @@ def _single_cell_text_table_text(table: dict[str, object]) -> str | None:
     if not isinstance(cells, list) or len(cells) != 1:
         return None
     cell = cells[0]
-    if not isinstance(cell, dict) or cell.get("children"):
+    if not isinstance(cell, Mapping) or cell.get("children"):
         return None
     text = str(cell.get("text", "")).strip()
     return text or None
@@ -722,19 +723,19 @@ def _nested_child_source_texts(children: object) -> list[str]:
         return []
     result: list[str] = []
     for child in children:
-        if not isinstance(child, dict):
+        if not isinstance(child, Mapping):
             continue
         child_type = child.get("type", child.get("kind"))
         content = child.get("content")
-        if child_type == "table" and isinstance(content, dict):
+        if child_type == "table" and isinstance(content, Mapping):
             result.append("nested table: " + _inline_table_source(content))
             continue
-        if child_type == "image" and isinstance(content, dict):
+        if child_type == "image" and isinstance(content, Mapping):
             asset_id = str(content.get("asset_id", "")).strip()
             if asset_id:
                 result.append(f"image: {asset_id}")
             continue
-        if child_type == "diagram" and isinstance(content, dict):
+        if child_type == "diagram" and isinstance(content, Mapping):
             source = _diagram_source_text(content).replace("\n", " / ")
             if source:
                 result.append(f"diagram: {source}")
@@ -1102,7 +1103,7 @@ def _is_diagram_note(text: str) -> bool:
 
 def _diagram_node_bbox(node: dict[str, object]) -> dict[str, int] | None:
     bbox = node.get("bbox")
-    if not isinstance(bbox, dict):
+    if not isinstance(bbox, Mapping):
         return None
     x = _bbox_int(bbox, "x")
     y = _bbox_int(bbox, "y")
@@ -1114,7 +1115,7 @@ def _diagram_node_bbox(node: dict[str, object]) -> dict[str, int] | None:
 
 
 def _diagram_point(point: object) -> dict[str, int] | None:
-    if not isinstance(point, dict):
+    if not isinstance(point, Mapping):
         return None
     try:
         return {"x": int(point["x"]), "y": int(point["y"])}
@@ -1158,7 +1159,7 @@ def _diagram_source_text(diagram: dict[str, object]) -> str:
         for text in (
             str(node.get("text", "")).strip()
             for node in nodes
-            if isinstance(node, dict)
+            if isinstance(node, Mapping)
         )
         if text
     ]
@@ -1184,13 +1185,13 @@ def _table_flowchart_diagram(table: dict[str, object]) -> dict[str, object] | No
     connectors: list[dict[str, object]] = []
     seen_node_texts: set[str] = set()
     for row in flowchart_rows:
-        if not isinstance(row, dict):
+        if not isinstance(row, Mapping):
             continue
         cells = row.get("cells")
         if not isinstance(cells, list):
             continue
         for cell in cells:
-            if not isinstance(cell, dict):
+            if not isinstance(cell, Mapping):
                 continue
             text = _flowchart_cell_text(cell)
             if not text:
@@ -1257,9 +1258,9 @@ def _min_flowchart_row_addr(rows: list[object]) -> int:
     row_addrs = [
         int(cell["row_addr"])
         for row in rows
-        if isinstance(row, dict)
+        if isinstance(row, Mapping)
         for cell in row.get("cells", [])
-        if isinstance(cell, dict) and "row_addr" in cell
+        if isinstance(cell, Mapping) and "row_addr" in cell
     ]
     return min(row_addrs, default=0)
 
@@ -1375,7 +1376,7 @@ def _infer_table_grid_edges(
         metadata = connector.get("metadata")
         label = (
             str(metadata.get("label", "")).strip()
-            if isinstance(metadata, dict)
+            if isinstance(metadata, Mapping)
             else ""
         )
         edges.append(
@@ -1396,7 +1397,7 @@ def _directional_table_grid_edge_node_ids(
     bbox_nodes: list[tuple[str, dict[str, int]]],
 ) -> tuple[str | None, str | None]:
     bbox = connector.get("bbox")
-    if not isinstance(bbox, dict):
+    if not isinstance(bbox, Mapping):
         return None, None
     center = {
         "x": _int_value(bbox.get("x"), 0)
@@ -1407,7 +1408,7 @@ def _directional_table_grid_edge_node_ids(
     metadata = connector.get("metadata")
     raw_label = (
         str(metadata.get("raw_label", ""))
-        if isinstance(metadata, dict)
+        if isinstance(metadata, Mapping)
         else ""
     )
     arrow = _flowchart_arrow(raw_label)
@@ -1463,7 +1464,7 @@ def _bbox_is_in_direction(
 
 def _is_table_flowchart_title_node(node: dict[str, object]) -> bool:
     metadata = node.get("metadata")
-    return isinstance(metadata, dict) and metadata.get("role") == "title"
+    return isinstance(metadata, Mapping) and metadata.get("role") == "title"
 
 
 def _table_without_flowchart_rows(
@@ -1507,7 +1508,7 @@ def _flowchart_rows(rows: list[object]) -> list[object]:
 
 
 def _row_cell_texts(row: object) -> list[str]:
-    if not isinstance(row, dict):
+    if not isinstance(row, Mapping):
         return []
     cells = row.get("cells")
     if not isinstance(cells, list):
@@ -1515,7 +1516,7 @@ def _row_cell_texts(row: object) -> list[str]:
     return [
         text
         for cell in cells
-        if isinstance(cell, dict)
+        if isinstance(cell, Mapping)
         and (text := _flowchart_cell_text(cell))
     ]
 
@@ -1541,7 +1542,7 @@ def _diagram_edge_source_lines(edges: object) -> list[str]:
         return []
     lines: list[str] = []
     for edge in edges:
-        if not isinstance(edge, dict):
+        if not isinstance(edge, Mapping):
             continue
         from_id = str(edge.get("from", "")).strip()
         to_id = str(edge.get("to", "")).strip()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from html import escape
 from typing import Any
 
@@ -31,7 +32,7 @@ def render_evidence_units_html(
         f"<h1>{escape(title)}</h1>",
     ]
     for unit in units:
-        if isinstance(unit, dict):
+        if isinstance(unit, Mapping):
             parts.append(_render_evidence_unit(unit, assets_by_id))
     parts.extend(["</main>", "</body>", "</html>"])
     return "\n".join(parts)
@@ -46,11 +47,11 @@ def render_evidence_html(
     kind, fmt, content = _evidence_shape(evidence)
     if kind == "composite" and isinstance(content, list):
         return _render_evidence_items(content, assets_by_id)
-    if kind == "table" and fmt == "structured_table" and isinstance(content, dict):
+    if kind == "table" and fmt == "structured_table" and isinstance(content, Mapping):
         return _render_structured_table(content, assets_by_id)
-    if kind == "diagram" and fmt == "structured_diagram" and isinstance(content, dict):
+    if kind == "diagram" and fmt == "structured_diagram" and isinstance(content, Mapping):
         return _render_structured_diagram(content)
-    if fmt == "asset_ref" and isinstance(content, dict):
+    if fmt == "asset_ref" and isinstance(content, Mapping):
         return _render_asset_ref(kind, content, assets_by_id)
     if isinstance(content, str):
         return f"<p>{_escape_multiline(content)}</p>"
@@ -72,7 +73,7 @@ def _render_evidence_items(
 ) -> str:
     parts = ['<div class="evidence-items">']
     for index, item in enumerate(items, start=1):
-        if not isinstance(item, dict):
+        if not isinstance(item, Mapping):
             continue
         labels = [f"evidence item {index}"]
         item_type = item.get("type", item.get("kind"))
@@ -110,10 +111,10 @@ def _render_evidence_unit(
     }
     legacy_evidence = unit.get("evidence")
     has_direct_shape = "content" in unit
-    if not has_direct_shape and isinstance(legacy_evidence, dict):
+    if not has_direct_shape and isinstance(legacy_evidence, Mapping):
         evidence = legacy_evidence
     source = unit.get("source", {})
-    source_text = source.get("text", "") if isinstance(source, dict) else ""
+    source_text = source.get("text", "") if isinstance(source, Mapping) else ""
     return (
         '<section class="chunk">'
         '<header class="chunk-header">'
@@ -140,14 +141,14 @@ def _render_structured_table(
     columns = [
         column
         for column in table.get("columns", [])
-        if isinstance(column, dict)
+        if isinstance(column, Mapping)
     ]
-    rows = [row for row in table.get("rows", []) if isinstance(row, dict)]
+    rows = [row for row in table.get("rows", []) if isinstance(row, Mapping)]
     html = ['<table class="evidence-table">']
     header_rows = [
         row
         for row in table.get("header_rows", [])
-        if isinstance(row, dict) and _table_row_has_content(row)
+        if isinstance(row, Mapping) and _table_row_has_content(row)
     ]
     if header_rows:
         html.append("<thead>")
@@ -222,7 +223,7 @@ def _table_row_has_content(row: dict[str, Any]) -> bool:
     if not isinstance(cells, list):
         return False
     for cell in cells:
-        if not isinstance(cell, dict):
+        if not isinstance(cell, Mapping):
             continue
         if str(cell.get("text", "")).strip():
             return True
@@ -233,12 +234,12 @@ def _table_row_has_content(row: dict[str, Any]) -> bool:
 
 
 def _render_structured_diagram(diagram: dict[str, Any]) -> str:
-    nodes = [node for node in diagram.get("nodes", []) if isinstance(node, dict)]
-    edges = [edge for edge in diagram.get("edges", []) if isinstance(edge, dict)]
+    nodes = [node for node in diagram.get("nodes", []) if isinstance(node, Mapping)]
+    edges = [edge for edge in diagram.get("edges", []) if isinstance(edge, Mapping)]
     connectors = [
         connector
         for connector in diagram.get("connectors", [])
-        if isinstance(connector, dict)
+        if isinstance(connector, Mapping)
     ]
     mermaid = diagram.get("mermaid")
     if _is_flowchart_outline_diagram(nodes, mermaid):
@@ -525,7 +526,7 @@ def _split_unpositioned_diagram_labels(
 
 def _node_bbox(node: dict[str, Any]) -> dict[str, float] | None:
     bbox = node.get("bbox")
-    if not isinstance(bbox, dict):
+    if not isinstance(bbox, Mapping):
         return None
     try:
         x = float(bbox["x"])
@@ -573,7 +574,7 @@ def _connector_line(connector: dict[str, Any]) -> dict[str, Any] | None:
 
 def _connector_bbox(connector: dict[str, Any]) -> dict[str, float] | None:
     bbox = connector.get("bbox")
-    if not isinstance(bbox, dict):
+    if not isinstance(bbox, Mapping):
         return None
     try:
         x = float(bbox["x"])
@@ -588,7 +589,7 @@ def _connector_bbox(connector: dict[str, Any]) -> dict[str, float] | None:
 
 
 def _point_xy(point: Any) -> dict[str, float] | None:
-    if not isinstance(point, dict):
+    if not isinstance(point, Mapping):
         return None
     try:
         return {"x": float(point["x"]), "y": float(point["y"])}
@@ -798,7 +799,7 @@ def _render_table_rows(
     html = []
     active_rowspans: dict[int, int] = {}
     for row in rows:
-        cells = row.get("cells", []) if isinstance(row, dict) else []
+        cells = row.get("cells", []) if isinstance(row, Mapping) else []
         occupied = {
             column_number
             for column_number, remaining in active_rowspans.items()
@@ -878,7 +879,7 @@ def _position_table_row_cells(
     positioned: list[tuple[dict[str, Any] | None, int]] = []
     current_column = 1
     sorted_cells = sorted(
-        (cell for cell in cells if isinstance(cell, dict)),
+        (cell for cell in cells if isinstance(cell, Mapping)),
         key=lambda cell: _column_id_number(str(cell.get("column_id", "c1"))),
     )
     for cell in sorted_cells:
@@ -953,7 +954,7 @@ def _render_children(
         return ""
     rendered = []
     for child in children:
-        if isinstance(child, dict):
+        if isinstance(child, Mapping):
             rendered.append('<div class="nested-evidence">')
             rendered.append(render_evidence_html(child, assets_by_id))
             rendered.append("</div>")
@@ -1010,7 +1011,7 @@ def _assets_by_id(assets: list[dict[str, Any]] | None) -> dict[str, dict[str, An
     return {
         str(asset["id"]): asset
         for asset in assets
-        if isinstance(asset, dict) and isinstance(asset.get("id"), str)
+        if isinstance(asset, Mapping) and isinstance(asset.get("id"), str)
     }
 
 

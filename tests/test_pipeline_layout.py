@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib.util
+
 
 def test_pipeline_layout_exports_stage_and_format_modules():
     from rag_document_parser import (
@@ -15,13 +17,9 @@ def test_pipeline_layout_exports_stage_and_format_modules():
     )
     from rag_document_parser.chunk import EvidenceUnitAgenticChunker as StageAgenticChunker
     from rag_document_parser.chunk.backend import Chunker
-    from rag_document_parser.enrichment import RagChunkEnricher as StageRagChunkEnricher
-    from rag_document_parser.enrichment.backend import Enricher
-    from rag_document_parser.enrichment.llm import LlmConfig
-    from rag_document_parser.evidence_unit_extraction.backend import (
-        DocumentBackend,
-        ParsedDocument,
-    )
+    from rag_document_parser.chunk.enrichment import Enricher
+    from rag_document_parser.chunk.enrichment import RagChunkEnricher as StageRagChunkEnricher
+    from rag_document_parser.evidence_unit_extraction.backend import DocumentBackend
     from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import (
         Hwp5Backend as StageHwp5Backend,
     )
@@ -36,6 +34,8 @@ def test_pipeline_layout_exports_stage_and_format_modules():
         PdfOcrConfig as StagePdfOcrConfig,
     )
     from rag_document_parser.evidence_unit_extraction.registry import default_backends
+    from rag_document_parser.llm import LlmConfig
+    from rag_document_parser.models import ParsedDocument
     from rag_document_parser.pipeline.parser import RagDocumentParser as StageParser
 
     backends = default_backends()
@@ -46,6 +46,7 @@ def test_pipeline_layout_exports_stage_and_format_modules():
     assert StageMarkdownBackend is MarkdownBackend
     assert StagePdfBackend is PdfBackend
     assert StagePdfOcrConfig is PdfOcrConfig
+    assert PdfOcrConfig is LlmConfig
     assert ParsedDocument.__name__ == "ParsedDocument"
     assert DocumentBackend.__name__ == "DocumentBackend"
     assert Chunker.__name__ == "Chunker"
@@ -63,22 +64,12 @@ def test_pipeline_layout_exports_stage_and_format_modules():
     assert isinstance(backends[".pdf"], PdfBackend)
 
 
-def test_legacy_import_paths_remain_compatible():
-    from rag_document_parser import HwpxBackend, MarkdownBackend, RagDocumentParser
-    from rag_document_parser.backends import MarkdownBackend as LegacyMarkdownBackend
-    from rag_document_parser.backends import ParsedDocument as LegacyParsedDocument
-    from rag_document_parser.evidence_unit_extraction.backend import (
-        ParsedDocument as CanonicalParsedDocument,
-    )
-    from rag_document_parser.extract.backend import ParsedDocument
-    from rag_document_parser.hwpx import HwpxBackend as LegacyHwpxBackend
-    from rag_document_parser.llm import LlmConfig as LegacyLlmConfig
-    from rag_document_parser.parser import RagDocumentParser as LegacyParser
-    from rag_document_parser.enrichment.llm import LlmConfig
-
-    assert LegacyParser is RagDocumentParser
-    assert LegacyHwpxBackend is HwpxBackend
-    assert LegacyMarkdownBackend is MarkdownBackend
-    assert LegacyParsedDocument is ParsedDocument
-    assert ParsedDocument is CanonicalParsedDocument
-    assert LegacyLlmConfig is LlmConfig
+def test_legacy_import_paths_are_removed():
+    assert importlib.util.find_spec("rag_document_parser.backends") is None
+    assert importlib.util.find_spec("rag_document_parser.evidence_html") is None
+    assert importlib.util.find_spec("rag_document_parser.extract") is None
+    assert importlib.util.find_spec("rag_document_parser.hwpx") is None
+    assert importlib.util.find_spec("rag_document_parser.chunk.llm") is None
+    assert importlib.util.find_spec("rag_document_parser.parser") is None
+    assert importlib.util.find_spec("rag_document_parser.enrichment") is None
+    assert importlib.util.find_spec("rag_document_parser.input") is None

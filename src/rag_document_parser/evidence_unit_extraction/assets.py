@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from typing import Any
 
 from ..models import DocumentAsset, EvidenceUnit, PendingAsset
@@ -59,7 +60,7 @@ def resolve_asset_content(
 ) -> Any:
     if fmt != "asset_ref":
         return resolve_asset_refs_in_value(content, assets_by_id)
-    if not isinstance(content, dict):
+    if not isinstance(content, Mapping):
         raise ValueError("asset_ref content must be an object")
     asset_id = content.get("asset_id")
     if not isinstance(asset_id, str):
@@ -84,7 +85,7 @@ def resolve_asset_refs_in_value(
 ) -> Any:
     if isinstance(value, list):
         return [resolve_asset_refs_in_value(item, assets_by_id) for item in value]
-    if not isinstance(value, dict):
+    if not isinstance(value, Mapping):
         return value
     nested = nested_evidence(value)
     if nested is not None:

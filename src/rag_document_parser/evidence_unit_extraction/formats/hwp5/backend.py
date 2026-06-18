@@ -4,6 +4,7 @@ import io
 import re
 import struct
 import zlib
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -670,7 +671,7 @@ def _edge_from_connector_subject_ids(
     edge_labels: list[str],
 ) -> dict[str, object] | None:
     metadata = connector.get("metadata")
-    if not isinstance(metadata, dict):
+    if not isinstance(metadata, Mapping):
         return None
     start_subject_id = metadata.get("start_subject_id")
     end_subject_id = metadata.get("end_subject_id")
@@ -700,7 +701,7 @@ def _nodes_by_instance_id(nodes: list[dict[str, object]]) -> dict[str, str]:
     result: dict[str, str] = {}
     for node in nodes:
         metadata = node.get("metadata")
-        if not isinstance(metadata, dict):
+        if not isinstance(metadata, Mapping):
             continue
         instance_id = metadata.get("instance_id")
         if instance_id in (None, ""):
@@ -767,7 +768,7 @@ def _diagram_node_bbox(
     node: dict[str, object],
 ) -> dict[str, int] | None:
     bbox = node.get("bbox")
-    if not isinstance(bbox, dict):
+    if not isinstance(bbox, Mapping):
         return None
     x = _bbox_int(bbox, "x")
     y = _bbox_int(bbox, "y")
@@ -779,7 +780,7 @@ def _diagram_node_bbox(
 
 
 def _diagram_point(point: object) -> dict[str, int] | None:
-    if not isinstance(point, dict):
+    if not isinstance(point, Mapping):
         return None
     try:
         return {"x": int(point["x"]), "y": int(point["y"])}
@@ -823,7 +824,7 @@ def _diagram_source_text(diagram: dict[str, object]) -> str:
         for text in (
             str(node.get("text", "")).strip()
             for node in nodes
-            if isinstance(node, dict)
+            if isinstance(node, Mapping)
         )
         if text
     ]
@@ -839,7 +840,7 @@ def _diagram_edge_source_lines(edges: object) -> list[str]:
         return []
     lines = []
     for edge in edges:
-        if not isinstance(edge, dict):
+        if not isinstance(edge, Mapping):
             continue
         from_id = str(edge.get("from", "")).strip()
         to_id = str(edge.get("to", "")).strip()
@@ -864,7 +865,7 @@ def _unresolved_connector_details(
     resolved = {
         str(edge.get("connector_id", ""))
         for edge in edges
-        if isinstance(edge, dict) and edge.get("connector_id")
+        if isinstance(edge, Mapping) and edge.get("connector_id")
     }
     return [
         _connector_warning_details(
@@ -872,7 +873,7 @@ def _unresolved_connector_details(
             nodes if isinstance(nodes, list) else [],
         )
         for connector in connectors
-        if isinstance(connector, dict)
+        if isinstance(connector, Mapping)
         and connector.get("id")
         and str(connector.get("id")) not in resolved
     ]
@@ -890,7 +891,7 @@ def _connector_warning_details(
         "arrow": bool(connector.get("arrow")),
         "metadata": (
             dict(connector.get("metadata"))
-            if isinstance(connector.get("metadata"), dict)
+            if isinstance(connector.get("metadata"), Mapping)
             else {}
         ),
         "resolution_failure": _connector_resolution_failure(connector, nodes),
@@ -902,9 +903,9 @@ def _connector_resolution_failure(
     connector: dict[str, object],
     nodes: list[object],
 ) -> str:
-    node_dicts = [node for node in nodes if isinstance(node, dict)]
+    node_dicts = [node for node in nodes if isinstance(node, Mapping)]
     metadata = connector.get("metadata")
-    if isinstance(metadata, dict):
+    if isinstance(metadata, Mapping):
         start_subject_id = metadata.get("start_subject_id")
         end_subject_id = metadata.get("end_subject_id")
         if start_subject_id not in (None, 0) or end_subject_id not in (None, 0):

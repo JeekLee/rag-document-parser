@@ -2,15 +2,14 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
-from ..enrichment.backend import Enricher
-from ..enrichment.chunk import RagChunkEnricher
-from ..enrichment.llm import LlmConfig, chat_json
 from ..models import Evidence, EvidenceItem, EvidenceUnit, RagChunk, SourceEvidence
+from ..llm import LlmConfig, chat_json
+from .enrichment import Enricher, RagChunkEnricher
 
 PlanFn = Callable[[list[EvidenceUnit], LlmConfig | None, int], Any]
 BoundaryMergeFn = Callable[[RagChunk, RagChunk, LlmConfig | None, int], Any]
@@ -263,7 +262,7 @@ def _materialize_window(
     chunks: list[RagChunk] = []
 
     for item in raw_plan:
-        if not isinstance(item, dict):
+        if not isinstance(item, Mapping):
             raise ValueError("chunk plan item must be an object")
 
         operations = item.get("operations")
@@ -288,7 +287,7 @@ def _materialize_window(
         normalized_ops: list[dict[str, Any]] = []
 
         for operation in operations:
-            if not isinstance(operation, dict):
+            if not isinstance(operation, Mapping):
                 raise ValueError("operation must be an object")
 
             unit_id = operation.get("unit_id")
@@ -350,7 +349,7 @@ def _fallback_reason(exc: Exception) -> str:
 
 
 def _boundary_action(decision: Any) -> str:
-    if not isinstance(decision, dict):
+    if not isinstance(decision, Mapping):
         return "keep"
     action = decision.get("action")
     return action if action in {"merge", "keep"} else "keep"
@@ -373,7 +372,7 @@ def _merge_adjacent_chunks(
     decision: Any,
     max_units_per_chunk: int,
 ) -> RagChunk:
-    decision = decision if isinstance(decision, dict) else {}
+    decision = decision if isinstance(decision, Mapping) else {}
     evidence_items = [*left.evidence.items, *right.evidence.items]
     source_text = "\n\n".join(
         text for text in [left.source.text, right.source.text] if text
@@ -705,7 +704,7 @@ def _is_splittable_table_item(item: EvidenceItem) -> bool:
     return (
         item.type == "table"
         and item.format == "structured_table"
-        and isinstance(item.content, dict)
+        and isinstance(item.content, Mapping)
         and isinstance(item.content.get("rows"), list)
         and len(item.content.get("rows", [])) > 1
     )
@@ -718,8 +717,8 @@ def _split_table_item_by_rows(
     target_tokens_per_chunk: int,
     max_tokens_per_chunk: int,
 ) -> list[_TableRowSplit]:
-    table = item.content if isinstance(item.content, dict) else {}
-    rows = [row for row in table.get("rows", []) if isinstance(row, dict)]
+    table = item.content if isinstance(item.content, Mapping) else {}
+    rows = [row for row in table.get("rows", []) if isinstance(row, Mapping)]
     if len(rows) <= 1:
         return [
             _TableRowSplit(
@@ -760,7 +759,7 @@ def _table_row_split(
     rows: list[dict[str, Any]],
     context_text: str,
 ) -> _TableRowSplit:
-    table = item.content if isinstance(item.content, dict) else {}
+    table = item.content if isinstance(item.content, Mapping) else {}
     row_ranges = _row_ranges_from_rows(rows)
     subset = _table_subset(
         table,
@@ -769,7 +768,7 @@ def _table_row_split(
     subset_rows = [
         row
         for row in subset.get("rows", [])
-        if isinstance(row, dict)
+        if isinstance(row, Mapping)
     ]
     metadata = dict(item.metadata)
     metadata["row_ranges"] = row_ranges
@@ -838,12 +837,12 @@ def _table_context_text(
     if len(source_unit_ids) == 1 and source_unit_ids[0] in units_by_id:
         unit = units_by_id[source_unit_ids[0]]
         common = unit.metadata.get("common", {})
-        if isinstance(common, dict):
+        if isinstance(common, Mapping):
             section_path = common.get("section_path")
             if isinstance(section_path, list):
                 context_parts.extend(str(part).strip() for part in section_path if str(part).strip())
 
-    table = item.content if isinstance(item.content, dict) else {}
+    table = item.content if isinstance(item.content, Mapping) else {}
     caption = table.get("caption")
     if isinstance(caption, str) and caption.strip():
         context_parts.append(caption.strip())
@@ -863,7 +862,7 @@ def _compact_table_columns(columns: Any) -> str:
     parts: list[str] = []
     previous = ""
     for index, column in enumerate(columns, start=1):
-        if not isinstance(column, dict):
+        if not isinstance(column, Mapping):
             continue
         label = _normalize_space(str(column.get("text", "")))
         if not label or label == previous:
@@ -880,7 +879,7 @@ def _table_split_source_text(
     context_text: str,
     rows: list[dict[str, Any]],
 ) -> str:
-    table = item.content if isinstance(item.content, dict) else {}
+    table = item.content if isinstance(item.content, Mapping) else {}
     columns = table.get("columns", [])
     if not isinstance(columns, list):
         columns = []
@@ -901,7 +900,7 @@ def _compact_table_row_text(row: dict[str, Any], columns: list[Any]) -> str:
     cells = row.get("cells", [])
     if isinstance(cells, list):
         for cell in cells:
-            if not isinstance(cell, dict):
+            if not isinstance(cell, Mapping):
                 continue
             text = _normalize_space(str(cell.get("text", "")))
             if not text:
@@ -1025,7 +1024,7 @@ def _rebuild_chunk_from_items(
     metadata["common"] = {
         **(
             dict(original.metadata.get("common"))
-            if isinstance(original.metadata.get("common"), dict)
+            if isinstance(original.metadata.get("common"), Mapping)
             else {}
         ),
         "unit_types": _unique([item.type for item in evidence_items]),
@@ -1085,7 +1084,7 @@ def _operations_from_evidence_items(items: list[EvidenceItem]) -> list[dict[str,
         unit_ids = list(item.source_unit_ids)
         row_ranges = (
             item.metadata.get("row_ranges")
-            if isinstance(item.metadata, dict)
+            if isinstance(item.metadata, Mapping)
             else None
         )
         if len(unit_ids) == 1 and isinstance(row_ranges, list):
@@ -1106,7 +1105,7 @@ def _source_text_for_evidence_item(
     item: EvidenceItem,
     units_by_id: dict[str, EvidenceUnit],
 ) -> str:
-    if item.format == "structured_table" and isinstance(item.content, dict):
+    if item.format == "structured_table" and isinstance(item.content, Mapping):
         return _table_source_text(item.content)
 
     source_unit_ids = list(item.source_unit_ids)
@@ -1223,7 +1222,7 @@ def _item_plain_text(
     source_unit_ids = list(item.source_unit_ids)
     if len(source_unit_ids) == 1 and source_unit_ids[0] in units_by_id:
         return units_by_id[source_unit_ids[0]].source.text
-    if isinstance(item.content, dict):
+    if isinstance(item.content, Mapping):
         return _plain_text_from_value(item.content)
     return str(item.content)
 
@@ -1236,7 +1235,7 @@ def _plain_text_from_value(value: Any) -> str:
             if node.strip():
                 parts.append(node.strip())
             return
-        if isinstance(node, dict):
+        if isinstance(node, Mapping):
             text = node.get("text")
             if isinstance(text, str) and text.strip():
                 parts.append(text.strip())
@@ -1384,7 +1383,7 @@ def _omitted_table_rows(
             continue
 
         unit = by_id[unit_id]
-        if unit.format != "structured_table" or not isinstance(unit.content, dict):
+        if unit.format != "structured_table" or not isinstance(unit.content, Mapping):
             continue
 
         rows = unit.content.get("rows", [])
@@ -1407,7 +1406,7 @@ def _operation_unit_ids(
 ) -> list[str]:
     unit_ids: list[str] = []
     for operation in operations:
-        if not isinstance(operation, dict):
+        if not isinstance(operation, Mapping):
             raise ValueError("operation must be an object")
         unit_id = operation.get("unit_id")
         if not isinstance(unit_id, str) or unit_id not in by_id:
@@ -1424,7 +1423,7 @@ def _normalize_plan_operations(
         operation.get("unit_id")
         for operation in operations
         if (
-            isinstance(operation, dict)
+            isinstance(operation, Mapping)
             and operation.get("action", "include") == "include"
             and isinstance(operation.get("unit_id"), str)
             and _is_structured_table_unit(by_id.get(operation.get("unit_id")))
@@ -1437,7 +1436,7 @@ def _normalize_plan_operations(
     ignored_row_unit_ids: list[str] = []
     for operation in operations:
         if (
-            isinstance(operation, dict)
+            isinstance(operation, Mapping)
             and operation.get("action") == "include_rows"
             and operation.get("unit_id") in full_include_unit_ids
         ):
@@ -1460,7 +1459,7 @@ def _is_structured_table_unit(unit: EvidenceUnit | None) -> bool:
     return (
         unit is not None
         and unit.format == "structured_table"
-        and isinstance(unit.content, dict)
+        and isinstance(unit.content, Mapping)
     )
 
 
@@ -1528,7 +1527,7 @@ def _materialize_operation(
 
     if action == "include_rows":
         ranges = _normalize_row_ranges(operation.get("row_ranges"))
-        if unit.format != "structured_table" or not isinstance(unit.content, dict):
+        if unit.format != "structured_table" or not isinstance(unit.content, Mapping):
             raise ValueError(f"include_rows requires structured_table unit: {unit.id}")
 
         subset = _table_subset(unit.content, ranges)
@@ -1577,7 +1576,7 @@ def _table_subset(table: dict[str, Any], ranges: list[tuple[int, int]]) -> dict[
         index
         for row in rows
         if (
-            isinstance(row, dict)
+            isinstance(row, Mapping)
             and type(row.get("index")) is int
             and _row_selected(row["index"], ranges)
         )
@@ -1586,7 +1585,7 @@ def _table_subset(table: dict[str, Any], ranges: list[tuple[int, int]]) -> dict[
     carried_by_row = _rowspan_context_cells_by_row(table, rows, selected_indexes)
     selected: list[dict[str, Any]] = []
     for row in rows:
-        if not isinstance(row, dict):
+        if not isinstance(row, Mapping):
             continue
         index = row.get("index")
         if type(index) is int and _row_selected(index, ranges):
@@ -1623,7 +1622,7 @@ def _rowspan_context_cells_by_row(
 
     result: dict[int, list[dict[str, Any]]] = {}
     for row in rows:
-        if not isinstance(row, dict):
+        if not isinstance(row, Mapping):
             continue
         start_index = row.get("index")
         if type(start_index) is not int:
@@ -1632,7 +1631,7 @@ def _rowspan_context_cells_by_row(
         if not isinstance(cells, list):
             continue
         for cell in cells:
-            if not isinstance(cell, dict):
+            if not isinstance(cell, Mapping):
                 continue
             rowspan = _positive_int(cell.get("rowspan"))
             if rowspan <= 1:
@@ -1647,7 +1646,7 @@ def _rowspan_context_cells_by_row(
                 carried["rowspan"] = group[1] - group[0] + 1
                 metadata = (
                     dict(carried.get("metadata"))
-                    if isinstance(carried.get("metadata"), dict)
+                    if isinstance(carried.get("metadata"), Mapping)
                     else {}
                 )
                 metadata["rowspan_context"] = {
@@ -1671,7 +1670,7 @@ def _row_with_carried_cells(
     existing_cells = [
         dict(cell)
         for cell in row.get("cells", [])
-        if isinstance(cell, dict)
+        if isinstance(cell, Mapping)
     ]
     columns = table.get("columns", [])
     if not isinstance(columns, list):
@@ -1720,7 +1719,7 @@ def _cell_column_span(cell: dict[str, Any], columns: list[Any]) -> tuple[int, in
 
 def _column_index(columns: list[Any], column_id: Any) -> int | None:
     for index, column in enumerate(columns):
-        if isinstance(column, dict) and column.get("id") == column_id:
+        if isinstance(column, Mapping) and column.get("id") == column_id:
             return index
     if isinstance(column_id, str):
         match = re.fullmatch(r"c([1-9][0-9]*)", column_id)
@@ -1738,7 +1737,7 @@ def _positive_int(value: Any) -> int:
 def _table_row_indexes(rows: list[Any]) -> list[int]:
     indexes: list[int] = []
     for row in rows:
-        if not isinstance(row, dict):
+        if not isinstance(row, Mapping):
             continue
         index = row.get("index")
         if type(index) is int:
@@ -1818,7 +1817,7 @@ def _table_source_text(table: dict[str, Any]) -> str:
     labels = [
         str(column.get("text", "")).strip()
         for column in columns
-        if isinstance(column, dict)
+        if isinstance(column, Mapping)
     ]
     if labels:
         lines.append("columns: " + " | ".join(labels))
@@ -1828,13 +1827,13 @@ def _table_source_text(table: dict[str, Any]) -> str:
         return "\n".join(lines)
 
     for row in rows:
-        if not isinstance(row, dict):
+        if not isinstance(row, Mapping):
             continue
         values: list[str] = []
         cells = row.get("cells", [])
         if isinstance(cells, list):
             for cell in cells:
-                if not isinstance(cell, dict):
+                if not isinstance(cell, Mapping):
                     continue
                 label = _column_label(columns, cell.get("column_id"))
                 text = str(cell.get("text", "")).strip()
@@ -1848,7 +1847,7 @@ def _table_source_text(table: dict[str, Any]) -> str:
 def _column_label(columns: list[Any], column_id: Any) -> str:
     for column in columns:
         if (
-            isinstance(column, dict)
+            isinstance(column, Mapping)
             and column.get("id") == column_id
             and isinstance(column.get("text"), str)
             and column["text"].strip()
@@ -1861,7 +1860,7 @@ def _column_label(columns: list[Any], column_id: Any) -> str:
             index = int(match.group(1)) - 1
             if 0 <= index < len(columns):
                 column = columns[index]
-                if isinstance(column, dict) and isinstance(column.get("text"), str):
+                if isinstance(column, Mapping) and isinstance(column.get("text"), str):
                     text = column["text"].strip()
                     if text:
                         return text
@@ -1935,7 +1934,7 @@ def _strings(value: Any) -> list[str]:
 def _dicts(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
-    return [item for item in value if isinstance(item, dict)]
+    return [item for item in value if isinstance(item, Mapping)]
 
 
 def _context_unit_ids(
@@ -2142,7 +2141,7 @@ def _fallback_chunks(
             metadata=dict(unit.metadata),
         )
         common = {}
-        if isinstance(unit.metadata.get("common"), dict):
+        if isinstance(unit.metadata.get("common"), Mapping):
             common.update(unit.metadata["common"])
         common["unit_types"] = [unit.type]
         common["display_format"] = "composite"
@@ -2226,7 +2225,7 @@ def _boundary_chunk_payload(chunk: RagChunk) -> dict[str, Any]:
         "context_unit_ids": _strings(chunk.metadata.get("context_unit_ids")),
         "unit_types": _strings(
             chunk.metadata.get("common", {}).get("unit_types")
-            if isinstance(chunk.metadata.get("common"), dict)
+            if isinstance(chunk.metadata.get("common"), Mapping)
             else None
         ),
         "summary": chunk.summary,
@@ -2245,13 +2244,13 @@ def _boundary_chunk_payload(chunk: RagChunk) -> dict[str, Any]:
 
 
 def _example_row_range(unit: EvidenceUnit) -> list[int] | None:
-    if not isinstance(unit.content, dict):
+    if not isinstance(unit.content, Mapping):
         return None
     rows = unit.content.get("rows")
     if not isinstance(rows, list):
         return None
     for row in rows:
-        if not isinstance(row, dict):
+        if not isinstance(row, Mapping):
             continue
         index = row.get("index")
         if type(index) is int:
@@ -2268,7 +2267,7 @@ def _unit_payload(index: int, unit: EvidenceUnit) -> dict[str, Any]:
         "index": index,
         "type": unit.type,
         "format": unit.format,
-        "section_path": common.get("section_path", []) if isinstance(common, dict) else [],
+        "section_path": common.get("section_path", []) if isinstance(common, Mapping) else [],
         "source_preview": _truncate(unit.source.text, 900),
         "table": _compact_table(table),
         "asset": _compact_asset(asset),
@@ -2276,7 +2275,7 @@ def _unit_payload(index: int, unit: EvidenceUnit) -> dict[str, Any]:
 
 
 def _compact_table(table: Any) -> dict[str, Any]:
-    if not isinstance(table, dict):
+    if not isinstance(table, Mapping):
         return {}
     result: dict[str, Any] = {}
     if "table_id" in table:
@@ -2289,7 +2288,7 @@ def _compact_table(table: Any) -> dict[str, Any]:
 
 
 def _compact_asset(asset: Any) -> dict[str, Any]:
-    if not isinstance(asset, dict):
+    if not isinstance(asset, Mapping):
         return {}
     result: dict[str, Any] = {}
     for key in ("asset_id", "kind", "mime", "ext", "uri", "public_url", "alt", "caption"):

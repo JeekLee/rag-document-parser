@@ -6,8 +6,8 @@ from pathlib import Path
 
 
 def test_upload_assets_adds_public_url_when_public_endpoint_is_configured(monkeypatch):
-    from rag_document_parser.backends import ParsedDocument, PendingAsset
-    from rag_document_parser.models import EvidenceUnit, SourceEvidence
+    from rag_document_parser.evidence_unit_extraction.backend import ParsedDocument
+    from rag_document_parser.models import EvidenceUnit, PendingAsset, SourceEvidence
     from rag_document_parser.storage import S3Config
 
     validate_hwpx_clic_minio = _load_validation_script()

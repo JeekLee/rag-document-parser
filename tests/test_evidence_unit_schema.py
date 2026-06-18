@@ -3,15 +3,19 @@ from __future__ import annotations
 
 def test_common_metadata_schema_helper_keeps_canonical_shape():
     from rag_document_parser.evidence_unit_extraction.schema import common_metadata
+    from rag_document_parser.models import CommonMetadataPayload
 
-    assert common_metadata("table", "structured_table", section_path=["고시"]) == {
+    metadata = common_metadata("table", "structured_table", section_path=["고시"])
+
+    assert isinstance(metadata, CommonMetadataPayload)
+    assert metadata.to_dict() == {
         "common": {
             "chunk_kind": "table",
             "section_path": ["고시"],
             "display_format": "structured_table",
         }
     }
-    assert common_metadata("image", "image") == {
+    assert common_metadata("image", "image").to_dict() == {
         "common": {
             "chunk_kind": "image",
             "section_path": [],
@@ -22,13 +26,13 @@ def test_common_metadata_schema_helper_keeps_canonical_shape():
 
 def test_evidence_unit_schema_reexports_canonical_envelope_types():
     from rag_document_parser import EvidenceItem, EvidenceUnit, SourceEvidence
-    from rag_document_parser.evidence_unit_extraction.schema.evidence_unit import (
+    from rag_document_parser.evidence_unit_extraction.schema import (
         EvidenceItem as SchemaEvidenceItem,
     )
-    from rag_document_parser.evidence_unit_extraction.schema.evidence_unit import (
+    from rag_document_parser.evidence_unit_extraction.schema import (
         EvidenceUnit as SchemaEvidenceUnit,
     )
-    from rag_document_parser.evidence_unit_extraction.schema.evidence_unit import (
+    from rag_document_parser.evidence_unit_extraction.schema import (
         SourceEvidence as SchemaSourceEvidence,
     )
 
@@ -39,12 +43,17 @@ def test_evidence_unit_schema_reexports_canonical_envelope_types():
 
 def test_asset_ref_schema_helper_keeps_canonical_shape():
     from rag_document_parser.evidence_unit_extraction.schema import asset_ref_content
+    from rag_document_parser.models import AssetRefContent
 
-    assert asset_ref_content("img-0001") == {
+    content = asset_ref_content("img-0001")
+
+    assert isinstance(content, AssetRefContent)
+    assert not isinstance(content, dict)
+    assert content.to_dict() == {
         "asset_id": "img-0001",
         "caption": None,
     }
-    assert asset_ref_content("img-0002", caption="도표") == {
+    assert asset_ref_content("img-0002", caption="도표").to_dict() == {
         "asset_id": "img-0002",
         "caption": "도표",
     }
@@ -58,6 +67,7 @@ def test_structured_table_schema_helpers_keep_canonical_shape():
         table_column,
         table_row,
     )
+    from rag_document_parser.models import StructuredTableContent
 
     child = {
         "type": "image",
@@ -78,11 +88,17 @@ def test_structured_table_schema_helpers_keep_canonical_shape():
         ],
     )
 
-    assert structured_table(
+    table = structured_table(
         columns=[table_column("c1", "구분"), table_column("c2", "세부")],
         rows=[row],
         header_rows=[header_row],
-    ) == {
+    )
+
+    assert isinstance(table, StructuredTableContent)
+    assert not isinstance(table, dict)
+    assert table.columns[0].text == "구분"
+    assert table["columns"][0]["text"] == "구분"
+    assert table.to_dict() == {
         "caption": None,
         "columns": [
             {"id": "c1", "text": "구분"},
@@ -133,12 +149,13 @@ def test_structured_diagram_schema_helpers_keep_canonical_shape():
         diagram_node,
         structured_diagram,
     )
+    from rag_document_parser.models import BoundingBox, DiagramPoint, StructuredDiagramContent
 
     bbox = {"x": 100, "y": 120, "width": 200, "height": 80, "unit": "hwpx"}
     start = {"x": 300, "y": 160}
     end = {"x": 500, "y": 160}
 
-    assert structured_diagram(
+    diagram = structured_diagram(
         nodes=[
             diagram_node("n1", "rect", "수급권자", bbox=bbox, metadata={"source": "test"}),
             diagram_node("n2", "rect", "심사평가원"),
@@ -164,7 +181,15 @@ def test_structured_diagram_schema_helpers_keep_canonical_shape():
             )
         ],
         mermaid="graph LR",
-    ) == {
+    )
+
+    assert isinstance(diagram, StructuredDiagramContent)
+    assert not isinstance(diagram, dict)
+    assert isinstance(diagram.nodes[0].bbox, BoundingBox)
+    assert isinstance(diagram.connectors[0].points[0], DiagramPoint)
+    assert diagram.nodes[0].text == "수급권자"
+    assert diagram["nodes"][0]["text"] == "수급권자"
+    assert diagram.to_dict() == {
         "caption": None,
         "nodes": [
             {

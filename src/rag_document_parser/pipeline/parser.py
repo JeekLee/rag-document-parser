@@ -6,9 +6,19 @@ from dataclasses import dataclass
 from ..evidence_unit_extraction.assets import resolve_units, upload_assets
 from ..evidence_unit_extraction.backend import DocumentBackend
 from ..evidence_unit_extraction.registry import default_backends
-from ..input import normalize_source, normalize_suffix
 from ..models import ParseResult, SourceInfo
 from ..storage import S3Config
+
+
+def _normalize_source(source: bytes | str) -> bytes:
+    return source.encode() if isinstance(source, str) else bytes(source)
+
+
+def _normalize_suffix(suffix: str) -> str:
+    normalized = suffix.lower()
+    if normalized.startswith("."):
+        return normalized
+    return f".{normalized}"
 
 
 @dataclass
@@ -23,7 +33,7 @@ class RagDocumentParser:
         if self.backends:
             backends.update(
                 {
-                    normalize_suffix(suffix): backend
+                    _normalize_suffix(suffix): backend
                     for suffix, backend in self.backends.items()
                 }
             )
@@ -38,8 +48,8 @@ class RagDocumentParser:
         source_name: str | None = None,
         source_url: str | None = None,
     ) -> ParseResult:
-        data = normalize_source(source)
-        normalized_suffix = normalize_suffix(suffix)
+        data = _normalize_source(source)
+        normalized_suffix = _normalize_suffix(suffix)
         backend = self._backend_for(normalized_suffix)
         parsed = backend.parse(data, normalized_suffix)
         sha256 = hashlib.sha256(data).hexdigest()

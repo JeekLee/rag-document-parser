@@ -238,7 +238,6 @@ def test_hwpx_minio_diagram_fixture_preserves_flowchart_geometry():
     nodes_by_text = {
         str(node["text"]): node
         for node in diagram.content["nodes"]
-        if isinstance(node, dict)
     }
     assert nodes_by_text["조산아 및 저체중 출생아 등록절차"]["bbox"] == {
         "x": 0,
@@ -344,6 +343,7 @@ def test_hwpx_medical_fee_form_table_preserves_blank_body_rows():
 
 def test_supported_hwp5_and_pdf_corpus_extracts_evidence_units():
     from rag_document_parser import Hwp5Backend, PdfBackend
+    from rag_document_parser.models import StructuredDiagramContent, StructuredTableContent
 
     documents = [
         document
@@ -400,12 +400,14 @@ def test_supported_hwp5_and_pdf_corpus_extracts_evidence_units():
         for unit in table_units:
             assert unit.source.text.startswith("table: "), document["id"]
             assert unit.format == "structured_table", document["id"]
-            assert isinstance(unit.content, dict), document["id"]
+            assert isinstance(unit.content, StructuredTableContent), document["id"]
+            assert not isinstance(unit.content, dict), document["id"]
         for unit in parsed.units:
             if unit.type != "diagram":
                 continue
             assert unit.format == "structured_diagram", document["id"]
-            assert isinstance(unit.content, dict), document["id"]
+            assert isinstance(unit.content, StructuredDiagramContent), document["id"]
+            assert not isinstance(unit.content, dict), document["id"]
             assert "nodes" in unit.content, document["id"]
 
 

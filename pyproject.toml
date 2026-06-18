@@ -5,6 +5,9 @@ description = "RAG-ready document parser with source evidence and LLM-enriched c
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
+dependencies = [
+    "pydantic>=2",
+]
 
 [project.optional-dependencies]
 hwp5 = ["olefile>=0.47"]
