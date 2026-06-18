@@ -24,6 +24,8 @@ _PROMPT = """\
 - structured_table은 include_rows로 여러 chunk에 분해할 수 있습니다.
 - include_rows row range는 겹치지 않아야 하며 table row 범위 안에 있어야 합니다.
 - include_rows의 row_ranges는 양 끝을 포함하는 inclusive [start, end] 쌍 목록입니다.
+- include_rows를 사용하면 해당 table의 모든 실제 row index를 빠짐없이, 겹치지 않게 포함해야 합니다.
+- table row coverage에 확신이 없으면 action "include"로 전체 table을 포함합니다.
 - context_unit_ids는 선택 사항이며 이미 이전 chunk에서 evidence로 포함된 unit id만 작성합니다.
 - text, table, image를 같은 chunk에 묶을 수 있습니다.
 - 원문에 없는 사실을 summary, keywords, questions에 추가하지 않습니다.
@@ -87,13 +89,14 @@ class EvidenceUnitAgenticChunker:
         return [_reindex_chunk(index, chunk) for index, chunk in enumerate(chunks, start=1)]
 
     def _chunk_window(self, window: list[EvidenceUnit]) -> _WindowResult:
+        raw_plan: Any | None = None
         try:
             _validate_unique_unit_ids(window)
             raw_plan = self._plan_fn(window, self._llm, self._max_units)
-            chunks = _materialize_window(window, raw_plan)
+            chunks = _materialize_window(window, raw_plan, self._max_units)
         except Exception as exc:
             reason = _fallback_reason(exc)
-            return _WindowResult(_fallback_chunks(window, reason), reason)
+            return _WindowResult(_fallback_chunks(window, reason, raw_plan), reason)
         return _WindowResult(chunks)
 
     def _default_plan(
@@ -111,7 +114,11 @@ def _windows(units: list[EvidenceUnit], size: int) -> list[list[EvidenceUnit]]:
     return [units[index : index + size] for index in range(0, len(units), size)]
 
 
-def _materialize_window(units: list[EvidenceUnit], raw_plan: Any) -> list[RagChunk]:
+def _materialize_window(
+    units: list[EvidenceUnit],
+    raw_plan: Any,
+    max_units_per_chunk: int | None = None,
+) -> list[RagChunk]:
     if not isinstance(raw_plan, list):
         raise ValueError("chunk plan must be a list")
 
@@ -168,6 +175,7 @@ def _materialize_window(units: list[EvidenceUnit], raw_plan: Any) -> list[RagChu
                 item,
                 normalized_ops,
                 context_unit_ids,
+                max_units_per_chunk,
             )
         )
         full_assigned = next_full_assigned
@@ -484,6 +492,7 @@ def _chunk_from_items(
     plan: dict[str, Any],
     operations: list[dict[str, Any]],
     context_unit_ids: list[str],
+    max_units_per_chunk: int | None = None,
 ) -> RagChunk:
     source_text = "\n\n".join(source_parts)
     source_unit_ids = _unique([unit.id for unit in units])
@@ -496,6 +505,25 @@ def _chunk_from_items(
     question_topic = source_text.strip().replace("\n", " ")[:160] or title or summary
     questions = _strings(plan.get("questions")) or _fallback_questions(question_topic)
     chunk_type = _chunk_type(evidence_items)
+    metadata = {
+        "source_unit_ids": source_unit_ids,
+        "source_units": _source_units(units),
+        "context_unit_ids": context_unit_ids,
+        "operations": operations,
+        "title": title,
+        "common": {
+            "unit_types": _unique([unit.type for unit in units]),
+            "display_format": "composite",
+        },
+    }
+    if max_units_per_chunk is not None and len(source_unit_ids) > max_units_per_chunk:
+        metadata["_warnings"] = [
+            {
+                "type": "agentic_chunk_exceeds_max_units",
+                "source_unit_count": len(source_unit_ids),
+                "max_units_per_chunk": max_units_per_chunk,
+            }
+        ]
 
     return RagChunk(
         id=f"chunk-{index}",
@@ -505,17 +533,7 @@ def _chunk_from_items(
         summary=summary,
         keywords=keywords,
         questions=questions,
-        metadata={
-            "source_unit_ids": source_unit_ids,
-            "source_units": _source_units(units),
-            "context_unit_ids": context_unit_ids,
-            "operations": operations,
-            "title": title,
-            "common": {
-                "unit_types": _unique([unit.type for unit in units]),
-                "display_format": "composite",
-            },
-        },
+        metadata=metadata,
     )
 
 
@@ -604,8 +622,27 @@ def _fallback_questions(topic: str) -> list[str]:
     return [f"{base}에 대해 무엇을 알 수 있나요?"]
 
 
-def _fallback_chunks(units: list[EvidenceUnit], reason: str) -> list[RagChunk]:
+def _debug_value(value: Any, limit: int = 8000) -> Any:
+    try:
+        text = json.dumps(value, ensure_ascii=False)
+    except TypeError:
+        text = repr(value)
+        if len(text) > limit:
+            return {"truncated": True, "preview": text[:limit]}
+        return text
+
+    if len(text) > limit:
+        return {"truncated": True, "preview": text[:limit]}
+    return json.loads(text)
+
+
+def _fallback_chunks(
+    units: list[EvidenceUnit],
+    reason: str,
+    raw_plan: Any | None = None,
+) -> list[RagChunk]:
     chunks: list[RagChunk] = []
+    rejected_plan = _debug_value(raw_plan) if raw_plan is not None else None
     for index, unit in enumerate(units, start=1):
         item = EvidenceItem(
             type=unit.type,
@@ -627,6 +664,8 @@ def _fallback_chunks(units: list[EvidenceUnit], reason: str) -> list[RagChunk]:
             "_fallback_reason": reason,
             "common": common,
         }
+        if rejected_plan is not None:
+            metadata["_rejected_plan"] = rejected_plan
         chunks.append(
             RagChunk(
                 id=f"chunk-{index}",

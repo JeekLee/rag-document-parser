@@ -181,6 +181,8 @@ def test_agentic_chunker_uses_rich_korean_llm_prompt_contract(monkeypatch):
     assert '"row_ranges": [[1, 1]]' in prompt
     assert "양 끝을 포함" in prompt
     assert "inclusive [start, end]" in prompt
+    assert "모든 실제 row index" in prompt
+    assert 'action "include"로 전체 table을 포함' in prompt
     assert "evidence content는 작성하지 않습니다" in prompt
     assert "evidence content는 unit에서 복사됩니다" in prompt
     assert chunks[0].summary == "표 전체를 제공한다."
@@ -418,21 +420,35 @@ def test_agentic_chunker_falls_back_without_dropping_units_on_invalid_plan():
     from rag_document_parser.chunk import EvidenceUnitAgenticChunker
 
     units = [_text_unit("b1", "첫 번째 설명"), _text_unit("b2", "두 번째 설명")]
+    rejected_plan = [
+        {
+            "unit_ids": ["b1"],
+            "operations": [{"unit_id": "b1", "action": "include"}],
+            "summary": "첫 번째만 포함한다.",
+        }
+    ]
 
     def plan_fn(window, cfg, max_units):
-        return [
-            {
-                "unit_ids": ["b1"],
-                "operations": [{"unit_id": "b1", "action": "include"}],
-                "summary": "첫 번째만 포함한다.",
-            }
-        ]
+        return rejected_plan
 
     chunks = EvidenceUnitAgenticChunker(llm=None, plan_fn=plan_fn).chunk(units)
 
     assert [chunk.metadata["source_unit_ids"] for chunk in chunks] == [["b1"], ["b2"]]
     assert chunks[0].metadata["_fallback_reason"].startswith("chunk plan omitted units")
     assert chunks[1].metadata["_fallback_reason"].startswith("chunk plan omitted units")
+    assert chunks[0].metadata["_rejected_plan"] == rejected_plan
+    assert chunks[1].metadata["_rejected_plan"] == rejected_plan
+
+
+def test_agentic_chunker_does_not_record_rejected_plan_when_planner_raises_exception():
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    def plan_fn(window, cfg, max_units):
+        raise RuntimeError("planner down")
+
+    chunks = EvidenceUnitAgenticChunker(llm=None, plan_fn=plan_fn).chunk([_text_unit("b1", "설명")])
+
+    assert "_rejected_plan" not in chunks[0].metadata
 
 
 def test_agentic_chunker_falls_back_when_planner_raises_exception():
@@ -518,6 +534,45 @@ def test_agentic_chunker_splits_table_rows_across_chunks():
     assert [row["index"] for row in chunks[1].evidence.items[0].content["rows"]] == [2]
     assert "_fallback_reason" not in chunks[0].metadata
     assert "_fallback_reason" not in chunks[1].metadata
+
+
+def test_agentic_chunker_records_warning_when_plan_exceeds_max_unit_hint():
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    units = [
+        _text_unit("b1", "첫 번째 설명"),
+        _text_unit("b2", "두 번째 설명"),
+        _text_unit("b3", "세 번째 설명"),
+    ]
+
+    def plan_fn(window, cfg, max_units):
+        return [
+            {
+                "unit_ids": ["b1", "b2", "b3"],
+                "operations": [
+                    {"unit_id": "b1", "action": "include"},
+                    {"unit_id": "b2", "action": "include"},
+                    {"unit_id": "b3", "action": "include"},
+                ],
+                "summary": "세 설명을 함께 제공한다.",
+            }
+        ]
+
+    chunks = EvidenceUnitAgenticChunker(
+        llm=None,
+        plan_fn=plan_fn,
+        max_units_per_chunk=2,
+    ).chunk(units)
+
+    assert len(chunks) == 1
+    assert chunks[0].metadata["source_unit_ids"] == ["b1", "b2", "b3"]
+    assert chunks[0].metadata["_warnings"] == [
+        {
+            "type": "agentic_chunk_exceeds_max_units",
+            "source_unit_count": 3,
+            "max_units_per_chunk": 2,
+        }
+    ]
 
 
 def test_agentic_chunker_uses_row_subset_text_for_planned_fallback_fields():
