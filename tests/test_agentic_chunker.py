@@ -127,6 +127,102 @@ def _table_unit_with_rows(id: str, rows: list[str]):
     )
 
 
+def _qa_table_unit_with_rows(id: str, questions: list[str]):
+    from rag_document_parser import EvidenceUnit, SourceEvidence
+
+    table_rows = [
+        {
+            "index": index,
+            "cells": [
+                {"column_id": "c1", "text": str(index), "rowspan": 1, "colspan": 1, "children": []},
+                {"column_id": "c2", "text": question, "rowspan": 1, "colspan": 1, "children": []},
+                {"column_id": "c3", "text": f"답변 {index}", "rowspan": 1, "colspan": 1, "children": []},
+            ],
+        }
+        for index, question in enumerate(questions, start=1)
+    ]
+    table = {
+        "caption": "질의응답",
+        "columns": [
+            {"id": "c1", "text": "연번"},
+            {"id": "c2", "text": "질의"},
+            {"id": "c3", "text": "답변"},
+        ],
+        "rows": table_rows,
+    }
+    source_rows = [
+        f"row {row['index']}: 연번={row['index']}; 질의={row['cells'][1]['text']}; 답변={row['cells'][2]['text']}"
+        for row in table_rows
+    ]
+    return EvidenceUnit(
+        id=id,
+        type="table",
+        format="structured_table",
+        source=SourceEvidence(
+            kind="table",
+            text="table: 3 columns\ncolumns: 연번 | 질의 | 답변\n" + "\n".join(source_rows),
+        ),
+        content=table,
+        metadata={
+            "common": {"chunk_kind": "table", "section_path": ["질의응답"], "display_format": "structured_table"},
+            "table": {"table_id": id, "headers": ["연번", "질의", "답변"], "row_count": len(questions)},
+        },
+    )
+
+
+def _rowspan_table_unit(id: str, row_texts: list[str]):
+    from rag_document_parser import EvidenceUnit, SourceEvidence
+
+    table_rows = []
+    source_rows = []
+    for index, text in enumerate(row_texts, start=1):
+        cells = []
+        if index == 1:
+            cells.append(
+                {
+                    "column_id": "c1",
+                    "text": "확진용 검사",
+                    "rowspan": len(row_texts),
+                    "colspan": 1,
+                    "children": [],
+                }
+            )
+        cells.append(
+            {
+                "column_id": "c2",
+                "text": text,
+                "rowspan": 1,
+                "colspan": 1,
+                "children": [],
+            }
+        )
+        table_rows.append({"index": index, "cells": cells})
+        source_rows.append(f"row {index}: " + "; ".join(cell["text"] for cell in cells))
+
+    table = {
+        "caption": "병합 셀 표",
+        "columns": [
+            {"id": "c1", "text": "구분"},
+            {"id": "c2", "text": "내용"},
+        ],
+        "rows": table_rows,
+    }
+    return EvidenceUnit(
+        id=id,
+        type="table",
+        format="structured_table",
+        source=SourceEvidence(
+            kind="table",
+            text="table: 2 columns\ncolumns: 구분 | 내용\n" + "\n".join(source_rows),
+        ),
+        content=table,
+        metadata={
+            "common": {"chunk_kind": "table", "section_path": [], "display_format": "structured_table"},
+            "table": {"table_id": id, "headers": ["구분", "내용"], "row_count": len(row_texts)},
+        },
+    )
+
+
 def _single_row_table_unit(id: str):
     from rag_document_parser import EvidenceUnit, SourceEvidence
 
@@ -156,6 +252,12 @@ def test_agentic_chunker_uses_llm_prompt_when_no_plan_fn(monkeypatch):
 
     def fake_chat_json(prompt, cfg):
         calls.append((prompt, cfg))
+        if "최종 RagChunk enrichment 생성기" in prompt:
+            return {
+                "summary": "첫 문장 최종 요약",
+                "keywords": ["첫", "문장"],
+                "questions": ["첫 문장은 무엇인가요?"],
+            }
         return [
             {
                 "unit_ids": ["b1"],
@@ -172,10 +274,12 @@ def test_agentic_chunker_uses_llm_prompt_when_no_plan_fn(monkeypatch):
 
     chunks = EvidenceUnitAgenticChunker(llm=cfg).chunk([_text_unit("b1", "첫 문장")])
 
-    assert len(calls) == 1
+    assert len(calls) == 2
     assert '"id": "b1"' in calls[0][0]
     assert calls[0][1] is cfg
-    assert chunks[0].summary == "첫 문장 요약"
+    assert "최종 RagChunk enrichment 생성기" in calls[1][0]
+    assert calls[1][1] is cfg
+    assert chunks[0].summary == "첫 문장 최종 요약"
 
 
 def test_agentic_chunker_records_context_units_without_duplicate_evidence():
@@ -431,6 +535,12 @@ def test_agentic_chunker_uses_llm_boundary_prompt_between_windows(monkeypatch):
 
     def fake_chat_json(prompt, cfg):
         calls.append((prompt, cfg))
+        if "최종 RagChunk enrichment 생성기" in prompt:
+            return {
+                "summary": "최종 요약",
+                "keywords": ["설명"],
+                "questions": ["설명은 무엇인가요?"],
+            }
         return {"action": "keep", "reason": "서로 다른 주제다."}
 
     monkeypatch.setattr("rag_document_parser.chunk.agentic.chat_json", fake_chat_json)
@@ -443,13 +553,15 @@ def test_agentic_chunker_uses_llm_boundary_prompt_between_windows(monkeypatch):
     ).chunk(units)
 
     assert [chunk.metadata["source_unit_ids"] for chunk in chunks] == [["b1", "b2"], ["b3", "b4"]]
-    assert len(calls) == 1
-    assert calls[0][1] is cfg
-    assert "window boundary merge planner" in calls[0][0]
-    assert '"left_chunk"' in calls[0][0]
-    assert '"right_chunk"' in calls[0][0]
-    assert '"source_unit_ids": ["b1", "b2"]' in calls[0][0]
-    assert '"source_unit_ids": ["b3", "b4"]' in calls[0][0]
+    boundary_calls = [call for call in calls if "window boundary merge planner" in call[0]]
+    enrichment_calls = [call for call in calls if "최종 RagChunk enrichment 생성기" in call[0]]
+    assert len(boundary_calls) == 1
+    assert len(enrichment_calls) == 2
+    assert boundary_calls[0][1] is cfg
+    assert '"left_chunk"' in boundary_calls[0][0]
+    assert '"right_chunk"' in boundary_calls[0][0]
+    assert '"source_unit_ids": ["b1", "b2"]' in boundary_calls[0][0]
+    assert '"source_unit_ids": ["b3", "b4"]' in boundary_calls[0][0]
 
 
 def test_agentic_chunker_uses_rich_korean_llm_prompt_contract(monkeypatch):
@@ -460,6 +572,12 @@ def test_agentic_chunker_uses_rich_korean_llm_prompt_contract(monkeypatch):
 
     def fake_chat_json(prompt, cfg):
         calls.append((prompt, cfg))
+        if "최종 RagChunk enrichment 생성기" in prompt:
+            return {
+                "summary": "표 전체를 제공한다.",
+                "keywords": ["표"],
+                "questions": ["표에는 무엇이 있나요?"],
+            }
         return [
             {
                 "unit_ids": ["b2"],
@@ -477,7 +595,7 @@ def test_agentic_chunker_uses_rich_korean_llm_prompt_contract(monkeypatch):
     chunks = EvidenceUnitAgenticChunker(llm=cfg, max_units_per_chunk=7).chunk([_table_unit("b2")])
 
     assert len(chunks) == 1
-    assert len(calls) == 1
+    assert len(calls) == 2
     prompt = calls[0][0]
     assert "RAG 인덱싱용 EvidenceUnit chunk planner" in prompt
     assert '"max_units_per_chunk": 7' in prompt
@@ -707,6 +825,65 @@ def test_agentic_chunker_materializes_table_row_subset():
     assert "row 1" not in chunks[0].source.text
 
 
+def test_agentic_chunker_carries_rowspan_context_for_planned_row_subset():
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    unit = _rowspan_table_unit("tbl1", ["첫 행", "둘째 행", "셋째 행"])
+
+    def plan_fn(window, cfg, max_units):
+        return [
+            {
+                "unit_ids": ["tbl1"],
+                "operations": [{"unit_id": "tbl1", "action": "include_rows", "row_ranges": [[2, 3]]}],
+                "summary": "둘째 행부터",
+            }
+        ]
+
+    chunks = EvidenceUnitAgenticChunker(llm=None, plan_fn=plan_fn).chunk([unit])
+
+    assert len(chunks) == 2
+    table = chunks[1].evidence.items[0].content
+    first_row_cells = table["rows"][0]["cells"]
+    carried = first_row_cells[0]
+    assert [row["index"] for row in table["rows"]] == [2, 3]
+    assert carried["text"] == "확진용 검사"
+    assert carried["rowspan"] == 2
+    assert carried["metadata"]["rowspan_context"] == {
+        "source_row_index": 1,
+        "source_rowspan": 3,
+    }
+    assert "구분=확진용 검사" in chunks[1].source.text
+    assert "내용=둘째 행" in chunks[1].source.text
+
+
+def test_agentic_chunker_uses_full_include_when_same_plan_item_also_includes_table_rows():
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    def plan_fn(window, cfg, max_units):
+        return [
+            {
+                "unit_ids": ["b2"],
+                "operations": [
+                    {"unit_id": "b2", "action": "include"},
+                    {"unit_id": "b2", "action": "include_rows", "row_ranges": [[1, 1]]},
+                ],
+            }
+        ]
+
+    chunks = EvidenceUnitAgenticChunker(llm=None, plan_fn=plan_fn).chunk([_table_unit("b2")])
+
+    assert [chunk.metadata["source_unit_ids"] for chunk in chunks] == [["b2"]]
+    assert "_fallback_reason" not in chunks[0].metadata
+    assert chunks[0].metadata["_warnings"] == [
+        {
+            "type": "agentic_plan_include_rows_ignored",
+            "reason": "same plan item also fully included the table; full include was used",
+            "unit_ids": ["b2"],
+        }
+    ]
+    assert [row["index"] for row in chunks[0].evidence.items[0].content["rows"]] == [1, 2]
+
+
 def test_agentic_chunker_repairs_omitted_table_rows_without_dropping_planned_rows():
     from rag_document_parser.chunk import EvidenceUnitAgenticChunker
 
@@ -779,7 +956,7 @@ def test_agentic_chunker_falls_back_when_planner_raises_exception():
     assert "planner down" in chunks[1].metadata["_fallback_reason"]
 
 
-def test_agentic_chunker_rejects_unit_ids_that_do_not_match_operations():
+def test_agentic_chunker_uses_operations_when_unit_ids_do_not_match():
     from rag_document_parser.chunk import EvidenceUnitAgenticChunker
 
     units = [_text_unit("b1", "첫 번째 설명"), _text_unit("b2", "두 번째 설명")]
@@ -798,11 +975,19 @@ def test_agentic_chunker_rejects_unit_ids_that_do_not_match_operations():
 
     chunks = EvidenceUnitAgenticChunker(llm=None, plan_fn=plan_fn).chunk(units)
 
-    assert [chunk.metadata["source_unit_ids"] for chunk in chunks] == [["b1"], ["b2"]]
-    assert "unit_ids must match operation unit_ids" in chunks[0].metadata["_fallback_reason"]
+    assert [chunk.metadata["source_unit_ids"] for chunk in chunks] == [["b1", "b2"]]
+    assert "_fallback_reason" not in chunks[0].metadata
+    assert chunks[0].metadata["_warnings"] == [
+        {
+            "type": "agentic_plan_unit_ids_mismatch",
+            "reason": "unit_ids did not match operations; operations were used",
+            "unit_ids": ["b1"],
+            "operation_unit_ids": ["b1", "b2"],
+        }
+    ]
 
 
-def test_agentic_chunker_rejects_present_unit_ids_that_are_not_a_list():
+def test_agentic_chunker_uses_operations_when_unit_ids_is_not_a_list():
     from rag_document_parser.chunk import EvidenceUnitAgenticChunker
 
     def plan_fn(window, cfg, max_units):
@@ -817,7 +1002,14 @@ def test_agentic_chunker_rejects_present_unit_ids_that_are_not_a_list():
     chunks = EvidenceUnitAgenticChunker(llm=None, plan_fn=plan_fn).chunk([_text_unit("b1", "설명")])
 
     assert chunks[0].metadata["source_unit_ids"] == ["b1"]
-    assert "unit_ids must be a list" in chunks[0].metadata["_fallback_reason"]
+    assert "_fallback_reason" not in chunks[0].metadata
+    assert chunks[0].metadata["_warnings"] == [
+        {
+            "type": "agentic_plan_unit_ids_ignored",
+            "reason": "unit_ids must be a list",
+            "operation_unit_ids": ["b1"],
+        }
+    ]
 
 
 def test_agentic_chunker_splits_table_rows_across_chunks():
@@ -1055,6 +1247,116 @@ def test_agentic_chunker_splits_large_table_by_token_budget_rows():
     assert "row 1:" in chunks[0].source.text
     assert "row 6:" in chunks[-1].source.text
     assert chunks[0].metadata["_warnings"][0]["type"] == "agentic_table_split_by_token_budget"
+
+
+def test_agentic_chunker_carries_rowspan_context_when_splitting_large_table():
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    repeated = " ".join(["코로나19", "급여기준", "본인부담률", "국비지원"] * 5)
+    unit = _rowspan_table_unit("tbl1", [f"{repeated} {index}" for index in range(1, 4)])
+
+    def plan_fn(window, cfg, max_units):
+        return [
+            {
+                "unit_ids": ["tbl1"],
+                "operations": [{"unit_id": "tbl1", "action": "include"}],
+                "summary": "표 전체",
+            }
+        ]
+
+    chunks = EvidenceUnitAgenticChunker(
+        llm=None,
+        plan_fn=plan_fn,
+        target_tokens_per_chunk=25,
+        max_tokens_per_chunk=50,
+    ).chunk([unit])
+
+    assert len(chunks) > 1
+    second_table = chunks[1].evidence.items[0].content
+    assert second_table["rows"][0]["index"] == 2
+    assert second_table["rows"][0]["cells"][0]["text"] == "확진용 검사"
+    assert "구분: 확진용 검사" in chunks[1].source.text
+    assert "row 2:" in chunks[1].source.text
+
+
+def test_agentic_chunker_enriches_after_final_table_split():
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+    from rag_document_parser.enrichment import RagChunkEnricher
+
+    repeated = " ".join(["의료급여", "심사결정", "본인부담금", "청구금액"] * 5)
+    unit = _table_unit_with_rows("tbl1", [f"{repeated} {index}" for index in range(1, 5)])
+    enriched_sources = []
+
+    def plan_fn(window, cfg, max_units):
+        return [
+            {
+                "unit_ids": ["tbl1"],
+                "operations": [{"unit_id": "tbl1", "action": "include"}],
+                "summary": "분할 전 표 요약",
+                "keywords": ["분할전"],
+                "questions": ["분할 전 표는 무엇인가요?"],
+            }
+        ]
+
+    def enrich_fn(chunk, cfg):
+        enriched_sources.append(chunk.source.text)
+        row_ranges = chunk.metadata["operations"][0]["row_ranges"]
+        return {
+            "summary": f"최종 행 범위 {row_ranges}",
+            "keywords": ["최종", "행범위"],
+            "questions": [f"{row_ranges} 범위에는 무엇이 있나요?"],
+        }
+
+    chunks = EvidenceUnitAgenticChunker(
+        llm=None,
+        plan_fn=plan_fn,
+        final_enricher=RagChunkEnricher(enrich_fn=enrich_fn, max_concurrency=1),
+        target_tokens_per_chunk=45,
+        max_tokens_per_chunk=90,
+    ).chunk([unit])
+
+    assert len(chunks) > 1
+    assert len(enriched_sources) == len(chunks)
+    assert all(chunk.summary.startswith("최종 행 범위") for chunk in chunks)
+    assert all(chunk.metadata["_enrichment"]["stage"] == "post_chunking" for chunk in chunks)
+    assert "row 4:" not in enriched_sources[0]
+
+
+def test_agentic_chunker_heuristic_enrichment_uses_qa_questions_after_table_split():
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    repeated = " ".join(["코로나19", "검사", "급여기준", "청구방법"] * 6)
+    unit = _qa_table_unit_with_rows(
+        "qa1",
+        [
+            f"확진검사 {index}번 대상은 어떻게 되나요? {repeated}"
+            for index in range(1, 4)
+        ],
+    )
+
+    def plan_fn(window, cfg, max_units):
+        return [
+            {
+                "unit_ids": ["qa1"],
+                "operations": [{"unit_id": "qa1", "action": "include"}],
+                "summary": "분할 전 Q&A",
+            }
+        ]
+
+    chunks = EvidenceUnitAgenticChunker(
+        llm=None,
+        plan_fn=plan_fn,
+        target_tokens_per_chunk=55,
+        max_tokens_per_chunk=100,
+    ).chunk([unit])
+
+    assert len(chunks) > 1
+    assert chunks[0].questions[0].startswith("확진검사 1번 대상은 어떻게 되나요?")
+    assert "무엇을 알 수 있나요" not in " ".join(chunks[0].questions)
+    assert chunks[0].metadata["_enrichment"] == {
+        "stage": "post_chunking",
+        "method": "heuristic",
+    }
 
 
 def test_agentic_chunker_repeats_heading_context_when_splitting_large_table():
