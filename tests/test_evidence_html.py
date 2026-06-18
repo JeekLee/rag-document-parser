@@ -365,3 +365,122 @@ def test_render_structured_table_uses_header_rows_with_spans():
     )
 
     assert '<th rowspan="2" colspan="2">관련 근거</th>' in html
+
+
+def test_render_rag_chunks_html_shows_final_evidence_and_chunk_fields():
+    from rag_document_parser.evidence_html import render_rag_chunks_html
+
+    chunks = [
+        {
+            "id": "chunk-1",
+            "type": "mixed",
+            "source": {"kind": "mixed", "text": "source text"},
+            "evidence": {
+                "items": [
+                    {
+                        "type": "text",
+                        "format": "plain",
+                        "content": "청크 설명",
+                        "source_unit_ids": ["b1"],
+                        "metadata": {},
+                    },
+                    {
+                        "type": "table",
+                        "format": "structured_table",
+                        "content": {
+                            "caption": None,
+                            "columns": [{"id": "c1", "text": "항목"}],
+                            "rows": [
+                                {
+                                    "index": 1,
+                                    "cells": [
+                                        {
+                                            "column_id": "c1",
+                                            "text": "급여",
+                                            "rowspan": 1,
+                                            "colspan": 1,
+                                            "children": [],
+                                        }
+                                    ],
+                                }
+                            ],
+                        },
+                        "source_unit_ids": ["b2"],
+                        "metadata": {},
+                    },
+                ]
+            },
+            "summary": "제왕절개 본인부담률 안내",
+            "keywords": ["제왕절개", "본인부담"],
+            "questions": ["본인부담률은 어떻게 바뀌나요?"],
+            "metadata": {
+                "source_unit_ids": ["b1", "b2"],
+                "context_unit_ids": ["b0"],
+                "_warnings": [
+                    {
+                        "type": "agentic_chunk_exceeds_max_units",
+                        "source_unit_count": 9,
+                        "max_units_per_chunk": 8,
+                    }
+                ],
+            },
+        }
+    ]
+
+    html = render_rag_chunks_html(chunks, title="Agentic chunks")
+
+    assert "<!doctype html>" in html
+    assert "Agentic chunks" in html
+    assert "chunk-1" in html
+    assert "mixed" in html
+    assert "제왕절개 본인부담률 안내" in html
+    assert "제왕절개" in html
+    assert "본인부담률은 어떻게 바뀌나요?" in html
+    assert "source units: b1, b2" in html
+    assert "context units: b0" in html
+    assert "source text" in html
+    assert "evidence item 1" in html
+    assert "item source units: b1" in html
+    assert "evidence item 2" in html
+    assert "item source units: b2" in html
+    assert "청크 설명" in html
+    assert "급여" in html
+    assert html.count("<table") == 1
+    assert "agentic_chunk_exceeds_max_units" in html
+
+
+def test_render_rag_chunks_html_accepts_model_objects_and_escapes_diagnostics():
+    from rag_document_parser import Evidence, EvidenceItem, RagChunk, SourceEvidence
+    from rag_document_parser.evidence_html import render_rag_chunks_html
+
+    chunk = RagChunk(
+        id="chunk-2",
+        type="text",
+        source=SourceEvidence(kind="text", text="raw <source>"),
+        evidence=Evidence(
+            items=[
+                EvidenceItem(
+                    type="text",
+                    format="plain",
+                    content="safe <content>",
+                    source_unit_ids=["b3"],
+                    metadata={},
+                )
+            ]
+        ),
+        summary="escaped summary",
+        metadata={
+            "source_unit_ids": ["b3"],
+            "_fallback_reason": "bad <script>alert(1)</script>",
+            "_rejected_plan": [{"unit_ids": ["b9"]}],
+        },
+    )
+
+    html = render_rag_chunks_html([chunk])
+
+    assert "chunk-2" in html
+    assert "safe &lt;content&gt;" in html
+    assert "raw &lt;source&gt;" in html
+    assert "bad &lt;script&gt;alert(1)&lt;/script&gt;" in html
+    assert "&quot;unit_ids&quot;" in html
+    assert "<script>" not in html
