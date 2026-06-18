@@ -1,0 +1,337 @@
+{
+  "source_prefix": "local/clic/raw",
+  "selection": {
+    "per_bucket": 5,
+    "total_hwpx_documents": 327,
+    "size_bytes": {
+      "min": 22852,
+      "p25": 47890,
+      "p50": 66984,
+      "p75": 107444,
+      "p90": 179610,
+      "max": 660252
+    },
+    "skipped_documents": []
+  },
+  "documents": [
+    {
+      "bucket": "small",
+      "index": 1,
+      "key": "20241201-3-0004/고시 제2024-235호 Omidenepag isopropyl 외용제.hwpx",
+      "source_uri": "s3://clic/raw/20241201-3-0004/고시 제2024-235호 Omidenepag isopropyl 외용제.hwpx",
+      "filename": "small-01-22852-20241201-3-0004-고시-제2024-235호-Omidenepag-isopropyl-외용제.hwpx",
+      "path": "tests/fixtures/corpus/hwpx_size_samples/small/small-01-22852-20241201-3-0004-고시-제2024-235호-Omidenepag-isopropyl-외용제.hwpx",
+      "bytes": 22852,
+      "sha256": "86bc48b18f5dc0805ae563d5821180f97f0b0a2fb6c3920c1090e3cb3ce35f3b",
+      "expected": {
+        "units": {
+          "total": 2,
+          "by_type": {
+            "table": 1,
+            "text": 1
+          }
+        },
+        "assets": 0,
+        "quality_warnings": []
+      }
+    },
+    {
+      "bucket": "small",
+      "index": 2,
+      "key": "20230101-6-0001/보건복지부 고시 제2022-309호.hwpx",
+      "source_uri": "s3://clic/raw/20230101-6-0001/보건복지부 고시 제2022-309호.hwpx",
+      "filename": "small-02-23633-20230101-6-0001-보건복지부-고시-제2022-309호.hwpx",
+      "path": "tests/fixtures/corpus/hwpx_size_samples/small/small-02-23633-20230101-6-0001-보건복지부-고시-제2022-309호.hwpx",
+      "bytes": 23633,
+      "sha256": "3681a9c5f5d14091beff1cabbb1b47814113b043abed85af833bc376d729bef4",
+      "expected": {
+        "units": {
+          "total": 1,
+          "by_type": {
+            "table": 1
+          }
+        },
+        "assets": 0,
+        "quality_warnings": []
+      }
+    },
+    {
+      "bucket": "small",
+      "index": 3,
+      "key": "20241001-1-0003/고시 제2024-186호 Zastaprazan 경구제.hwpx",
+      "source_uri": "s3://clic/raw/20241001-1-0003/고시 제2024-186호 Zastaprazan 경구제.hwpx",
+      "filename": "small-03-24204-20241001-1-0003-고시-제2024-186호-Zastaprazan-경구제.hwpx",
+      "path": "tests/fixtures/corpus/hwpx_size_samples/small/small-03-24204-20241001-1-0003-고시-제2024-186호-Zastaprazan-경구제.hwpx",
+      "bytes": 24204,
+      "sha256": "2ecc8e2a25a7a59256f9d18124887f8c3d9bf65221128ebbcd36440bebe92125",
+      "expected": {
+        "units": {
+          "total": 1,
+          "by_type": {
+            "table": 1
+          }
+        },
+        "assets": 0,
+        "quality_warnings": []
+      }
+    },
+    {
+      "bucket": "small",
+      "index": 4,
+      "key": "20240801-4-0004/고시 제2024-155호 Lurasidone hydrochloride 경구제.hwpx",
+      "source_uri": "s3://clic/raw/20240801-4-0004/고시 제2024-155호 Lurasidone hydrochloride 경구제.hwpx",
+      "filename": "small-04-25546-20240801-4-0004-고시-제2024-155호-Lurasidone-hydrochloride-경구제.hwpx",
+      "path": "tests/fixtures/corpus/hwpx_size_samples/small/small-04-25546-20240801-4-0004-고시-제2024-155호-Lurasidone-hydrochloride-경구제.hwpx",
+      "bytes": 25546,
+      "sha256": "f719562b1eb7bf2687163cb71bb087df39fed7f93f61c9adcd45215cb883cfdd",
+      "expected": {
+        "units": {
+          "total": 1,
+          "by_type": {
+            "table": 1
+          }
+        },
+        "assets": 0,
+        "quality_warnings": []
+      }
+    },
+    {
+      "bucket": "small",
+      "index": 5,
+      "key": "20241001-1-0002/고시 제2024-186호 Netarsudil Mesylate 외용제.hwpx",
+      "source_uri": "s3://clic/raw/20241001-1-0002/고시 제2024-186호 Netarsudil Mesylate 외용제.hwpx",
+      "filename": "small-05-25810-20241001-1-0002-고시-제2024-186호-Netarsudil-Mesylate-외용제.hwpx",
+      "path": "tests/fixtures/corpus/hwpx_size_samples/small/small-05-25810-20241001-1-0002-고시-제2024-186호-Netarsudil-Mesylate-외용제.hwpx",
+      "bytes": 25810,
+      "sha256": "5851f556257df121650dd82a800c7d220b87133f43e9269b5ede122be3fd5acf",
+      "expected": {
+        "units": {
+          "total": 1,
+          "by_type": {
+            "table": 1
+          }
+        },
+        "assets": 0,
+        "quality_warnings": []
+      }
+    },
+    {
+      "bucket": "medium",
+      "index": 1,
+      "key": "20240301-3-0002/(제2024-39호,+24.2.29)_요양급여의_적용기준_및_방법에_관한_세부사항_일부개정안_(3월시행).hwpx",
+      "source_uri": "s3://clic/raw/20240301-3-0002/(제2024-39호,+24.2.29)_요양급여의_적용기준_및_방법에_관한_세부사항_일부개정안_(3월시행).hwpx",
+      "filename": "medium-01-66719-20240301-3-0002-제2024-39호-24.2.29-_요양급여의_적용기준_및_방법에_관한_세부사항_일부개정안_-3월시행.hwpx",
+      "path": "tests/fixtures/corpus/hwpx_size_samples/medium/medium-01-66719-20240301-3-0002-제2024-39호-24.2.29-_요양급여의_적용기준_및_방법에_관한_세부사항_일부개정안_-3월시행.hwpx",
+      "bytes": 66719,
+      "sha256": "8e840277b72c7e1fdb6fa6713f20e5f65b47a907c74ba9dc8784a6de36ac769f",
+      "expected": {
+        "units": {
+          "total": 17,
+          "by_type": {
+            "table": 4,
+            "text": 13
+          }
+        },
+        "assets": 0,
+        "quality_warnings": []
+      }
+    },
+    {
+      "bucket": "medium",
+      "index": 2,
+      "key": "20251201-4-0002/(제2025-196호, 2025.11.28)_「요양급여의 적용기준 및 방법에 관한 세부사항」 고시 일부개정.hwpx",
+      "source_uri": "s3://clic/raw/20251201-4-0002/(제2025-196호, 2025.11.28)_「요양급여의 적용기준 및 방법에 관한 세부사항」 고시 일부개정.hwpx",
+      "filename": "medium-02-66984-20251201-4-0002-제2025-196호-2025.11.28-_-요양급여의-적용기준-및-방법에-관한-세부사항-고시-일부개정.hwpx",
+      "path": "tests/fixtures/corpus/hwpx_size_samples/medium/medium-02-66984-20251201-4-0002-제2025-196호-2025.11.28-_-요양급여의-적용기준-및-방법에-관한-세부사항-고시-일부개정.hwpx",
+      "bytes": 66984,
+      "sha256": "fad17e23c9ff6317a6353643a49717d418b151262e4de1d87d0cbd16f234f6ce",
+      "expected": {
+        "units": {
+          "total": 18,
+          "by_type": {
+            "table": 5,
+            "text": 13
+          }
+        },
+        "assets": 0,
+        "quality_warnings": []
+      }
+    },
+    {
+      "bucket": "medium",
+      "index": 3,
+      "key": "20241201-3-0005/「히알루론산 나트륩 점안제」 급여기준 적용 질의응답.hwpx",
+      "source_uri": "s3://clic/raw/20241201-3-0005/「히알루론산 나트륩 점안제」 급여기준 적용 질의응답.hwpx",
+      "filename": "medium-03-67869-20241201-3-0005-히알루론산-나트륩-점안제-급여기준-적용-질의응답.hwpx",
+      "path": "tests/fixtures/corpus/hwpx_size_samples/medium/medium-03-67869-20241201-3-0005-히알루론산-나트륩-점안제-급여기준-적용-질의응답.hwpx",
+      "bytes": 67869,
+      "sha256": "74b96c0e6b1fd82cbdf0071a0e00311ee290890b02a917fb770f495ea71703ec",
+      "expected": {
+        "units": {
+          "total": 1,
+          "by_type": {
+            "table": 1
+          }
+        },
+        "assets": 0,
+        "quality_warnings": []
+      }
+    },
+    {
+      "bucket": "medium",
+      "index": 4,
+      "key": "20260101-7-0001/(고시 제2025-250호, 12.30. 관련) 경벽배액술(자780)에 사용하는 허가범위 초과 사용 치료재료 급여기준 관련 질의응답.hwpx",
+      "source_uri": "s3://clic/raw/20260101-7-0001/(고시 제2025-250호, 12.30. 관련) 경벽배액술(자780)에 사용하는 허가범위 초과 사용 치료재료 급여기준 관련 질의응답.hwpx",
+      "filename": "medium-04-68039-20260101-7-0001-고시-제2025-250호-12.30.-관련-경벽배액술-자780-에-사용하는-허가범위-초과-사용-치료재료-급여기준-관련-질의응답.hwpx",
+      "path": "tests/fixtures/corpus/hwpx_size_samples/medium/medium-04-68039-20260101-7-0001-고시-제2025-250호-12.30.-관련-경벽배액술-자780-에-사용하는-허가범위-초과-사용-치료재료-급여기준-관련-질의응답.hwpx",
+      "bytes": 68039,
+      "sha256": "d5b51b66fbe25f741b01ad4930b574f36a436abf20540bcadf240a87d55b3010",
+      "expected": {
+        "units": {
+          "total": 4,
+          "by_type": {
+            "table": 1,
+            "text": 3
+          }
+        },
+        "assets": 0,
+        "quality_warnings": []
+      }
+    },
+    {
+      "bucket": "medium",
+      "index": 5,
+      "key": "20250801-2-0002/급여기준 관련 경과규정(올루미언트정).hwpx",
+      "source_uri": "s3://clic/raw/20250801-2-0002/급여기준 관련 경과규정(올루미언트정).hwpx",
+      "filename": "medium-05-68125-20250801-2-0002-급여기준-관련-경과규정-올루미언트정.hwpx",
+      "path": "tests/fixtures/corpus/hwpx_size_samples/medium/medium-05-68125-20250801-2-0002-급여기준-관련-경과규정-올루미언트정.hwpx",
+      "bytes": 68125,
+      "sha256": "443a5f09a3956fd8cc7e5527efdd88699790b40498909e5406d2594fb4520889",
+      "expected": {
+        "units": {
+          "total": 34,
+          "by_type": {
+            "table": 5,
+            "text": 29
+          }
+        },
+        "assets": 0,
+        "quality_warnings": []
+      }
+    },
+    {
+      "bucket": "large",
+      "index": 1,
+      "key": "20260401-1-0014/질의응답(고가의약품 급여관리에 관한 기준).hwpx",
+      "source_uri": "s3://clic/raw/20260401-1-0014/질의응답(고가의약품 급여관리에 관한 기준).hwpx",
+      "filename": "large-01-660252-20260401-1-0014-질의응답-고가의약품-급여관리에-관한-기준.hwpx",
+      "path": "tests/fixtures/corpus/hwpx_size_samples/large/large-01-660252-20260401-1-0014-질의응답-고가의약품-급여관리에-관한-기준.hwpx",
+      "bytes": 660252,
+      "sha256": "5764b72e400726bb4fda3efba593c40e8e71889c1fe52fe6bbb058c7f30f3178",
+      "expected": {
+        "units": {
+          "total": 132,
+          "by_type": {
+            "image": 31,
+            "table": 23,
+            "text": 78
+          }
+        },
+        "assets": 32,
+        "quality_warnings": []
+      }
+    },
+    {
+      "bucket": "large",
+      "index": 2,
+      "key": "20260101-3-0001/의료급여수가의+기준+및+일반기준(고시+제2025-225호,+26.1.1.+시행)_전문(최종).hwpx",
+      "source_uri": "s3://clic/raw/20260101-3-0001/의료급여수가의+기준+및+일반기준(고시+제2025-225호,+26.1.1.+시행)_전문(최종).hwpx",
+      "filename": "large-02-647218-20260101-3-0001-의료급여수가의-기준-및-일반기준-고시-제2025-225호-26.1.1.-시행-_전문-최종.hwpx",
+      "path": "tests/fixtures/corpus/hwpx_size_samples/large/large-02-647218-20260101-3-0001-의료급여수가의-기준-및-일반기준-고시-제2025-225호-26.1.1.-시행-_전문-최종.hwpx",
+      "bytes": 647218,
+      "sha256": "544859502819aeb45c5aa8381178cdc8bcfabc64d13c4f3b8ce6d90b3de91527",
+      "expected": {
+        "units": {
+          "total": 846,
+          "by_type": {
+            "diagram": 1,
+            "table": 69,
+            "text": 776
+          }
+        },
+        "assets": 0,
+        "quality_warnings": []
+      }
+    },
+    {
+      "bucket": "large",
+      "index": 3,
+      "key": "20250522-1-0001/「사전심사의 절차 등에 관한 세부사항」 개정(전문).hwpx",
+      "source_uri": "s3://clic/raw/20250522-1-0001/「사전심사의 절차 등에 관한 세부사항」 개정(전문).hwpx",
+      "filename": "large-03-538982-20250522-1-0001-사전심사의-절차-등에-관한-세부사항-개정-전문.hwpx",
+      "path": "tests/fixtures/corpus/hwpx_size_samples/large/large-03-538982-20250522-1-0001-사전심사의-절차-등에-관한-세부사항-개정-전문.hwpx",
+      "bytes": 538982,
+      "sha256": "793afe1f78ed6ca76dfdebc88b041fddc1525a878822b5a886dd02b41f148a6f",
+      "expected": {
+        "units": {
+          "total": 385,
+          "by_type": {
+            "table": 115,
+            "text": 270
+          }
+        },
+        "assets": 0,
+        "quality_warnings": [
+          {
+            "type": "hwpx_drawing_structure_unsupported",
+            "severity": "medium",
+            "element": "equation",
+            "message": "Unsupported HWPX drawing structure was skipped: equation"
+          }
+        ]
+      }
+    },
+    {
+      "bucket": "large",
+      "index": 4,
+      "key": "20250910-1-0001/임산부 초음파 검사 관련 질의응답 변경 안내.hwpx",
+      "source_uri": "s3://clic/raw/20250910-1-0001/임산부 초음파 검사 관련 질의응답 변경 안내.hwpx",
+      "filename": "large-04-292331-20250910-1-0001-임산부-초음파-검사-관련-질의응답-변경-안내.hwpx",
+      "path": "tests/fixtures/corpus/hwpx_size_samples/large/large-04-292331-20250910-1-0001-임산부-초음파-검사-관련-질의응답-변경-안내.hwpx",
+      "bytes": 292331,
+      "sha256": "ce9267d30fa93465d3f1ccd9febcf74b6baa102bcb7fd5ddb150964496e0f463",
+      "expected": {
+        "units": {
+          "total": 69,
+          "by_type": {
+            "table": 23,
+            "text": 46
+          }
+        },
+        "assets": 2,
+        "quality_warnings": []
+      }
+    },
+    {
+      "bucket": "large",
+      "index": 5,
+      "key": "20240207-1-0001/(제2024-22호)+초음파검사+급여기준+관련+질의응답(전체합본).hwpx",
+      "source_uri": "s3://clic/raw/20240207-1-0001/(제2024-22호)+초음파검사+급여기준+관련+질의응답(전체합본).hwpx",
+      "filename": "large-05-291140-20240207-1-0001-제2024-22호-초음파검사-급여기준-관련-질의응답-전체합본.hwpx",
+      "path": "tests/fixtures/corpus/hwpx_size_samples/large/large-05-291140-20240207-1-0001-제2024-22호-초음파검사-급여기준-관련-질의응답-전체합본.hwpx",
+      "bytes": 291140,
+      "sha256": "aa95d7c0ae31b9c6b8d1c1dd498530a2a437eedb056b0209a71b46faeadc77ef",
+      "expected": {
+        "units": {
+          "total": 64,
+          "by_type": {
+            "table": 22,
+            "text": 42
+          }
+        },
+        "assets": 2,
+        "quality_warnings": []
+      }
+    }
+  ]
+}
