@@ -53,7 +53,7 @@ def render_evidence_html(
     if fmt == "asset_ref" and isinstance(content, dict):
         return _render_asset_ref(kind, content, assets_by_id)
     if isinstance(content, str):
-        return f"<p>{escape(content)}</p>"
+        return f"<p>{_escape_multiline(content)}</p>"
     return f"<pre>{escape(str(content))}</pre>"
 
 
