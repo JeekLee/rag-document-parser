@@ -969,6 +969,80 @@ def test_hwp5_diagram_uses_shape_ctrl_ids_and_connector_subjects():
     ]
 
 
+def test_hwp5_diagram_preserves_group_container_and_nested_shapes():
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
+
+    records = b""
+    records += _shape_ctrl(
+        0,
+        b"prg$",
+        instance_id=100,
+        x=50,
+        y=50,
+        width=700,
+        height=250,
+    )
+    records += _shape_ctrl(
+        1,
+        b"cer$",
+        instance_id=10,
+        x=100,
+        y=100,
+        width=200,
+        height=100,
+    )
+    records += _make_record(0x43, 2, _u16("접수"))
+    records += _shape_ctrl(
+        1,
+        b"lle$",
+        instance_id=20,
+        x=500,
+        y=100,
+        width=200,
+        height=100,
+    )
+    records += _make_record(0x43, 2, _u16("완료"))
+
+    document = _parse_section(records).to_document()
+    diagram = document.units[0]
+
+    assert diagram.type == "diagram"
+    assert [node["shape_type"] for node in diagram.content["nodes"]] == [
+        "group",
+        "rectangle",
+        "ellipse",
+    ]
+    assert diagram.content["nodes"][0]["text"] == ""
+    assert diagram.content["nodes"][0]["bbox"] == {
+        "x": 50,
+        "y": 50,
+        "width": 700,
+        "height": 250,
+        "unit": "hwp",
+    }
+    assert diagram.content["nodes"][0]["metadata"] == {
+        "source": "hwp5_drawing_text",
+        "instance_id": 100,
+        "ctrl_id": "prg$",
+        "container": True,
+    }
+    assert [node["text"] for node in diagram.content["nodes"][1:]] == ["접수", "완료"]
+    assert diagram.content["nodes"][1]["metadata"] == {
+        "source": "hwp5_drawing_text",
+        "parent_instance_id": 100,
+        "parent_ctrl_id": "prg$",
+        "instance_id": 10,
+        "ctrl_id": "cer$",
+    }
+    assert diagram.content["nodes"][2]["metadata"] == {
+        "source": "hwp5_drawing_text",
+        "parent_instance_id": 100,
+        "parent_ctrl_id": "prg$",
+        "instance_id": 20,
+        "ctrl_id": "lle$",
+    }
+
+
 def test_hwp5_diagram_preserves_unresolved_connector_and_warns():
     from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
 
@@ -998,6 +1072,85 @@ def test_hwp5_diagram_preserves_unresolved_connector_and_warns():
         if warning["type"] == "hwp5_diagram_connector_unresolved"
     )
     assert unresolved["connector_ids"] == ["c1"]
+
+
+def test_hwp5_unresolved_connector_warning_includes_original_connector_details():
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
+
+    records = b""
+    records += _shape_ctrl(0, b"cer$", instance_id=10)
+    records += _make_record(0x43, 1, _u16("접수"))
+    records += _shape_ctrl(0, b"lle$", instance_id=20)
+    records += _make_record(0x43, 1, _u16("완료"))
+    records += _shape_ctrl(
+        0,
+        b"loc$",
+        instance_id=30,
+        x=300,
+        y=100,
+        width=200,
+        height=20,
+    )
+    records += _make_record(0x4E, 1, _connector_line_payload(10, 999, link_type=1))
+
+    document = _parse_section(records).to_document()
+    unresolved = next(
+        warning
+        for warning in document.quality_warnings
+        if warning["type"] == "hwp5_diagram_connector_unresolved"
+    )
+
+    assert unresolved["connectors"] == [
+        {
+            "id": "c1",
+            "type": "arrow",
+            "bbox": {
+                "x": 300,
+                "y": 100,
+                "width": 200,
+                "height": 20,
+                "unit": "hwp",
+            },
+            "points": [{"x": 300, "y": 110}, {"x": 500, "y": 110}],
+            "arrow": True,
+            "metadata": {
+                "source": "hwp5_gso_line",
+                "ctrl_id": "loc$",
+                "instance_id": 30,
+                "payload_bytes": 36,
+                "link_type": 1,
+                "start_subject_id": 10,
+                "start_subject_index": 0,
+                "end_subject_id": 999,
+                "end_subject_index": 0,
+            },
+            "resolution_failure": "subject_id_unmatched",
+        }
+    ]
+
+
+def test_hwp5_unsupported_drawing_shape_component_warns_with_ctrl_id():
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
+
+    records = b""
+    records += _gso_ctrl_with_bbox(0, x=100, y=200, width=300, height=120)
+    records += _make_record(0x4C, 1, b"zzzz" + b"\x00" * 8)
+    records += _make_record(0x43, 1, _u16("미지원 도형"))
+
+    document = _parse_section(records).to_document()
+
+    assert [unit.type for unit in document.units] == ["text"]
+    assert document.units[0].source.text == "미지원 도형"
+    assert document.quality_warnings == [
+        {
+            "type": "hwp5_unsupported_drawing_shape",
+            "severity": "medium",
+            "ctrl_id": "zzzz",
+            "tag_id": 0x4C,
+            "level": 1,
+            "message": "Unsupported HWP5 drawing shape component was preserved as text.",
+        }
+    ]
 
 
 def test_hwp5_drawing_inside_table_cell_becomes_diagram_child():

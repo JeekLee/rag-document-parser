@@ -229,7 +229,7 @@ def _to_document(parsed: _ParsedBlocks) -> ParsedDocument:
             if not source_text:
                 continue
             saw_structured_diagram = True
-            unresolved_connectors = _unresolved_connector_ids(structured)
+            unresolved_connectors = _unresolved_connector_details(structured)
             units.append(
                 EvidenceUnit(
                     id=f"b{block_index}",
@@ -257,7 +257,12 @@ def _to_document(parsed: _ParsedBlocks) -> ParsedDocument:
                         "type": "hwp5_diagram_connector_unresolved",
                         "severity": "medium",
                         "unit_id": f"b{block_index}",
-                        "connector_ids": unresolved_connectors,
+                        "connector_ids": [
+                            str(connector.get("id", ""))
+                            for connector in unresolved_connectors
+                            if connector.get("id")
+                        ],
+                        "connectors": unresolved_connectors,
                         "message": (
                             "HWP5 drawing connector(s) were preserved, but could not "
                             "be mapped to diagram edges."
@@ -841,9 +846,12 @@ def _diagram_edge_source_lines(edges: object) -> list[str]:
     return lines
 
 
-def _unresolved_connector_ids(diagram: dict[str, object]) -> list[str]:
+def _unresolved_connector_details(
+    diagram: dict[str, object],
+) -> list[dict[str, object]]:
     connectors = diagram.get("connectors", [])
     edges = diagram.get("edges", [])
+    nodes = diagram.get("nodes", [])
     if not isinstance(connectors, list) or not isinstance(edges, list):
         return []
     resolved = {
@@ -852,12 +860,74 @@ def _unresolved_connector_ids(diagram: dict[str, object]) -> list[str]:
         if isinstance(edge, dict) and edge.get("connector_id")
     }
     return [
-        str(connector.get("id", ""))
+        _connector_warning_details(
+            connector,
+            nodes if isinstance(nodes, list) else [],
+        )
         for connector in connectors
         if isinstance(connector, dict)
         and connector.get("id")
         and str(connector.get("id")) not in resolved
     ]
+
+
+def _connector_warning_details(
+    connector: dict[str, object],
+    nodes: list[object],
+) -> dict[str, object]:
+    payload = {
+        "id": str(connector.get("id", "")),
+        "type": str(connector.get("type", "")),
+        "bbox": connector.get("bbox"),
+        "points": connector.get("points") if isinstance(connector.get("points"), list) else [],
+        "arrow": bool(connector.get("arrow")),
+        "metadata": (
+            dict(connector.get("metadata"))
+            if isinstance(connector.get("metadata"), dict)
+            else {}
+        ),
+        "resolution_failure": _connector_resolution_failure(connector, nodes),
+    }
+    return payload
+
+
+def _connector_resolution_failure(
+    connector: dict[str, object],
+    nodes: list[object],
+) -> str:
+    node_dicts = [node for node in nodes if isinstance(node, dict)]
+    metadata = connector.get("metadata")
+    if isinstance(metadata, dict):
+        start_subject_id = metadata.get("start_subject_id")
+        end_subject_id = metadata.get("end_subject_id")
+        if start_subject_id not in (None, 0) or end_subject_id not in (None, 0):
+            node_by_instance_id = _nodes_by_instance_id(node_dicts)
+            if (
+                str(start_subject_id) not in node_by_instance_id
+                or str(end_subject_id) not in node_by_instance_id
+            ):
+                return "subject_id_unmatched"
+            if node_by_instance_id[str(start_subject_id)] == node_by_instance_id[str(end_subject_id)]:
+                return "subject_ids_resolve_to_same_node"
+    bbox_nodes = [
+        (str(node.get("id", "")), bbox)
+        for node in node_dicts
+        if (bbox := _diagram_node_bbox(node)) is not None
+    ]
+    if len(bbox_nodes) < 2:
+        return "insufficient_bbox_nodes"
+    points = connector.get("points")
+    if not isinstance(points, list) or len(points) < 2:
+        return "invalid_points"
+    start = _diagram_point(points[0])
+    end = _diagram_point(points[1])
+    if start is None or end is None:
+        return "invalid_points"
+    from_id = _nearest_node_id(start, bbox_nodes)
+    to_id = _nearest_node_id(end, bbox_nodes)
+    if from_id is not None and from_id == to_id:
+        return "endpoints_resolve_to_same_node"
+    return "edge_inference_unresolved"
 
 
 def _apply_ocr_fallback(
@@ -930,6 +1000,21 @@ def _hwp5_ocr_warning(asset_id: str, message: str) -> dict[str, Any]:
     }
 
 
+def _unsupported_drawing_shape_warning(
+    ctrl: bytes,
+    tag_id: int,
+    level: int,
+) -> dict[str, Any]:
+    return {
+        "type": "hwp5_unsupported_drawing_shape",
+        "severity": "medium",
+        "ctrl_id": _ctrl_id_text(ctrl),
+        "tag_id": tag_id,
+        "level": level,
+        "message": "Unsupported HWP5 drawing shape component was preserved as text.",
+    }
+
+
 def _parse_section(
     data: bytes,
     bin_entries: dict[int, _BinEntry] | None = None,
@@ -949,10 +1034,74 @@ def _parse_section(
     gso_line_payload: bytes | None = None
     gso_instance_id: int | None = None
     gso_ctrl_id: str | None = None
+    gso_metadata: dict[str, object] = {}
+    gso_container_stack: list[tuple[int, int | None, str | None]] = []
+
+    def gso_parent_metadata(level: int) -> dict[str, object]:
+        for container_level, instance_id, ctrl_id in reversed(gso_container_stack):
+            if container_level >= level:
+                continue
+            metadata: dict[str, object] = {}
+            if instance_id is not None:
+                metadata["parent_instance_id"] = instance_id
+            if ctrl_id is not None:
+                metadata["parent_ctrl_id"] = ctrl_id
+            return metadata
+        return {}
+
+    def append_gso_text_block(text_block: _TextBlock) -> None:
+        if table_stack and table_stack[-1].in_cell:
+            table_stack[-1].current_cell_children.append(
+                {
+                    "type": "diagram",
+                    "format": "structured_diagram",
+                    "content": _structured_diagram(
+                        text_block.text,
+                        nodes=[_diagram_node_from_text_block(1, text_block)],
+                        connectors=[],
+                    ),
+                }
+            )
+        else:
+            parsed.blocks.append(text_block)
+        parsed.saw_drawing = True
+
+    def preserve_active_container(next_level: int) -> None:
+        nonlocal gso_level, gso_text_parts, gso_bbox, gso_shape_type
+        nonlocal gso_line_payload, gso_instance_id, gso_ctrl_id
+        nonlocal gso_metadata
+        container_level = gso_level
+        container_instance_id = gso_instance_id
+        container_ctrl_id = gso_ctrl_id
+        text = _clean_text(" ".join(gso_text_parts))
+        metadata = {**gso_metadata, "container": True}
+        append_gso_text_block(
+            _TextBlock(
+                text,
+                origin="drawing",
+                bbox=gso_bbox,
+                shape_type=gso_shape_type or "container",
+                instance_id=gso_instance_id,
+                ctrl_id=gso_ctrl_id,
+                metadata=metadata,
+            )
+        )
+        gso_container_stack.append(
+            (container_level, container_instance_id, container_ctrl_id)
+        )
+        gso_level = next_level
+        gso_text_parts = []
+        gso_bbox = None
+        gso_shape_type = None
+        gso_line_payload = None
+        gso_instance_id = None
+        gso_ctrl_id = None
+        gso_metadata = gso_parent_metadata(next_level)
 
     def close_gso() -> None:
         nonlocal in_gso, gso_level, gso_text_parts, gso_bbox
         nonlocal gso_shape_type, gso_line_payload, gso_instance_id, gso_ctrl_id
+        nonlocal gso_metadata
         text = _clean_text(" ".join(gso_text_parts))
         if gso_shape_type in {"line", "connector"}:
             line_block = _DrawingLineBlock(
@@ -987,22 +1136,9 @@ def _parse_section(
                 shape_type=shape_type,
                 instance_id=gso_instance_id,
                 ctrl_id=gso_ctrl_id,
+                metadata=dict(gso_metadata),
             )
-            if table_stack and table_stack[-1].in_cell:
-                table_stack[-1].current_cell_children.append(
-                    {
-                        "type": "diagram",
-                        "format": "structured_diagram",
-                        "content": _structured_diagram(
-                            text,
-                            nodes=[_diagram_node_from_text_block(1, text_block)],
-                            connectors=[],
-                        ),
-                    }
-                )
-            else:
-                parsed.blocks.append(text_block)
-            parsed.saw_drawing = True
+            append_gso_text_block(text_block)
         in_gso = False
         gso_level = -1
         gso_text_parts = []
@@ -1011,6 +1147,7 @@ def _parse_section(
         gso_line_payload = None
         gso_instance_id = None
         gso_ctrl_id = None
+        gso_metadata = {}
 
     def close_current_cell(ctx: _TableCtx) -> None:
         if not ctx.in_cell:
@@ -1068,6 +1205,8 @@ def _parse_section(
     for tag_id, level, payload in _iter_records(data):
         if in_gso and level <= gso_level and tag_id != _TAG_CTRL_HEADER:
             close_gso()
+        while gso_container_stack and level <= gso_container_stack[-1][0]:
+            gso_container_stack.pop()
 
         while table_stack and level <= table_stack[-1].ctrl_level:
             close_top_table()
@@ -1085,15 +1224,23 @@ def _parse_section(
                 gso_line_payload = None
                 gso_instance_id = _gso_instance_id(payload)
                 gso_ctrl_id = _ctrl_id_text(ctrl)
+                gso_metadata = gso_parent_metadata(level)
             elif ctrl in _SHAPE_CTRL_TYPES:
                 shape_type = _SHAPE_CTRL_TYPES[ctrl]
                 if in_gso and level <= gso_level:
                     close_gso()
+                elif (
+                    in_gso
+                    and gso_shape_type in {"group", "container"}
+                    and level > gso_level
+                ):
+                    preserve_active_container(level)
                 if not in_gso:
                     in_gso = True
                     gso_level = level
                     gso_text_parts = []
                     gso_line_payload = None
+                    gso_metadata = gso_parent_metadata(level)
                 gso_bbox = _shape_bbox_from_ctrl_header(payload) or gso_bbox
                 gso_shape_type = shape_type
                 gso_instance_id = _gso_instance_id(payload)
@@ -1147,6 +1294,10 @@ def _parse_section(
             if ctrl in _SHAPE_CTRL_TYPES:
                 gso_shape_type = _SHAPE_CTRL_TYPES[ctrl]
                 gso_ctrl_id = _ctrl_id_text(ctrl)
+            elif ctrl:
+                parsed.quality_warnings.append(
+                    _unsupported_drawing_shape_warning(ctrl, tag_id, level)
+                )
             continue
 
         if in_gso and tag_id == _TAG_SHAPE_COMPONENT_LINE:
