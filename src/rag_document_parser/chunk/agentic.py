@@ -85,6 +85,12 @@ class _WindowResult:
     fallback_reason: str | None = None
 
 
+@dataclass(frozen=True)
+class _OmittedTableRows:
+    unit: EvidenceUnit
+    row_indexes: list[int]
+
+
 class EvidenceUnitAgenticChunker:
     def __init__(
         self,
@@ -260,11 +266,24 @@ def _materialize_window(
         full_assigned = next_full_assigned
         row_ranges_by_unit = next_row_ranges
 
-    _validate_row_coverage(units, full_assigned, row_ranges_by_unit)
+    chunks = _repair_omitted_table_rows(
+        chunks,
+        units,
+        full_assigned,
+        row_ranges_by_unit,
+        raw_plan,
+    )
     covered = _covered_unit_ids(full_assigned, row_ranges_by_unit)
-    missing = [unit.id for unit in units if unit.id not in covered]
-    if missing:
-        raise ValueError(f"chunk plan omitted units: {', '.join(missing)}")
+    missing_units = [unit for unit in units if unit.id not in covered]
+    if missing_units:
+        reason = f"chunk plan omitted units: {', '.join(unit.id for unit in missing_units)}"
+        for unit in missing_units:
+            chunks = _insert_repair_chunk(
+                chunks,
+                _fallback_chunks([unit], reason, raw_plan)[0],
+                _chunk_sort_key_for_unit(unit, units),
+                units,
+            )
     return chunks
 
 
@@ -412,12 +431,70 @@ def _validate_unique_unit_ids(units: list[EvidenceUnit]) -> None:
         raise ValueError(f"duplicate unit id: {', '.join(duplicates)}")
 
 
-def _validate_row_coverage(
+def _repair_omitted_table_rows(
+    chunks: list[RagChunk],
     units: list[EvidenceUnit],
     full_assigned: set[str],
     row_ranges_by_unit: dict[str, list[tuple[int, int]]],
-) -> None:
+    raw_plan: Any,
+) -> list[RagChunk]:
+    repaired = list(chunks)
+    for omitted in _omitted_table_rows(units, full_assigned, row_ranges_by_unit):
+        row_ranges = _contiguous_ranges(omitted.row_indexes)
+        row_ranges_payload = [[start, end] for start, end in row_ranges]
+        evidence_item, source_text, normalized = _materialize_operation(
+            omitted.unit,
+            {
+                "unit_id": omitted.unit.id,
+                "action": "include_rows",
+                "row_ranges": row_ranges_payload,
+            },
+        )
+        reason = (
+            f"chunk plan omitted table rows for unit {omitted.unit.id}: "
+            f"{', '.join(str(index) for index in omitted.row_indexes)}"
+        )
+        repair = _chunk_from_items(
+            len(repaired) + 1,
+            [omitted.unit],
+            [evidence_item],
+            [source_text],
+            {
+                "summary": _fallback_summary_from_text(source_text),
+                "keywords": _fallback_keywords_from_text(source_text),
+                "questions": _fallback_questions(source_text[:80]),
+            },
+            [normalized],
+            [],
+        )
+        metadata = dict(repair.metadata)
+        metadata["_fallback_reason"] = reason
+        metadata["_rejected_plan"] = _debug_value(raw_plan)
+        repair = RagChunk(
+            id=repair.id,
+            source=repair.source,
+            evidence=repair.evidence,
+            summary=repair.summary,
+            keywords=list(repair.keywords),
+            questions=list(repair.questions),
+            metadata=metadata,
+        )
+        repaired = _insert_repair_chunk(
+            repaired,
+            repair,
+            _chunk_sort_key_for_table_rows(omitted.unit, omitted.row_indexes, units),
+            units,
+        )
+    return repaired
+
+
+def _omitted_table_rows(
+    units: list[EvidenceUnit],
+    full_assigned: set[str],
+    row_ranges_by_unit: dict[str, list[tuple[int, int]]],
+) -> list[_OmittedTableRows]:
     by_id = {unit.id: unit for unit in units}
+    omitted: list[_OmittedTableRows] = []
     for unit_id, ranges in row_ranges_by_unit.items():
         if unit_id in full_assigned:
             continue
@@ -436,8 +513,8 @@ def _validate_row_coverage(
             if not _row_selected(index, ranges)
         ]
         if missing:
-            omitted = ", ".join(str(index) for index in missing)
-            raise ValueError(f"chunk plan omitted table rows for unit {unit.id}: {omitted}")
+            omitted.append(_OmittedTableRows(unit, missing))
+    return omitted
 
 
 def _operation_unit_ids(
@@ -765,6 +842,94 @@ def _context_unit_ids(
         if unit_id not in result:
             result.append(unit_id)
     return result
+
+
+def _insert_repair_chunk(
+    chunks: list[RagChunk],
+    repair: RagChunk,
+    repair_key: tuple[int, int],
+    units: list[EvidenceUnit],
+) -> list[RagChunk]:
+    result = list(chunks)
+    for index, chunk in enumerate(result):
+        if _chunk_sort_key(chunk, units) > repair_key:
+            result.insert(index, repair)
+            return result
+    result.append(repair)
+    return result
+
+
+def _chunk_sort_key(chunk: RagChunk, units: list[EvidenceUnit]) -> tuple[int, int]:
+    order = _unit_order(units)
+    operations = _dicts(chunk.metadata.get("operations"))
+    keys: list[tuple[int, int]] = []
+    for operation in operations:
+        unit_id = operation.get("unit_id")
+        if not isinstance(unit_id, str) or unit_id not in order:
+            continue
+        row_key = 0
+        if operation.get("action") == "include_rows":
+            row_key = _first_row_range_start(operation.get("row_ranges"))
+        keys.append((order[unit_id], row_key))
+    if keys:
+        return min(keys)
+
+    source_unit_ids = _strings(chunk.metadata.get("source_unit_ids"))
+    indexes = [order[unit_id] for unit_id in source_unit_ids if unit_id in order]
+    if indexes:
+        return (min(indexes), 0)
+    return (len(units), 0)
+
+
+def _first_row_range_start(row_ranges: Any) -> int:
+    if not isinstance(row_ranges, list):
+        return 0
+    starts = [
+        row_range[0]
+        for row_range in row_ranges
+        if (
+            isinstance(row_range, list)
+            and len(row_range) == 2
+            and type(row_range[0]) is int
+        )
+    ]
+    return min(starts) if starts else 0
+
+
+def _chunk_sort_key_for_unit(
+    unit: EvidenceUnit,
+    units: list[EvidenceUnit],
+) -> tuple[int, int]:
+    return (_unit_order(units).get(unit.id, len(units)), 0)
+
+
+def _chunk_sort_key_for_table_rows(
+    unit: EvidenceUnit,
+    row_indexes: list[int],
+    units: list[EvidenceUnit],
+) -> tuple[int, int]:
+    row_key = min(row_indexes) if row_indexes else 0
+    return (_unit_order(units).get(unit.id, len(units)), row_key)
+
+
+def _unit_order(units: list[EvidenceUnit]) -> dict[str, int]:
+    return {unit.id: index for index, unit in enumerate(units)}
+
+
+def _contiguous_ranges(indexes: list[int]) -> list[tuple[int, int]]:
+    if not indexes:
+        return []
+    sorted_indexes = sorted(indexes)
+    ranges: list[tuple[int, int]] = []
+    start = previous = sorted_indexes[0]
+    for index in sorted_indexes[1:]:
+        if index == previous + 1:
+            previous = index
+            continue
+        ranges.append((start, previous))
+        start = previous = index
+    ranges.append((start, previous))
+    return ranges
 
 
 def _unique(values: list[str]) -> list[str]:

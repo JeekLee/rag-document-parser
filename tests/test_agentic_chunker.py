@@ -591,7 +591,7 @@ def test_agentic_chunker_materializes_table_row_subset():
     assert "row 1" not in chunks[0].source.text
 
 
-def test_agentic_chunker_falls_back_when_table_row_split_omits_rows():
+def test_agentic_chunker_repairs_omitted_table_rows_without_dropping_planned_rows():
     from rag_document_parser.chunk import EvidenceUnitAgenticChunker
 
     def plan_fn(window, cfg, max_units):
@@ -607,13 +607,14 @@ def test_agentic_chunker_falls_back_when_table_row_split_omits_rows():
 
     chunks = EvidenceUnitAgenticChunker(llm=None, plan_fn=plan_fn).chunk([_table_unit("b2")])
 
-    assert len(chunks) == 1
-    assert chunks[0].metadata["source_unit_ids"] == ["b2"]
-    assert [row["index"] for row in chunks[0].evidence.items[0].content["rows"]] == [1, 2]
+    assert len(chunks) == 2
+    assert [row["index"] for row in chunks[0].evidence.items[0].content["rows"]] == [1]
+    assert [row["index"] for row in chunks[1].evidence.items[0].content["rows"]] == [2]
     assert "omitted table rows" in chunks[0].metadata["_fallback_reason"]
+    assert "_fallback_reason" not in chunks[1].metadata
 
 
-def test_agentic_chunker_falls_back_without_dropping_units_on_invalid_plan():
+def test_agentic_chunker_repairs_omitted_units_without_dropping_valid_plan():
     from rag_document_parser.chunk import EvidenceUnitAgenticChunker
 
     units = [_text_unit("b1", "첫 번째 설명"), _text_unit("b2", "두 번째 설명")]
@@ -631,9 +632,8 @@ def test_agentic_chunker_falls_back_without_dropping_units_on_invalid_plan():
     chunks = EvidenceUnitAgenticChunker(llm=None, plan_fn=plan_fn).chunk(units)
 
     assert [chunk.metadata["source_unit_ids"] for chunk in chunks] == [["b1"], ["b2"]]
-    assert chunks[0].metadata["_fallback_reason"].startswith("chunk plan omitted units")
+    assert "_fallback_reason" not in chunks[0].metadata
     assert chunks[1].metadata["_fallback_reason"].startswith("chunk plan omitted units")
-    assert chunks[0].metadata["_rejected_plan"] == rejected_plan
     assert chunks[1].metadata["_rejected_plan"] == rejected_plan
 
 
