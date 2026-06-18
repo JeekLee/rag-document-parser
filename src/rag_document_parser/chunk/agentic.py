@@ -7,6 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
+from ..enrichment.backend import Enricher
+from ..enrichment.chunk import RagChunkEnricher
 from ..enrichment.llm import LlmConfig, chat_json
 from ..models import Evidence, EvidenceItem, EvidenceUnit, RagChunk, SourceEvidence
 
@@ -29,7 +31,7 @@ _PROMPT = """\
 - table row coverage에 확신이 없으면 action "include"로 전체 table을 포함합니다.
 - context_unit_ids는 선택 사항이며 이미 이전 chunk에서 evidence로 포함된 unit id만 작성합니다.
 - text, table, image를 같은 chunk에 묶을 수 있습니다.
-- 원문에 없는 사실을 summary, keywords, questions에 추가하지 않습니다.
+- summary, keywords, questions는 최종 RagChunk 확정 후 별도 enrichment 단계에서 생성합니다.
 - 한 chunk는 가능하면 unit {max_units}개 이하로 유지합니다.
 
 Unit 목록:
@@ -43,10 +45,7 @@ JSON 배열만 출력하세요:
       {"unit_id": {example_unit_id}, "action": "include"}
     ],
     "context_unit_ids": [],
-    "title": "제목",
-    "summary": "요약",
-    "keywords": ["키워드"],
-    "questions": ["이 chunk로 답할 수 있는 질문"]
+    "title": "제목"
   }
 ]
 {include_rows_example}
@@ -62,6 +61,7 @@ Rules:
 - Use action "merge" only when the right chunk directly continues the same topic, table, section, or Q&A block.
 - Use action "keep" when the chunks are merely related but answer different retrieval questions.
 - Do not invent evidence content. Evidence content will be copied from the existing chunks.
+- Summary, keywords, and questions are generated after final chunks are fixed.
 - Keep merged chunks reasonably close to {max_units} source units when possible.
 
 Boundary payload:
@@ -71,10 +71,7 @@ JSON object only:
 {{
   "action": "merge",
   "reason": "short reason",
-  "title": "optional merged title",
-  "summary": "optional merged summary",
-  "keywords": ["optional", "keywords"],
-  "questions": ["optional retrieval question"]
+  "title": "optional merged title"
 }}
 """
 
@@ -113,6 +110,8 @@ class EvidenceUnitAgenticChunker:
         max_concurrency: int = 4,
         plan_fn: PlanFn | None = None,
         boundary_merge_fn: BoundaryMergeFn | None = None,
+        final_enricher: Enricher | None = None,
+        enrich_final_chunks: bool = True,
     ) -> None:
         self._llm = llm
         self._max_units = max(1, max_units_per_chunk)
@@ -122,6 +121,19 @@ class EvidenceUnitAgenticChunker:
         self._concurrency = max(1, max_concurrency)
         self._plan_fn = plan_fn or self._default_plan
         self._boundary_merge_fn = boundary_merge_fn
+        self._final_enricher = (
+            final_enricher
+            if final_enricher is not None
+            else (
+                RagChunkEnricher(
+                    llm=llm,
+                    chat_fn=chat_json,
+                    max_concurrency=self._concurrency,
+                )
+                if enrich_final_chunks
+                else None
+            )
+        )
 
     def chunk(self, units: list[EvidenceUnit]) -> list[RagChunk]:
         if not units:
@@ -140,7 +152,13 @@ class EvidenceUnitAgenticChunker:
             self._max_tokens,
         )
 
-        return [_reindex_chunk(index, chunk) for index, chunk in enumerate(chunks, start=1)]
+        final_chunks = [
+            _reindex_chunk(index, chunk)
+            for index, chunk in enumerate(chunks, start=1)
+        ]
+        if self._final_enricher is not None:
+            return self._final_enricher.enrich(final_chunks)
+        return final_chunks
 
     def _chunk_window(self, window: list[EvidenceUnit]) -> _WindowResult:
         raw_plan: Any | None = None
@@ -251,8 +269,12 @@ def _materialize_window(
         operations = item.get("operations")
         if not isinstance(operations, list) or not operations:
             raise ValueError("chunk plan item requires operations")
+        operations, operation_warnings = _normalize_plan_operations(operations, by_id)
         operation_unit_ids = _operation_unit_ids(operations, by_id)
-        _validate_plan_unit_ids(item, by_id, operation_unit_ids)
+        plan_warnings = [
+            *operation_warnings,
+            *_plan_unit_id_warnings(item, by_id, operation_unit_ids),
+        ]
 
         prior_covered = _covered_unit_ids(full_assigned, row_ranges_by_unit)
         next_full_assigned = set(full_assigned)
@@ -293,6 +315,7 @@ def _materialize_window(
                 normalized_ops,
                 context_unit_ids,
                 max_units_per_chunk,
+                plan_warnings=plan_warnings,
             )
         )
         full_assigned = next_full_assigned
@@ -738,9 +761,16 @@ def _table_row_split(
     context_text: str,
 ) -> _TableRowSplit:
     table = item.content if isinstance(item.content, dict) else {}
-    subset = dict(table)
-    subset["rows"] = rows
     row_ranges = _row_ranges_from_rows(rows)
+    subset = _table_subset(
+        table,
+        [(start, end) for start, end in _row_range_tuples(row_ranges)],
+    )
+    subset_rows = [
+        row
+        for row in subset.get("rows", [])
+        if isinstance(row, dict)
+    ]
     metadata = dict(item.metadata)
     metadata["row_ranges"] = row_ranges
     metadata["agentic_table_split"] = {
@@ -755,7 +785,7 @@ def _table_row_split(
             source_unit_ids=list(item.source_unit_ids),
             metadata=metadata,
         ),
-        rows=rows,
+        rows=subset_rows,
         row_ranges=row_ranges,
         context_text=context_text,
     )
@@ -1031,6 +1061,12 @@ def _rebuild_chunk_from_items(
         metadata["_warnings"] = warnings
     else:
         metadata.pop("_warnings", None)
+    if (
+        regenerate_text_fields
+        or source_text_override is not None
+        or source_unit_ids != _strings(original.metadata.get("source_unit_ids"))
+    ):
+        metadata["_needs_enrichment"] = True
 
     return RagChunk(
         id=original.id,
@@ -1317,6 +1353,7 @@ def _repair_omitted_table_rows(
         metadata = dict(repair.metadata)
         metadata["_fallback_reason"] = reason
         metadata["_rejected_plan"] = _debug_value(raw_plan)
+        metadata["_needs_enrichment"] = True
         repair = RagChunk(
             id=repair.id,
             source=repair.source,
@@ -1379,21 +1416,96 @@ def _operation_unit_ids(
     return unit_ids
 
 
-def _validate_plan_unit_ids(
+def _normalize_plan_operations(
+    operations: list[Any],
+    by_id: dict[str, EvidenceUnit],
+) -> tuple[list[Any], list[dict[str, Any]]]:
+    full_include_unit_ids = {
+        operation.get("unit_id")
+        for operation in operations
+        if (
+            isinstance(operation, dict)
+            and operation.get("action", "include") == "include"
+            and isinstance(operation.get("unit_id"), str)
+            and _is_structured_table_unit(by_id.get(operation.get("unit_id")))
+        )
+    }
+    if not full_include_unit_ids:
+        return operations, []
+
+    normalized: list[Any] = []
+    ignored_row_unit_ids: list[str] = []
+    for operation in operations:
+        if (
+            isinstance(operation, dict)
+            and operation.get("action") == "include_rows"
+            and operation.get("unit_id") in full_include_unit_ids
+        ):
+            ignored_row_unit_ids.append(operation["unit_id"])
+            continue
+        normalized.append(operation)
+
+    if not ignored_row_unit_ids:
+        return operations, []
+    return normalized, [
+        {
+            "type": "agentic_plan_include_rows_ignored",
+            "reason": "same plan item also fully included the table; full include was used",
+            "unit_ids": _unique(ignored_row_unit_ids),
+        }
+    ]
+
+
+def _is_structured_table_unit(unit: EvidenceUnit | None) -> bool:
+    return (
+        unit is not None
+        and unit.format == "structured_table"
+        and isinstance(unit.content, dict)
+    )
+
+
+def _plan_unit_id_warnings(
     item: dict[str, Any],
     by_id: dict[str, EvidenceUnit],
     operation_unit_ids: list[str],
-) -> None:
+) -> list[dict[str, Any]]:
     if "unit_ids" not in item:
-        return
+        return []
     unit_ids = item.get("unit_ids")
     if not isinstance(unit_ids, list):
-        raise ValueError("unit_ids must be a list")
-    for unit_id in unit_ids:
-        if not isinstance(unit_id, str) or unit_id not in by_id:
-            raise ValueError(f"unknown unit id: {unit_id!r}")
+        return [
+            {
+                "type": "agentic_plan_unit_ids_ignored",
+                "reason": "unit_ids must be a list",
+                "operation_unit_ids": list(operation_unit_ids),
+            }
+        ]
+
+    invalid_unit_ids = [
+        unit_id
+        for unit_id in unit_ids
+        if not isinstance(unit_id, str) or unit_id not in by_id
+    ]
+    if invalid_unit_ids:
+        return [
+            {
+                "type": "agentic_plan_unit_ids_ignored",
+                "reason": "unit_ids contains unknown or invalid ids",
+                "unit_ids": _debug_value(unit_ids),
+                "operation_unit_ids": list(operation_unit_ids),
+            }
+        ]
+
     if unit_ids != operation_unit_ids:
-        raise ValueError("unit_ids must match operation unit_ids")
+        return [
+            {
+                "type": "agentic_plan_unit_ids_mismatch",
+                "reason": "unit_ids did not match operations; operations were used",
+                "unit_ids": list(unit_ids),
+                "operation_unit_ids": list(operation_unit_ids),
+            }
+        ]
+    return []
 
 
 def _materialize_operation(
@@ -1455,19 +1567,30 @@ def _normalize_row_ranges(value: Any) -> list[tuple[int, int]]:
 
 
 def _table_subset(table: dict[str, Any], ranges: list[tuple[int, int]]) -> dict[str, Any]:
-    selected: list[dict[str, Any]] = []
     rows = table.get("rows", [])
     if not isinstance(rows, list):
         raise ValueError("structured_table content requires rows")
 
     _validate_row_range_bounds(ranges, _table_row_indexes(rows))
 
+    selected_indexes = {
+        index
+        for row in rows
+        if (
+            isinstance(row, dict)
+            and type(row.get("index")) is int
+            and _row_selected(row["index"], ranges)
+        )
+        for index in [row["index"]]
+    }
+    carried_by_row = _rowspan_context_cells_by_row(table, rows, selected_indexes)
+    selected: list[dict[str, Any]] = []
     for row in rows:
         if not isinstance(row, dict):
             continue
         index = row.get("index")
         if type(index) is int and _row_selected(index, ranges):
-            selected.append(row)
+            selected.append(_row_with_carried_cells(row, carried_by_row.get(index, []), table))
 
     if not selected:
         raise ValueError("row_ranges selected no rows")
@@ -1475,6 +1598,141 @@ def _table_subset(table: dict[str, Any], ranges: list[tuple[int, int]]) -> dict[
     subset = dict(table)
     subset["rows"] = selected
     return subset
+
+
+def _row_range_tuples(row_ranges: list[list[int]]) -> list[tuple[int, int]]:
+    return [
+        (row_range[0], row_range[1])
+        for row_range in row_ranges
+        if (
+            isinstance(row_range, list)
+            and len(row_range) == 2
+            and type(row_range[0]) is int
+            and type(row_range[1]) is int
+        )
+    ]
+
+
+def _rowspan_context_cells_by_row(
+    table: dict[str, Any],
+    rows: list[Any],
+    selected_indexes: set[int],
+) -> dict[int, list[dict[str, Any]]]:
+    if not selected_indexes:
+        return {}
+
+    result: dict[int, list[dict[str, Any]]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        start_index = row.get("index")
+        if type(start_index) is not int:
+            continue
+        cells = row.get("cells", [])
+        if not isinstance(cells, list):
+            continue
+        for cell in cells:
+            if not isinstance(cell, dict):
+                continue
+            rowspan = _positive_int(cell.get("rowspan"))
+            if rowspan <= 1:
+                continue
+            covered = [
+                index
+                for index in sorted(selected_indexes)
+                if start_index < index < start_index + rowspan
+            ]
+            for group in _contiguous_ranges(covered):
+                carried = dict(cell)
+                carried["rowspan"] = group[1] - group[0] + 1
+                metadata = (
+                    dict(carried.get("metadata"))
+                    if isinstance(carried.get("metadata"), dict)
+                    else {}
+                )
+                metadata["rowspan_context"] = {
+                    "source_row_index": start_index,
+                    "source_rowspan": rowspan,
+                }
+                carried["metadata"] = metadata
+                result.setdefault(group[0], []).append(carried)
+    return result
+
+
+def _row_with_carried_cells(
+    row: dict[str, Any],
+    carried_cells: list[dict[str, Any]],
+    table: dict[str, Any],
+) -> dict[str, Any]:
+    if not carried_cells:
+        return row
+
+    copied = dict(row)
+    existing_cells = [
+        dict(cell)
+        for cell in row.get("cells", [])
+        if isinstance(cell, dict)
+    ]
+    columns = table.get("columns", [])
+    if not isinstance(columns, list):
+        columns = []
+    cells = list(existing_cells)
+    for carried in carried_cells:
+        if _cell_overlaps_any(carried, cells, columns):
+            continue
+        cells.append(carried)
+    copied["cells"] = sorted(cells, key=lambda cell: _cell_sort_key(cell, columns))
+    return copied
+
+
+def _cell_overlaps_any(
+    cell: dict[str, Any],
+    cells: list[dict[str, Any]],
+    columns: list[Any],
+) -> bool:
+    span = _cell_column_span(cell, columns)
+    if span is None:
+        return False
+    for other in cells:
+        other_span = _cell_column_span(other, columns)
+        if other_span is None:
+            continue
+        if span[0] < other_span[1] and other_span[0] < span[1]:
+            return True
+    return False
+
+
+def _cell_sort_key(cell: dict[str, Any], columns: list[Any]) -> tuple[int, str]:
+    span = _cell_column_span(cell, columns)
+    if span is None:
+        return (10_000, str(cell.get("column_id", "")))
+    return (span[0], str(cell.get("column_id", "")))
+
+
+def _cell_column_span(cell: dict[str, Any], columns: list[Any]) -> tuple[int, int] | None:
+    column_id = cell.get("column_id")
+    start = _column_index(columns, column_id)
+    if start is None:
+        return None
+    colspan = _positive_int(cell.get("colspan"))
+    return (start, start + colspan)
+
+
+def _column_index(columns: list[Any], column_id: Any) -> int | None:
+    for index, column in enumerate(columns):
+        if isinstance(column, dict) and column.get("id") == column_id:
+            return index
+    if isinstance(column_id, str):
+        match = re.fullmatch(r"c([1-9][0-9]*)", column_id)
+        if match:
+            index = int(match.group(1)) - 1
+            if index >= 0:
+                return index
+    return None
+
+
+def _positive_int(value: Any) -> int:
+    return value if type(value) is int and value > 0 else 1
 
 
 def _table_row_indexes(rows: list[Any]) -> list[int]:
@@ -1621,6 +1879,8 @@ def _chunk_from_items(
     operations: list[dict[str, Any]],
     context_unit_ids: list[str],
     max_units_per_chunk: int | None = None,
+    *,
+    plan_warnings: list[dict[str, Any]] | None = None,
 ) -> RagChunk:
     source_text = "\n\n".join(source_parts)
     source_unit_ids = _unique([unit.id for unit in units])
@@ -1643,14 +1903,17 @@ def _chunk_from_items(
             "display_format": "composite",
         },
     }
+    warnings = list(plan_warnings or [])
     if max_units_per_chunk is not None and len(source_unit_ids) > max_units_per_chunk:
-        metadata["_warnings"] = [
+        warnings.append(
             {
                 "type": "agentic_chunk_exceeds_max_units",
                 "source_unit_count": len(source_unit_ids),
                 "max_units_per_chunk": max_units_per_chunk,
             }
-        ]
+        )
+    if warnings:
+        metadata["_warnings"] = warnings
 
     return RagChunk(
         id=f"chunk-{index}",
@@ -1889,6 +2152,7 @@ def _fallback_chunks(
             "source_units": _source_units([unit]),
             "context_unit_ids": [],
             "_fallback_reason": reason,
+            "_needs_enrichment": True,
             "common": common,
         }
         if rejected_plan is not None:
