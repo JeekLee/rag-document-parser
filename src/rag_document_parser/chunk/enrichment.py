@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -112,7 +112,7 @@ def _enrichment_prompt(chunk: RagChunk) -> str:
 
 
 def _chunk_payload(chunk: RagChunk) -> dict[str, Any]:
-    metadata = chunk.metadata if isinstance(chunk.metadata, dict) else {}
+    metadata = chunk.metadata if isinstance(chunk.metadata, Mapping) else {}
     return {
         "id": chunk.id,
         "source_unit_ids": _strings(metadata.get("source_unit_ids")),
@@ -131,7 +131,7 @@ def _evidence_payload(chunk: RagChunk) -> list[dict[str, Any]]:
             "format": item.format,
             "source_unit_ids": list(item.source_unit_ids),
         }
-        if item.type == "table" and isinstance(item.content, dict):
+        if item.type == "table" and isinstance(item.content, Mapping):
             record["table"] = _table_payload(item.content, item.metadata)
         elif isinstance(item.content, str):
             record["text"] = _truncate(item.content, 2000)
@@ -149,13 +149,13 @@ def _table_payload(table: dict[str, Any], metadata: dict[str, Any]) -> dict[str,
         "columns": [
             str(column.get("text", "")).strip()
             for column in columns
-            if isinstance(column, dict) and str(column.get("text", "")).strip()
+            if isinstance(column, Mapping) and str(column.get("text", "")).strip()
         ][:80],
         "row_ranges": metadata.get("row_ranges") if isinstance(metadata.get("row_ranges"), list) else [],
         "rows": [
             _table_row_payload(row, columns if isinstance(columns, list) else [])
             for row in rows
-            if isinstance(row, dict)
+            if isinstance(row, Mapping)
         ][:60],
     }
 
@@ -163,7 +163,7 @@ def _table_payload(table: dict[str, Any], metadata: dict[str, Any]) -> dict[str,
 def _table_row_payload(row: dict[str, Any], columns: list[Any]) -> dict[str, Any]:
     cells: list[dict[str, str]] = []
     for cell in row.get("cells", []) if isinstance(row.get("cells"), list) else []:
-        if not isinstance(cell, dict):
+        if not isinstance(cell, Mapping):
             continue
         text = _normalize_space(str(cell.get("text", "")))
         if not text:
@@ -178,7 +178,7 @@ def _table_row_payload(row: dict[str, Any], columns: list[Any]) -> dict[str, Any
 
 
 def _parse_enrichment(raw: Any, *, fallback: _ChunkEnrichment) -> _ChunkEnrichment:
-    if not isinstance(raw, dict):
+    if not isinstance(raw, Mapping):
         raise ValueError("chunk enrichment result must be an object")
 
     summary = raw.get("summary") if isinstance(raw.get("summary"), str) else ""
@@ -252,7 +252,7 @@ def _enrichment_warning(exc: Exception) -> dict[str, Any]:
 
 
 def _needs_enrichment(chunk: RagChunk) -> bool:
-    metadata = chunk.metadata if isinstance(chunk.metadata, dict) else {}
+    metadata = chunk.metadata if isinstance(chunk.metadata, Mapping) else {}
     if metadata.get("_needs_enrichment") is True:
         return True
     return not chunk.summary or not chunk.keywords or not chunk.questions
@@ -284,16 +284,16 @@ def _heuristic_enrichment(chunk: RagChunk) -> _ChunkEnrichment:
 def _qa_table_questions(chunk: RagChunk) -> list[str]:
     questions: list[str] = []
     for item in chunk.evidence.items:
-        if item.type != "table" or not isinstance(item.content, dict):
+        if item.type != "table" or not isinstance(item.content, Mapping):
             continue
         columns = item.content.get("columns", [])
         if not isinstance(columns, list):
             columns = []
         for row in item.content.get("rows", []) if isinstance(item.content.get("rows"), list) else []:
-            if not isinstance(row, dict):
+            if not isinstance(row, Mapping):
                 continue
             for cell in row.get("cells", []) if isinstance(row.get("cells"), list) else []:
-                if not isinstance(cell, dict):
+                if not isinstance(cell, Mapping):
                     continue
                 label = _normalize_space(_column_label(columns, cell.get("column_id")))
                 if not _looks_like_question_column(label):
@@ -370,7 +370,7 @@ def _chunk_context(chunk: RagChunk) -> str:
         return title
 
     for item in chunk.evidence.items:
-        if item.type != "table" or not isinstance(item.content, dict):
+        if item.type != "table" or not isinstance(item.content, Mapping):
             continue
         caption = item.content.get("caption")
         if isinstance(caption, str) and caption.strip():
@@ -379,7 +379,7 @@ def _chunk_context(chunk: RagChunk) -> str:
 
 
 def _metadata_title(chunk: RagChunk) -> str:
-    metadata = chunk.metadata if isinstance(chunk.metadata, dict) else {}
+    metadata = chunk.metadata if isinstance(chunk.metadata, Mapping) else {}
     title = metadata.get("title")
     return _normalize_space(title) if isinstance(title, str) else ""
 
@@ -387,7 +387,7 @@ def _metadata_title(chunk: RagChunk) -> str:
 def _chunk_row_label(chunk: RagChunk) -> str:
     ranges: list[list[int]] = []
     for item in chunk.evidence.items:
-        if not isinstance(item.metadata, dict):
+        if not isinstance(item.metadata, Mapping):
             continue
         row_ranges = item.metadata.get("row_ranges")
         if isinstance(row_ranges, list):
@@ -412,19 +412,19 @@ def _chunk_row_label(chunk: RagChunk) -> str:
 def _cell_preview(chunk: RagChunk) -> str:
     values: list[str] = []
     for item in chunk.evidence.items:
-        if item.type != "table" or not isinstance(item.content, dict):
+        if item.type != "table" or not isinstance(item.content, Mapping):
             continue
         rows = item.content.get("rows", [])
         if not isinstance(rows, list):
             continue
         for row in rows:
-            if not isinstance(row, dict):
+            if not isinstance(row, Mapping):
                 continue
             cells = row.get("cells", [])
             if not isinstance(cells, list):
                 continue
             for cell in cells:
-                if not isinstance(cell, dict):
+                if not isinstance(cell, Mapping):
                     continue
                 text = _normalize_space(str(cell.get("text", "")))
                 if len(text) >= 2:
@@ -478,7 +478,7 @@ def _fallback_keywords(text: str) -> list[str]:
 def _column_label(columns: list[Any], column_id: Any) -> str:
     for column in columns:
         if (
-            isinstance(column, dict)
+            isinstance(column, Mapping)
             and column.get("id") == column_id
             and isinstance(column.get("text"), str)
             and column["text"].strip()
@@ -505,7 +505,7 @@ def _strings(value: Any) -> list[str]:
 def _dicts(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
-    return [item for item in value if isinstance(item, dict)]
+    return [item for item in value if isinstance(item, Mapping)]
 
 
 def _unique(values: list[str]) -> list[str]:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from html import escape
 from typing import Any
 
@@ -41,9 +42,9 @@ def _render_rag_chunk(
     assets_by_id: dict[str, dict[str, Any]],
 ) -> str:
     source = chunk.get("source", {})
-    source_text = source.get("text", "") if isinstance(source, dict) else ""
+    source_text = source.get("text", "") if isinstance(source, Mapping) else ""
     metadata = chunk.get("metadata", {})
-    if not isinstance(metadata, dict):
+    if not isinstance(metadata, Mapping):
         metadata = {}
 
     evidence = chunk.get("evidence", {})
@@ -108,10 +109,10 @@ def _render_chunk_metadata(metadata: dict[str, Any], evidence: Any) -> str:
     common = metadata.get("common")
     unit_types = (
         _string_list(common.get("unit_types"))
-        if isinstance(common, dict)
+        if isinstance(common, Mapping)
         else _evidence_item_types(evidence)
     )
-    display_format = common.get("display_format") if isinstance(common, dict) else None
+    display_format = common.get("display_format") if isinstance(common, Mapping) else None
 
     if source_unit_ids:
         labels.append(f"source units: {', '.join(source_unit_ids)}")
@@ -207,14 +208,14 @@ def _render_final_evidence(
     evidence: Any,
     assets_by_id: dict[str, dict[str, Any]],
 ) -> str:
-    if not isinstance(evidence, dict):
+    if not isinstance(evidence, Mapping):
         return f"<pre>{escape(str(evidence))}</pre>"
 
     items = evidence.get("items")
     if not isinstance(items, list):
         return _render_evidence_item(evidence, assets_by_id)
 
-    item_dicts = [item for item in items if isinstance(item, dict)]
+    item_dicts = [item for item in items if isinstance(item, Mapping)]
     parts = ['<div class="final-evidence">']
     for item in item_dicts:
         parts.append('<div class="final-evidence-part">')
@@ -265,7 +266,7 @@ def _render_evidence_item(
     item: Any,
     assets_by_id: dict[str, dict[str, Any]],
 ) -> str:
-    if not isinstance(item, dict):
+    if not isinstance(item, Mapping):
         return f"<pre>{escape(str(item))}</pre>"
 
     item_type = item.get("type", item.get("kind"))
@@ -274,11 +275,11 @@ def _render_evidence_item(
 
     if item_type == "text" and isinstance(content, str):
         return _render_text_content(content)
-    if item_type == "table" and item_format == "structured_table" and isinstance(content, dict):
+    if item_type == "table" and item_format == "structured_table" and isinstance(content, Mapping):
         return _render_structured_table(content, assets_by_id)
-    if item_type in {"image", "asset"} and isinstance(content, dict):
+    if item_type in {"image", "asset"} and isinstance(content, Mapping):
         return _render_asset_ref(content, assets_by_id)
-    if item_type == "diagram" and isinstance(content, dict):
+    if item_type == "diagram" and isinstance(content, Mapping):
         return _render_diagram(content)
     if isinstance(content, (dict, list)):
         return f'<pre class="evidence-json">{_json_debug(content)}</pre>'
@@ -460,7 +461,7 @@ def _position_table_row_cells(
     positioned: list[tuple[dict[str, Any] | None, int]] = []
     current_column = 1
     sorted_cells = sorted(
-        (cell for cell in cells if isinstance(cell, dict)),
+        (cell for cell in cells if isinstance(cell, Mapping)),
         key=lambda cell: _column_id_number(str(cell.get("column_id", "c1"))),
     )
     for cell in sorted_cells:
@@ -531,7 +532,7 @@ def _render_children(children: Any, assets_by_id: dict[str, dict[str, Any]]) -> 
         return ""
     rendered = []
     for child in children:
-        if isinstance(child, dict):
+        if isinstance(child, Mapping):
             rendered.append('<div class="nested-evidence">')
             rendered.append(_render_evidence_item(child, assets_by_id))
             rendered.append("</div>")
@@ -626,7 +627,7 @@ def _render_tag_list(values: list[str]) -> str:
 
 
 def _as_dict(value: Any) -> dict[str, Any] | None:
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return value
 
     to_dict = getattr(value, "to_dict", None)
@@ -634,7 +635,7 @@ def _as_dict(value: Any) -> dict[str, Any] | None:
         return None
 
     payload = to_dict()
-    if isinstance(payload, dict):
+    if isinstance(payload, Mapping):
         return payload
     return None
 
@@ -645,12 +646,12 @@ def _assets_by_id(assets: list[dict[str, Any]] | None) -> dict[str, dict[str, An
     return {
         str(asset["id"]): asset
         for asset in assets
-        if isinstance(asset, dict) and isinstance(asset.get("id"), str)
+        if isinstance(asset, Mapping) and isinstance(asset.get("id"), str)
     }
 
 
 def _evidence_item_count(evidence: Any) -> int | None:
-    if not isinstance(evidence, dict):
+    if not isinstance(evidence, Mapping):
         return None
     items = evidence.get("items")
     if not isinstance(items, list):
@@ -659,14 +660,14 @@ def _evidence_item_count(evidence: Any) -> int | None:
 
 
 def _evidence_item_types(evidence: Any) -> list[str]:
-    if not isinstance(evidence, dict):
+    if not isinstance(evidence, Mapping):
         return []
     items = evidence.get("items")
     if not isinstance(items, list):
         return []
     result: list[str] = []
     for item in items:
-        if not isinstance(item, dict):
+        if not isinstance(item, Mapping):
             continue
         item_type = item.get("type")
         if isinstance(item_type, str) and item_type and item_type not in result:
@@ -707,7 +708,7 @@ def _string_list(value: Any) -> list[str]:
 def _dicts(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
-    return [item for item in value if isinstance(item, dict)]
+    return [item for item in value if isinstance(item, Mapping)]
 
 
 _CSS = """

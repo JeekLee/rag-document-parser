@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from typing import Any
 from urllib import request
 
+from pydantic import BaseModel, ConfigDict
 
-@dataclass(frozen=True)
-class LlmConfig:
+
+class LlmConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     url: str
     api_key: str
     model: str

@@ -70,6 +70,7 @@ def test_hwp5_backend_parses_real_fixture_text_and_tables():
 def test_hwp5_backend_keeps_source_and_evidence_payloads_separate():
     pytest.importorskip("olefile")
 
+    from rag_document_parser.models import StructuredTableContent
     from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import Hwp5Backend
 
     parsed = Hwp5Backend().parse(FIXTURE.read_bytes(), ".hwp")
@@ -82,7 +83,8 @@ def test_hwp5_backend_keeps_source_and_evidence_payloads_separate():
 
     table_unit = next(unit for unit in parsed.units if unit.type == "table")
     assert isinstance(table_unit.source.text, str)
-    assert isinstance(table_unit.content, dict)
+    assert isinstance(table_unit.content, StructuredTableContent)
+    assert not isinstance(table_unit.content, dict)
     assert table_unit.source.text != table_unit.content
 
 

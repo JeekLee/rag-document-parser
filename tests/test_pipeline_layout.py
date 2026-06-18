@@ -19,10 +19,7 @@ def test_pipeline_layout_exports_stage_and_format_modules():
     from rag_document_parser.chunk.backend import Chunker
     from rag_document_parser.chunk.enrichment import Enricher
     from rag_document_parser.chunk.enrichment import RagChunkEnricher as StageRagChunkEnricher
-    from rag_document_parser.evidence_unit_extraction.backend import (
-        DocumentBackend,
-        ParsedDocument,
-    )
+    from rag_document_parser.evidence_unit_extraction.backend import DocumentBackend
     from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import (
         Hwp5Backend as StageHwp5Backend,
     )
@@ -38,6 +35,7 @@ def test_pipeline_layout_exports_stage_and_format_modules():
     )
     from rag_document_parser.evidence_unit_extraction.registry import default_backends
     from rag_document_parser.llm import LlmConfig
+    from rag_document_parser.models import ParsedDocument
     from rag_document_parser.pipeline.parser import RagDocumentParser as StageParser
 
     backends = default_backends()

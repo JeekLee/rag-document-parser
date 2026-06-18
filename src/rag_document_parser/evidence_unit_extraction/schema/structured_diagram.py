@@ -1,54 +1,16 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from typing import Any, TypedDict
+from typing import Any
 
-
-BoundingBox = dict[str, int | float | str]
-DiagramPoint = dict[str, int | float]
-
-
-class DiagramNode(TypedDict):
-    id: str
-    shape_type: str
-    text: str
-    bbox: BoundingBox | None
-    metadata: dict[str, Any]
-
-
-DiagramEdge = TypedDict(
-    "DiagramEdge",
-    {
-        "from": str,
-        "to": str,
-        "type": str,
-        "label": str,
-        "confidence": str,
-        "connector_id": str,
-    },
+from ...models import (
+    BoundingBox,
+    DiagramConnector,
+    DiagramEdge,
+    DiagramNode,
+    DiagramPoint,
+    StructuredDiagramContent,
 )
-
-
-class DiagramConnector(TypedDict):
-    id: str
-    type: str
-    bbox: BoundingBox | None
-    points: list[DiagramPoint]
-    arrow: bool
-    metadata: dict[str, Any]
-
-
-class StructuredDiagramContentBase(TypedDict):
-    caption: str | None
-    nodes: list[DiagramNode]
-    edges: list[DiagramEdge]
-    connectors: list[DiagramConnector]
-    mermaid: str | None
-
-
-class StructuredDiagramContent(StructuredDiagramContentBase, total=False):
-    asset_id: str
-    confidence: str
 
 
 def diagram_node(
@@ -59,13 +21,13 @@ def diagram_node(
     bbox: BoundingBox | None = None,
     metadata: Mapping[str, Any] | None = None,
 ) -> DiagramNode:
-    return {
-        "id": node_id,
-        "shape_type": shape_type,
-        "text": text,
-        "bbox": bbox,
-        "metadata": dict(metadata or {}),
-    }
+    return DiagramNode(
+        id=node_id,
+        shape_type=shape_type,
+        text=text,
+        bbox=bbox,
+        metadata=dict(metadata or {}),
+    )
 
 
 def diagram_connector(
@@ -77,14 +39,14 @@ def diagram_connector(
     arrow: bool = False,
     metadata: Mapping[str, Any] | None = None,
 ) -> DiagramConnector:
-    return {
-        "id": connector_id,
-        "type": connector_type,
-        "bbox": bbox,
-        "points": list(points or []),
-        "arrow": arrow,
-        "metadata": dict(metadata or {}),
-    }
+    return DiagramConnector(
+        id=connector_id,
+        type=connector_type,
+        bbox=bbox,
+        points=list(points or []),
+        arrow=arrow,
+        metadata=dict(metadata or {}),
+    )
 
 
 def diagram_edge(
@@ -96,26 +58,28 @@ def diagram_edge(
     confidence: str = "",
     connector_id: str = "",
 ) -> DiagramEdge:
-    return {
-        "from": from_id,
-        "to": to_id,
-        "type": edge_type,
-        "label": label,
-        "confidence": confidence,
-        "connector_id": connector_id,
-    }
+    return DiagramEdge(
+        **{
+            "from": from_id,
+            "to": to_id,
+            "type": edge_type,
+            "label": label,
+            "confidence": confidence,
+            "connector_id": connector_id,
+        }
+    )
 
 
 def structured_diagram(
     *,
-    nodes: Iterable[DiagramNode],
-    edges: Iterable[DiagramEdge] | None = None,
-    connectors: Iterable[DiagramConnector] | None = None,
+    nodes: Iterable[DiagramNode | Mapping[str, Any]],
+    edges: Iterable[DiagramEdge | Mapping[str, Any]] | None = None,
+    connectors: Iterable[DiagramConnector | Mapping[str, Any]] | None = None,
     caption: str | None = None,
     mermaid: str | None = None,
     extra: Mapping[str, Any] | None = None,
 ) -> StructuredDiagramContent:
-    payload: StructuredDiagramContent = {
+    payload: dict[str, Any] = {
         "caption": caption,
         "nodes": list(nodes),
         "edges": list(edges or []),
@@ -124,4 +88,4 @@ def structured_diagram(
     }
     if extra:
         payload.update(extra)
-    return payload
+    return StructuredDiagramContent(**payload)

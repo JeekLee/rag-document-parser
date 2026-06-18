@@ -4,6 +4,7 @@ import io
 import base64
 import json
 import re
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -1420,7 +1421,7 @@ def _append_table_rows(
     if not isinstance(target_rows, list) or not isinstance(continuation_rows, list):
         return
     for row in continuation_rows:
-        if not isinstance(row, dict):
+        if not isinstance(row, Mapping):
             continue
         copied = dict(row)
         copied["index"] = len(target_rows) + 1
@@ -1521,7 +1522,7 @@ def _merge_blank_header_rowspans(table: dict[str, object]) -> None:
 
     previous_cells_by_column: dict[str, dict[str, object]] = {}
     for header_row in header_rows:
-        cells = header_row.get("cells") if isinstance(header_row, dict) else None
+        cells = header_row.get("cells") if isinstance(header_row, Mapping) else None
         if not isinstance(cells, list):
             previous_cells_by_column = {}
             continue
@@ -1529,7 +1530,7 @@ def _merge_blank_header_rowspans(table: dict[str, object]) -> None:
         next_cells: list[dict[str, object]] = []
         current_cells_by_column: dict[str, dict[str, object]] = {}
         for cell in cells:
-            if not isinstance(cell, dict):
+            if not isinstance(cell, Mapping):
                 continue
             column_id = str(cell.get("column_id", ""))
             previous = previous_cells_by_column.get(column_id)
@@ -1554,7 +1555,7 @@ def _is_blank_header_slot(cell: dict[str, object]) -> bool:
 
 def _can_absorb_blank_header_slot(cell: dict[str, object] | None) -> bool:
     return (
-        isinstance(cell, dict)
+        isinstance(cell, Mapping)
         and bool(str(cell.get("text", "")).strip())
         and int(cell.get("rowspan", 1) or 1) == 1
         and int(cell.get("colspan", 1) or 1) == 1
@@ -1570,7 +1571,7 @@ def _merge_wrapped_table_rows(table: dict[str, object]) -> None:
 
     merged: list[dict[str, object]] = []
     for row in rows:
-        if not isinstance(row, dict):
+        if not isinstance(row, Mapping):
             continue
         if merged and _is_wrapped_table_row(row):
             _append_wrapped_row_cells(merged[-1], row)
@@ -1588,7 +1589,7 @@ def _is_table_of_contents(table: dict[str, object]) -> bool:
     labels = [
         _normalize_header_text(str(column.get("text", "")))
         for column in columns
-        if isinstance(column, dict)
+        if isinstance(column, Mapping)
     ]
     return "제목" in labels and "페이지" in labels
 
@@ -1606,20 +1607,20 @@ def _repair_table_of_contents(table: dict[str, object], page: object) -> None:
 
     entry_index = 0
     for row in rows:
-        if not isinstance(row, dict):
+        if not isinstance(row, Mapping):
             continue
         cells = row.get("cells")
         if not isinstance(cells, list) or len(cells) < 3:
             continue
-        title = str(cells[1].get("text", "")) if isinstance(cells[1], dict) else ""
+        title = str(cells[1].get("text", "")) if isinstance(cells[1], Mapping) else ""
         entry = _matching_table_of_contents_entry(title, entries, entry_index)
         if entry is None:
             continue
         entry_index = entries.index(entry, entry_index) + 1
         number, _title, page_number = entry
-        if isinstance(cells[0], dict) and not str(cells[0].get("text", "")).strip():
+        if isinstance(cells[0], Mapping) and not str(cells[0].get("text", "")).strip():
             cells[0]["text"] = number
-        if isinstance(cells[-1], dict) and not str(cells[-1].get("text", "")).strip():
+        if isinstance(cells[-1], Mapping) and not str(cells[-1].get("text", "")).strip():
             cells[-1]["text"] = page_number
 
 
@@ -1672,13 +1673,13 @@ def _promote_code_table_leaf_headers(table: dict[str, object]) -> None:
     labels = [
         _normalize_header_text(str(column.get("text", "")))
         for column in columns
-        if isinstance(column, dict)
+        if isinstance(column, Mapping)
     ]
     if len(labels) != len(columns) or labels[0] != "질병코드" or any(labels[1:]):
         return
 
     first_row = rows[0]
-    if not isinstance(first_row, dict):
+    if not isinstance(first_row, Mapping):
         return
     first_cells = first_row.get("cells")
     if not isinstance(first_cells, list) or len(first_cells) != len(columns):
@@ -1688,7 +1689,7 @@ def _promote_code_table_leaf_headers(table: dict[str, object]) -> None:
         return
 
     for index, column in enumerate(columns):
-        if isinstance(column, dict):
+        if isinstance(column, Mapping):
             column["text"] = f"질병코드 / {leaf_values[index]}"
 
     header_rows[0] = {
@@ -1709,7 +1710,7 @@ def _promote_code_table_leaf_headers(table: dict[str, object]) -> None:
             "cells": [
                 _simple_cell(str(column.get("id", f"c{index + 1}")), leaf_values[index])
                 for index, column in enumerate(columns)
-                if isinstance(column, dict)
+                if isinstance(column, Mapping)
             ],
         }
     )
@@ -1717,7 +1718,7 @@ def _promote_code_table_leaf_headers(table: dict[str, object]) -> None:
     table["rows"] = [
         _reindexed_row(row, index + 1)
         for index, row in enumerate(rows[1:])
-        if isinstance(row, dict)
+        if isinstance(row, Mapping)
     ]
 
 
@@ -1730,7 +1731,7 @@ def _promote_ultrasound_code_matrix(table: dict[str, object]) -> None:
     rows = table.get("rows")
     if (
         not isinstance(columns, list)
-        or [str(column.get("text", "")) for column in columns if isinstance(column, dict)]
+        or [str(column.get("text", "")) for column in columns if isinstance(column, Mapping)]
         != ["구분", "EDI코드"]
         or not isinstance(rows, list)
         or len(rows) < 3
@@ -1800,7 +1801,7 @@ def _collapse_leading_empty_rowspan_cells(
             (
                 index
                 for index, cell in enumerate(cells)
-                if isinstance(cell, dict) and cell.get("column_id") == column_id
+                if isinstance(cell, Mapping) and cell.get("column_id") == column_id
             ),
             None,
         )
@@ -1808,7 +1809,7 @@ def _collapse_leading_empty_rowspan_cells(
             active = None
             continue
         cell = cells[target_index]
-        if not isinstance(cell, dict):
+        if not isinstance(cell, Mapping):
             active = None
             continue
         if str(cell.get("text", "")).strip():
@@ -1822,7 +1823,7 @@ def _collapse_leading_empty_rowspan_cells(
 
 
 def _row_cell_texts(row: object) -> list[str]:
-    if not isinstance(row, dict):
+    if not isinstance(row, Mapping):
         return []
     cells = row.get("cells")
     if not isinstance(cells, list):
@@ -1830,7 +1831,7 @@ def _row_cell_texts(row: object) -> list[str]:
     return [
         str(cell.get("text", "")).strip()
         for cell in cells
-        if isinstance(cell, dict)
+        if isinstance(cell, Mapping)
     ]
 
 
@@ -1952,7 +1953,7 @@ def _expand_parallel_code_action_rows(table: dict[str, object]) -> None:
     rows = table.get("rows")
     if (
         not isinstance(columns, list)
-        or [str(column.get("text", "")) for column in columns if isinstance(column, dict)]
+        or [str(column.get("text", "")) for column in columns if isinstance(column, Mapping)]
         != ["분류", "코드", "행위명"]
         or not isinstance(rows, list)
     ):
@@ -1980,7 +1981,7 @@ def _expand_parallel_code_action_rows(table: dict[str, object]) -> None:
                     }
                 )
             continue
-        if isinstance(row, dict):
+        if isinstance(row, Mapping):
             copied = dict(row)
             copied["index"] = len(expanded_rows) + 1
             expanded_rows.append(copied)
@@ -2018,7 +2019,7 @@ def _is_wrapped_table_row(row: dict[str, object]) -> bool:
     content_cells = [
         cell
         for cell in cells
-        if isinstance(cell, dict) and _cell_has_content(cell)
+        if isinstance(cell, Mapping) and _cell_has_content(cell)
     ]
     if not content_cells:
         return False
@@ -2043,13 +2044,13 @@ def _append_wrapped_row_cells(
     target_by_column = {
         str(cell.get("column_id")): cell
         for cell in target_cells
-        if isinstance(cell, dict)
+        if isinstance(cell, Mapping)
     }
     for wrapped_cell in wrapped_cells:
-        if not isinstance(wrapped_cell, dict) or not _cell_has_content(wrapped_cell):
+        if not isinstance(wrapped_cell, Mapping) or not _cell_has_content(wrapped_cell):
             continue
         target_cell = target_by_column.get(str(wrapped_cell.get("column_id")))
-        if not isinstance(target_cell, dict):
+        if not isinstance(target_cell, Mapping):
             continue
         wrapped_text = str(wrapped_cell.get("text", "")).strip()
         if wrapped_text:
@@ -2070,13 +2071,13 @@ def _append_wrapped_row_cells(
 
 
 def _cell_has_content(cell: object) -> bool:
-    if not isinstance(cell, dict):
+    if not isinstance(cell, Mapping):
         return False
     return _cell_has_text(cell) or bool(cell.get("children"))
 
 
 def _cell_has_text(cell: object) -> bool:
-    return isinstance(cell, dict) and bool(str(cell.get("text", "")).strip())
+    return isinstance(cell, Mapping) and bool(str(cell.get("text", "")).strip())
 
 
 def _starts_new_table_subrow(text: str) -> bool:
@@ -2410,7 +2411,7 @@ def _can_merge_nested_table_child(
         return False
     previous_content = previous.get("content")
     current_content = current.get("content")
-    if not isinstance(previous_content, dict) or not isinstance(current_content, dict):
+    if not isinstance(previous_content, Mapping) or not isinstance(current_content, Mapping):
         return False
     previous_columns = previous_content.get("columns")
     current_columns = current_content.get("columns")
@@ -2444,7 +2445,7 @@ def _looks_like_nested_table_data_continuation(
     labels = [
         str(column.get("text", "")).strip()
         for column in current_columns
-        if isinstance(column, dict)
+        if isinstance(column, Mapping)
     ]
     if len(labels) != len(current_columns):
         return False
@@ -2487,13 +2488,13 @@ def _append_nested_child_rows(
                         str(column.get("text", "")),
                     )
                     for index, column in enumerate(continuation_columns)
-                    if isinstance(column, dict)
+                    if isinstance(column, Mapping)
                 ],
             }
         )
 
     for row in continuation_rows:
-        if not isinstance(row, dict):
+        if not isinstance(row, Mapping):
             continue
         copied = dict(row)
         copied["index"] = len(target_rows) + 1
@@ -2577,7 +2578,7 @@ def _title_table_text(table: dict[str, object]) -> str | None:
         return None
     parts: list[str] = []
     for cell in cells:
-        if not isinstance(cell, dict) or cell.get("children"):
+        if not isinstance(cell, Mapping) or cell.get("children"):
             return None
         text = str(cell.get("text", "")).strip()
         if text:
@@ -2609,7 +2610,7 @@ def _single_line_header_only_table_text(
         return None
     parts: list[str] = []
     for cell in cells:
-        if not isinstance(cell, dict) or cell.get("children"):
+        if not isinstance(cell, Mapping) or cell.get("children"):
             return None
         text = str(cell.get("text", "")).strip()
         if text:
@@ -2633,13 +2634,13 @@ def _is_empty_single_cell_table_artifact(table: dict[str, object]) -> bool:
     if len(all_rows) != 1:
         return False
     row = all_rows[0]
-    if not isinstance(row, dict):
+    if not isinstance(row, Mapping):
         return False
     cells = row.get("cells")
     if not isinstance(cells, list) or len(cells) != 1:
         return False
     cell = cells[0]
-    if not isinstance(cell, dict):
+    if not isinstance(cell, Mapping):
         return False
     return not str(cell.get("text", "")).strip() and not cell.get("children")
 
@@ -3418,7 +3419,7 @@ def _should_skip_pdf_diagram(diagram: dict[str, object]) -> bool:
     labels = [
         _normalize_diagram_label(str(node.get("text", "")))
         for node in nodes
-        if isinstance(node, dict)
+        if isinstance(node, Mapping)
     ]
     table_like = sum(label in _TABLE_LIKE_DIAGRAM_LABELS for label in labels)
     return table_like >= 3 and table_like / max(len(labels), 1) >= 0.5
@@ -3431,11 +3432,11 @@ def _looks_like_pdf_text_line_boxes(nodes: list[object], connectors: object) -> 
         return False
     long_text_line_count = 0
     for node in nodes:
-        if not isinstance(node, dict):
+        if not isinstance(node, Mapping):
             return False
         text = str(node.get("text", "")).strip()
         bbox = node.get("bbox")
-        if not text or not isinstance(bbox, dict):
+        if not text or not isinstance(bbox, Mapping):
             return False
         try:
             width = float(bbox.get("width", 0.0))
@@ -3479,7 +3480,7 @@ def _pdf_diagram_connectors(
                 "type": kind,
                 "bbox": _pdf_bbox_payload(shape_bbox),
                 "points": _pdf_connector_points(shape, shape_bbox),
-                "arrow": bool(shape.get("arrow")) if isinstance(shape, dict) else False,
+                "arrow": bool(shape.get("arrow")) if isinstance(shape, Mapping) else False,
                 "metadata": {"source": f"pdf_vector_{kind}"},
             }
         )
@@ -3531,7 +3532,7 @@ def _infer_pdf_edges(
 
 
 def _pdf_shape_bbox(shape: object) -> tuple[float, float, float, float] | None:
-    if not isinstance(shape, dict):
+    if not isinstance(shape, Mapping):
         return None
     try:
         x0 = float(shape.get("x0", 0.0))
@@ -3558,7 +3559,7 @@ def _pdf_connector_points(
     shape: object,
     bbox: tuple[float, float, float, float],
 ) -> list[dict[str, float]]:
-    if isinstance(shape, dict):
+    if isinstance(shape, Mapping):
         try:
             return [
                 {
@@ -3578,7 +3579,7 @@ def _pdf_connector_points(
 
 def _diagram_node_bbox(node: dict[str, object]) -> dict[str, float] | None:
     bbox = node.get("bbox")
-    if not isinstance(bbox, dict):
+    if not isinstance(bbox, Mapping):
         return None
     try:
         x = float(bbox["x"])
@@ -3593,7 +3594,7 @@ def _diagram_node_bbox(node: dict[str, object]) -> dict[str, float] | None:
 
 
 def _diagram_point(point: object) -> dict[str, float] | None:
-    if not isinstance(point, dict):
+    if not isinstance(point, Mapping):
         return None
     try:
         return {"x": float(point["x"]), "y": float(point["y"])}
@@ -3637,7 +3638,7 @@ def _diagram_source_text(diagram: dict[str, object]) -> str:
         for text in (
             str(node.get("text", "")).strip()
             for node in nodes
-            if isinstance(node, dict)
+            if isinstance(node, Mapping)
         )
         if text
     ]
@@ -3653,7 +3654,7 @@ def _diagram_edge_source_lines(edges: object) -> list[str]:
         return []
     lines: list[str] = []
     for edge in edges:
-        if not isinstance(edge, dict):
+        if not isinstance(edge, Mapping):
             continue
         from_id = str(edge.get("from", "")).strip()
         to_id = str(edge.get("to", "")).strip()
@@ -3861,7 +3862,7 @@ def _table_source_cells(
 
 
 def _inline_diagram_source(diagram: object) -> str:
-    if not isinstance(diagram, dict):
+    if not isinstance(diagram, Mapping):
         return ""
     nodes = diagram.get("nodes")
     labels = [
@@ -3869,7 +3870,7 @@ def _inline_diagram_source(diagram: object) -> str:
         for text in (
             str(node.get("text", "")).strip()
             for node in nodes
-            if isinstance(node, dict)
+            if isinstance(node, Mapping)
         )
         if text
     ] if isinstance(nodes, list) else []
