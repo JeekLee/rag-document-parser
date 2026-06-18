@@ -1317,6 +1317,7 @@ def _table_source_text(table: dict[str, object]) -> str:
         for column in columns
     }
     lines: list[str] = []
+    active_rowspans: list[tuple[int, int, int, dict[str, object]]] = []
     if columns:
         lines.append(f"table: {len(columns)} columns")
     for header_row in table.get("header_rows", []):
@@ -1328,14 +1329,75 @@ def _table_source_text(table: dict[str, object]) -> str:
         if cells:
             lines.append(f"header {header_row['index']}: " + "; ".join(cells))
     for row in rows:
+        row_index = int(row["index"])
+        row_cells = list(row["cells"])
+        source_row_cells = _source_cells_with_rowspan_context(
+            row_cells,
+            active_rowspans,
+            row_index,
+        )
         cells = _table_source_cells(
-            row["cells"],
+            source_row_cells,
             column_text,
             use_header_labels=True,
         )
         if cells:
             lines.append(f"row {row['index']}: " + "; ".join(cells))
+        active_rowspans = [
+            span for span in active_rowspans if span[2] > row_index
+        ]
+        active_rowspans.extend(_rowspan_source_spans(row_cells, row_index))
     return "\n".join(lines)
+
+
+def _source_cells_with_rowspan_context(
+    cells: list[dict[str, object]],
+    active_rowspans: list[tuple[int, int, int, dict[str, object]]],
+    row_index: int,
+) -> list[dict[str, object]]:
+    occupied = [_cell_column_range(cell) for cell in cells]
+    context_cells = [
+        cell
+        for start, end, last_row, cell in active_rowspans
+        if last_row >= row_index
+        and not any(
+            _ranges_overlap(start, end, other_start, other_end)
+            for other_start, other_end in occupied
+        )
+    ]
+    return sorted(
+        [*context_cells, *cells],
+        key=lambda cell: _cell_column_range(cell)[0],
+    )
+
+
+def _rowspan_source_spans(
+    cells: list[dict[str, object]],
+    row_index: int,
+) -> list[tuple[int, int, int, dict[str, object]]]:
+    spans: list[tuple[int, int, int, dict[str, object]]] = []
+    for cell in cells:
+        rowspan = _positive_int(cell.get("rowspan"), default=1)
+        if rowspan <= 1:
+            continue
+        start, end = _cell_column_range(cell)
+        spans.append((start, end, row_index + rowspan - 1, cell))
+    return spans
+
+
+def _cell_column_range(cell: dict[str, object]) -> tuple[int, int]:
+    column = _column_id_number(str(cell.get("column_id", "c1")))
+    colspan = _positive_int(cell.get("colspan"), default=1)
+    return column, column + colspan
+
+
+def _ranges_overlap(
+    start: int,
+    end: int,
+    other_start: int,
+    other_end: int,
+) -> bool:
+    return start < other_end and other_start < end
 
 
 def _table_source_cells(
@@ -1435,6 +1497,13 @@ def _column_id_number(column_id: str) -> int:
         return max(1, int(column_id.removeprefix("c")))
     except ValueError:
         return 1
+
+
+def _positive_int(value: object, *, default: int) -> int:
+    try:
+        return max(1, int(value))
+    except (TypeError, ValueError):
+        return default
 
 
 def _inline_table_source(table: dict[str, object]) -> str:

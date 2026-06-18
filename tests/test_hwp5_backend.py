@@ -335,6 +335,34 @@ def test_hwp5_table_preserves_cell_spans_like_hwpx_tables():
     )
 
 
+def test_hwp5_table_source_repeats_rowspan_context_on_continuation_rows():
+    from rag_document_parser.extract.formats.hwp5.backend import _parse_section
+
+    records = b""
+    records += _table_ctrl(0)
+    records += _make_record(0x4D, 1, _table_body_payload(3, 2))
+    records += _make_record(0x48, 1, _list_header_payload(0, 0))
+    records += _make_record(0x43, 2, _u16("구분"))
+    records += _make_record(0x48, 1, _list_header_payload(0, 1))
+    records += _make_record(0x43, 2, _u16("내용"))
+    records += _make_record(0x48, 1, _list_header_payload_with_span(1, 0, rowspan=2))
+    records += _make_record(0x43, 2, _u16("진료"))
+    records += _make_record(0x48, 1, _list_header_payload(1, 1))
+    records += _make_record(0x43, 2, _u16("기준 A"))
+    records += _make_record(0x48, 1, _list_header_payload(2, 1))
+    records += _make_record(0x43, 2, _u16("기준 B"))
+    records += _make_record(0x42, 0, b"")
+
+    table = _parse_section(records).to_document().units[0]
+    content = table.evidence.content
+
+    assert [
+        (cell["column_id"], cell["text"])
+        for cell in content["rows"][1]["cells"]
+    ] == [("c2", "기준 B")]
+    assert "row 2: 구분: 진료; 내용: 기준 B" in table.source.text
+
+
 def test_hwp5_table_ignores_list_headers_outside_declared_dimensions():
     from rag_document_parser.extract.formats.hwp5.backend import _parse_section
 
