@@ -19,7 +19,7 @@ def _manifest_documents() -> list[dict[str, object]]:
 def test_regression_corpus_files_are_pinned_by_hash_and_size():
     documents = _manifest_documents()
 
-    assert len(documents) == 9
+    assert len(documents) == 10
     assert {str(document["id"]) for document in documents} == {
         "hwpx-ultrasound-qa",
         "pdf-ultrasound-qa",
@@ -28,6 +28,7 @@ def test_regression_corpus_files_are_pinned_by_hash_and_size():
         "hwpx-cesarean-copay-qa",
         "pdf-cesarean-copay-qa",
         "hwpx-medical-fee-criteria-2022-139",
+        "hwp-benefit-criteria-2009-214-annex",
         "hwp-medical-aid-overpayment-deduction",
         "pdf-medical-aid-overpayment-deduction",
     }
@@ -283,6 +284,46 @@ def test_supported_hwp5_and_pdf_corpus_extracts_evidence_units():
             assert unit.format == "structured_diagram", document["id"]
             assert isinstance(unit.content, dict), document["id"]
             assert "nodes" in unit.content, document["id"]
+
+
+def test_hwp5_complex_annex_fixture_preserves_span_heavy_table():
+    from rag_document_parser import Hwp5Backend
+
+    documents = {document["id"]: document for document in _manifest_documents()}
+    document = documents["hwp-benefit-criteria-2009-214-annex"]
+    parsed = Hwp5Backend().parse(
+        (CORPUS_DIR / str(document["path"])).read_bytes(),
+        ".hwp",
+    )
+
+    table = next(unit for unit in parsed.units if unit.type == "table")
+    content = table.content
+    all_cells = [
+        cell
+        for row in [*content["header_rows"], *content["rows"]]
+        for cell in row["cells"]
+    ]
+    span_cells = [
+        cell
+        for cell in all_cells
+        if cell["rowspan"] > 1 or cell["colspan"] > 1
+    ]
+
+    assert [column["text"] for column in content["columns"]] == [
+        "처방명",
+        "현 행 / 한 방",
+        "현 행 / 양 방",
+        "현 행 / 분류기호",
+        "개정(안) / 적응증",
+    ]
+    assert len(content["header_rows"]) == 2
+    assert len(content["rows"]) == 424
+    assert len(span_cells) >= 100
+    assert "header 1: col 1: 처방명; cols 2-4: 현 행; col 5: 개정(안)" in (
+        table.source.text
+    )
+    assert "row 1: 처방명: 1. 가미소요산" in table.source.text
+    assert parsed.quality_warnings == []
 
 
 def test_pdf_corpus_preserves_grouped_headers_and_reduces_fragmentation():
