@@ -360,7 +360,9 @@ def _render_structured_diagram(diagram: dict[str, Any]) -> str:
         if isinstance(connector, dict)
     ]
     mermaid = diagram.get("mermaid")
-    if _is_positionable_label_diagram(nodes, edges, mermaid, connectors):
+    if _is_flowchart_outline_diagram(nodes, mermaid):
+        return _render_label_flowchart_diagram(nodes)
+    if _is_positionable_diagram(nodes, edges, mermaid, connectors):
         return _render_positioned_label_diagram(nodes, connectors=connectors)
     if _is_label_only_diagram(nodes, edges, mermaid):
         return _render_label_flowchart_diagram(nodes)
@@ -428,7 +430,25 @@ def _is_label_only_diagram(
     )
 
 
-def _is_positionable_label_diagram(
+def _is_flowchart_outline_diagram(
+    nodes: list[dict[str, Any]],
+    mermaid: Any,
+) -> bool:
+    if not nodes or (isinstance(mermaid, str) and mermaid.strip()):
+        return False
+    texts = [
+        text
+        for text in (str(node.get("text", "")).strip() for node in nodes)
+        if text
+    ]
+    return (
+        any("흐름도" in text for text in texts[:3])
+        and any(_is_diagram_section_heading(text) for text in texts)
+        and any(_is_diagram_step(text) for text in texts)
+    )
+
+
+def _is_positionable_diagram(
     nodes: list[dict[str, Any]],
     edges: list[dict[str, Any]],
     mermaid: Any,
@@ -437,12 +457,29 @@ def _is_positionable_label_diagram(
     return (
         bool(nodes)
         and not (isinstance(mermaid, str) and mermaid.strip())
-        and all(_is_label_shape_node(node) for node in nodes)
+        and all(_is_positionable_shape_node(node) for node in nodes)
         and (
             sum(1 for node in nodes if _node_bbox(node) is not None) >= 2
             or any(_connector_line(connector) is not None for connector in connectors)
         )
     )
+
+
+def _is_positionable_shape_node(node: dict[str, Any]) -> bool:
+    shape_type = str(node.get("shape_type", node.get("type", "label"))).strip()
+    return shape_type in {
+        "",
+        "label",
+        "rectangle",
+        "rect",
+        "ellipse",
+        "textbox",
+        "box",
+        "group",
+        "container",
+        "polygon",
+        "shape",
+    }
 
 
 def _is_label_shape_node(node: dict[str, Any]) -> bool:
@@ -545,8 +582,10 @@ def _render_positioned_label_diagram(
         width = bbox["width"] / canvas_width * 100
         height = bbox["height"] / canvas_height * 100
         text = str(node.get("text", "")).strip()
+        shape_type = str(node.get("shape_type", node.get("type", "label"))).strip()
+        shape_class = _diagram_shape_class(shape_type)
         html.append(
-            '<div class="diagram-positioned-node" '
+            f'<div class="diagram-positioned-node {shape_class}" '
             f'style="left:{left:.3f}%;top:{top:.3f}%;'
             f'width:{width:.3f}%;height:{height:.3f}%">'
             f"{_escape_multiline(text)}"
@@ -554,6 +593,11 @@ def _render_positioned_label_diagram(
         )
     html.append("</div></section>")
     return "".join(html)
+
+
+def _diagram_shape_class(shape_type: str) -> str:
+    normalized = re.sub(r"[^a-z0-9_-]+", "-", shape_type.lower()).strip("-")
+    return f"diagram-shape-{normalized or 'label'}"
 
 
 def _split_unpositioned_diagram_labels(
@@ -1187,6 +1231,16 @@ th {
   text-align: center;
   line-height: 1.2;
   word-break: keep-all;
+}
+.diagram-positioned-node.diagram-shape-ellipse {
+  border-radius: 999px;
+}
+.diagram-positioned-node.diagram-shape-textbox {
+  border-style: dashed;
+}
+.diagram-positioned-node.diagram-shape-group,
+.diagram-positioned-node.diagram-shape-container {
+  background: rgba(247, 247, 245, 0.8);
 }
 .diagram-flowchart {
   background: #f7f7f5;

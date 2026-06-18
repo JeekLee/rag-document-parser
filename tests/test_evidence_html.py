@@ -624,6 +624,78 @@ def test_render_structured_diagram_uses_bounding_boxes_for_positioned_layout():
     assert "심사평가원" in html
 
 
+def test_render_structured_diagram_positions_explicit_shape_nodes():
+    from rag_document_parser.evidence_html import render_evidence_html
+
+    html = render_evidence_html(
+        {
+            "kind": "diagram",
+            "format": "structured_diagram",
+            "content": {
+                "caption": None,
+                "nodes": [
+                    {
+                        "id": "n1",
+                        "shape_type": "rectangle",
+                        "text": "접수",
+                        "bbox": {
+                            "x": 100,
+                            "y": 100,
+                            "width": 200,
+                            "height": 100,
+                            "unit": "hwp",
+                        },
+                    },
+                    {
+                        "id": "n2",
+                        "shape_type": "ellipse",
+                        "text": "완료",
+                        "bbox": {
+                            "x": 500,
+                            "y": 100,
+                            "width": 200,
+                            "height": 100,
+                            "unit": "hwp",
+                        },
+                    },
+                ],
+                "edges": [
+                    {
+                        "from": "n1",
+                        "to": "n2",
+                        "type": "arrow",
+                        "label": "",
+                        "confidence": "parsed_subject_ids",
+                        "connector_id": "c1",
+                    }
+                ],
+                "connectors": [
+                    {
+                        "id": "c1",
+                        "type": "arrow",
+                        "bbox": {
+                            "x": 300,
+                            "y": 145,
+                            "width": 200,
+                            "height": 10,
+                            "unit": "hwp",
+                        },
+                        "points": [{"x": 300, "y": 150}, {"x": 500, "y": 150}],
+                        "arrow": True,
+                    }
+                ],
+                "mermaid": None,
+            },
+        }
+    )
+
+    assert 'class="diagram-positioned"' in html
+    assert 'class="diagram-positioned-node diagram-shape-rectangle"' in html
+    assert 'class="diagram-positioned-node diagram-shape-ellipse"' in html
+    assert 'class="diagram-connectors"' in html
+    assert '<ol class="diagram-nodes">' not in html
+
+
 def test_render_structured_diagram_draws_positioned_connectors():
     from rag_document_parser.evidence_html import render_evidence_html
 
@@ -932,3 +1004,74 @@ def test_render_label_only_diagram_as_original_like_flowchart():
     assert "⑥공제금 지급 ③과다본인부담금<br>공제예정 통보" in html
     assert "⑦처리결과<br>통보" in html
     assert 'class="diagram-flowchart-note">' in html
+
+
+def test_render_hwp5_flowchart_shapes_prefers_original_like_flowchart():
+    from rag_document_parser.evidence_html import render_evidence_html
+
+    html = render_evidence_html(
+        {
+            "kind": "diagram",
+            "format": "structured_diagram",
+            "content": {
+                "caption": None,
+                "nodes": [
+                    {"id": "n1", "shape_type": "label", "text": "업무처리 흐름도"},
+                    {
+                        "id": "n2",
+                        "shape_type": "label",
+                        "text": "< 과다본인부담금 확인절차 >",
+                    },
+                    {"id": "n3", "shape_type": "label", "text": "①신청"},
+                    {
+                        "id": "n4",
+                        "shape_type": "rectangle",
+                        "text": "수급권자",
+                        "bbox": {
+                            "x": 100,
+                            "y": 100,
+                            "width": 200,
+                            "height": 100,
+                            "unit": "hwp",
+                        },
+                    },
+                    {
+                        "id": "n5",
+                        "shape_type": "rectangle",
+                        "text": "심사평가원",
+                        "bbox": {
+                            "x": 500,
+                            "y": 100,
+                            "width": 200,
+                            "height": 100,
+                            "unit": "hwp",
+                        },
+                    },
+                ],
+                "connectors": [
+                    {
+                        "id": "c1",
+                        "type": "arrow",
+                        "points": [{"x": 300, "y": 150}, {"x": 500, "y": 150}],
+                        "arrow": True,
+                    }
+                ],
+                "edges": [
+                    {
+                        "from": "n4",
+                        "to": "n5",
+                        "type": "arrow",
+                        "label": "①신청",
+                        "confidence": "parsed_subject_ids",
+                        "connector_id": "c1",
+                    }
+                ],
+                "mermaid": None,
+            },
+        }
+    )
+
+    assert 'class="diagram-evidence diagram-flowchart"' in html
+    assert 'class="diagram-flowchart-box">수급권자</div>' in html
+    assert 'class="diagram-flowchart-arrow">→</span>' in html
+    assert 'class="diagram-positioned"' not in html
