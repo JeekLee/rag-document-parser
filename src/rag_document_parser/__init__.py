@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .chunk import EvidenceUnitAgenticChunker
+from .enrichment import RagChunkEnricher
 from .enrichment.llm import LlmConfig
 from .evidence_unit_extraction.backend import DocumentBackend, ParsedDocument
 from .evidence_unit_extraction.formats.hwp5 import Hwp5Backend
@@ -36,6 +37,7 @@ __all__ = [
     "PdfBackend",
     "PdfOcrConfig",
     "ParseResult",
+    "RagChunkEnricher",
     "ParsedDocument",
     "RagChunk",
     "RagDocumentParser",

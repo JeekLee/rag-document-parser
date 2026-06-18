@@ -10,10 +10,12 @@ def test_pipeline_layout_exports_stage_and_format_modules():
         MarkdownBackend,
         PdfBackend,
         PdfOcrConfig,
+        RagChunkEnricher,
         RagDocumentParser,
     )
     from rag_document_parser.chunk import EvidenceUnitAgenticChunker as StageAgenticChunker
     from rag_document_parser.chunk.backend import Chunker
+    from rag_document_parser.enrichment import RagChunkEnricher as StageRagChunkEnricher
     from rag_document_parser.enrichment.backend import Enricher
     from rag_document_parser.enrichment.llm import LlmConfig
     from rag_document_parser.evidence_unit_extraction.backend import (
@@ -50,6 +52,7 @@ def test_pipeline_layout_exports_stage_and_format_modules():
     assert EvidenceItem.__name__ == "EvidenceItem"
     assert EvidenceUnitAgenticChunker.__name__ == "EvidenceUnitAgenticChunker"
     assert StageAgenticChunker is EvidenceUnitAgenticChunker
+    assert StageRagChunkEnricher is RagChunkEnricher
     assert Enricher.__name__ == "Enricher"
     assert LlmConfig.__name__ == "LlmConfig"
     assert Hwp5Backend.supported_suffixes == (".hwp",)
