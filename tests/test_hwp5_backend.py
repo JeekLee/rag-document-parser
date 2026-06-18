@@ -522,6 +522,20 @@ def test_hwp5_diagram_nodes_keep_gso_bounding_boxes():
     }
 
 
+def test_hwp5_single_drawing_text_does_not_emit_structure_warning():
+    from rag_document_parser.extract.formats.hwp5.backend import _parse_section
+
+    records = b""
+    records += _gso_ctrl_with_bbox(0, x=100, y=200, width=300, height=120)
+    records += _make_record(0x43, 1, _u16("단일 텍스트박스"))
+
+    document = _parse_section(records).to_document()
+
+    assert [unit.type for unit in document.units] == ["text"]
+    assert document.units[0].source.text == "단일 텍스트박스"
+    assert document.quality_warnings == []
+
+
 def test_hwp5_diagram_keeps_line_connectors_with_bounding_boxes():
     from rag_document_parser.extract.formats.hwp5.backend import _parse_section
 

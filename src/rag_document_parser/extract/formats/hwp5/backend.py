@@ -150,6 +150,7 @@ def _to_document(parsed: _ParsedBlocks) -> ParsedDocument:
     units: list[EvidenceUnit] = []
     block_index = 1
     table_index = 1
+    saw_structured_diagram = False
 
     for block in _coalesce_drawing_text_blocks(parsed.blocks):
         if isinstance(block, _TextBlock):
@@ -185,6 +186,7 @@ def _to_document(parsed: _ParsedBlocks) -> ParsedDocument:
             source_text = _diagram_source_text(structured)
             if not source_text:
                 continue
+            saw_structured_diagram = True
             units.append(
                 EvidenceUnit(
                     id=f"b{block_index}",
@@ -276,7 +278,7 @@ def _to_document(parsed: _ParsedBlocks) -> ParsedDocument:
         table_index += 1
 
     warnings: list[dict[str, Any]] = []
-    if parsed.saw_drawing:
+    if saw_structured_diagram:
         warnings.append(
             {
                 "type": "hwp5_drawing_structure_unsupported",
