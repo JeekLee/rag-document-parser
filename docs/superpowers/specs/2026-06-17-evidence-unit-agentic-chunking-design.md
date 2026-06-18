@@ -126,7 +126,6 @@ composite `Evidence`:
 @dataclass(frozen=True)
 class RagChunk:
     id: str
-    type: str
     source: SourceEvidence
     evidence: Evidence
     summary: str
@@ -135,12 +134,10 @@ class RagChunk:
     metadata: dict[str, Any] = field(default_factory=dict)
 ```
 
-`RagChunk.type` is a summary label:
-
-- `"text"` when all evidence items are text
-- `"table"` when all evidence items are table-derived
-- `"image"` when all evidence items are image-derived
-- `"mixed"` when evidence items cross kinds
+`RagChunk` does not carry a top-level type. Item-level type information remains
+on `RagChunk.evidence.items[].type`; aggregate type summaries for diagnostics or
+rendering can be derived from those items or stored in
+`metadata["common"]["unit_types"]`.
 
 ## Public API
 

@@ -121,7 +121,6 @@ class EvidenceUnit:
 @dataclass(frozen=True)
 class RagChunk:
     id: str
-    type: str
     source: SourceEvidence
     evidence: Evidence
     summary: str
@@ -132,7 +131,6 @@ class RagChunk:
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
-            "type": self.type,
             "source": self.source.to_dict(),
             "evidence": self.evidence.to_dict(),
             "summary": self.summary,

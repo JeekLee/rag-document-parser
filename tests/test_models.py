@@ -56,8 +56,7 @@ def test_rag_chunk_serializes_composite_evidence_and_enrichment_fields():
 
     chunk = RagChunk(
         id="chunk-1",
-        type="mixed",
-        source=SourceEvidence(kind="mixed", text="source text"),
+        source=SourceEvidence(kind="chunk", text="source text"),
         evidence=Evidence(
             items=[
                 EvidenceItem(
@@ -77,8 +76,7 @@ def test_rag_chunk_serializes_composite_evidence_and_enrichment_fields():
 
     assert chunk.to_dict() == {
         "id": "chunk-1",
-        "type": "mixed",
-        "source": {"kind": "mixed", "text": "source text"},
+        "source": {"kind": "chunk", "text": "source text"},
         "evidence": {
             "items": [
                 {

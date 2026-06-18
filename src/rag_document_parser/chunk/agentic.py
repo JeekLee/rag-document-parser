@@ -325,7 +325,6 @@ def _merge_adjacent_chunks(
     questions = _strings(decision.get("questions")) or _unique(
         [*left.questions, *right.questions]
     ) or _fallback_questions(question_topic)
-    chunk_type = _chunk_type(evidence_items)
     metadata = {
         "source_unit_ids": source_unit_ids,
         "source_units": _merge_source_units(
@@ -366,8 +365,7 @@ def _merge_adjacent_chunks(
 
     return RagChunk(
         id=left.id,
-        type=chunk_type,
-        source=SourceEvidence(kind=chunk_type, text=source_text),
+        source=SourceEvidence(kind="chunk", text=source_text),
         evidence=Evidence(items=evidence_items),
         summary=summary,
         keywords=keywords,
@@ -393,7 +391,6 @@ def _chunk_with_boundary_merge_warning(
     metadata["_warnings"] = warnings
     return RagChunk(
         id=left.id,
-        type=left.type,
         source=left.source,
         evidence=left.evidence,
         summary=left.summary,
@@ -711,7 +708,6 @@ def _chunk_from_items(
     keywords = _strings(plan.get("keywords")) or _fallback_keywords_from_text(source_text)
     question_topic = source_text.strip().replace("\n", " ")[:160] or title or summary
     questions = _strings(plan.get("questions")) or _fallback_questions(question_topic)
-    chunk_type = _chunk_type(evidence_items)
     metadata = {
         "source_unit_ids": source_unit_ids,
         "source_units": _source_units(units),
@@ -734,8 +730,7 @@ def _chunk_from_items(
 
     return RagChunk(
         id=f"chunk-{index}",
-        type=chunk_type,
-        source=SourceEvidence(kind=chunk_type, text=source_text),
+        source=SourceEvidence(kind="chunk", text=source_text),
         evidence=Evidence(items=evidence_items),
         summary=summary,
         keywords=keywords,
@@ -808,11 +803,6 @@ def _merge_source_units(left: Any, right: Any) -> list[dict[str, Any]]:
         seen.add(unit_id)
         records.append(dict(item))
     return records
-
-
-def _chunk_type(items: list[EvidenceItem]) -> str:
-    types = _unique([item.type for item in items])
-    return types[0] if len(types) == 1 else "mixed"
 
 
 def _fallback_summary(units: list[EvidenceUnit]) -> str:
@@ -894,8 +884,7 @@ def _fallback_chunks(
         chunks.append(
             RagChunk(
                 id=f"chunk-{index}",
-                type=unit.type,
-                source=SourceEvidence(kind=unit.type, text=unit.source.text),
+                source=SourceEvidence(kind="chunk", text=unit.source.text),
                 evidence=Evidence(items=[item]),
                 summary=_fallback_summary([unit]),
                 keywords=_fallback_keywords([unit]),
@@ -909,7 +898,6 @@ def _fallback_chunks(
 def _reindex_chunk(index: int, chunk: RagChunk) -> RagChunk:
     return RagChunk(
         id=f"chunk-{index}",
-        type=chunk.type,
         source=chunk.source,
         evidence=chunk.evidence,
         summary=chunk.summary,
@@ -958,9 +946,13 @@ def _boundary_prompt(left: RagChunk, right: RagChunk, max_units: int) -> str:
 def _boundary_chunk_payload(chunk: RagChunk) -> dict[str, Any]:
     return {
         "id": chunk.id,
-        "type": chunk.type,
         "source_unit_ids": _strings(chunk.metadata.get("source_unit_ids")),
         "context_unit_ids": _strings(chunk.metadata.get("context_unit_ids")),
+        "unit_types": _strings(
+            chunk.metadata.get("common", {}).get("unit_types")
+            if isinstance(chunk.metadata.get("common"), dict)
+            else None
+        ),
         "summary": chunk.summary,
         "keywords": list(chunk.keywords),
         "questions": list(chunk.questions),
