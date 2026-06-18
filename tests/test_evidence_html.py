@@ -158,6 +158,21 @@ def test_render_composite_chunk_evidence_items():
     assert html.count("<table") == 1
 
 
+def test_render_plain_text_content_preserves_newlines():
+    from rag_document_parser.renderer.evidence_unit_render import render_evidence_html
+
+    html = render_evidence_html(
+        {
+            "type": "text",
+            "format": "plain",
+            "content": "첫 줄\n둘째 <줄>\n\n마지막 줄",
+            "metadata": {},
+        }
+    )
+
+    assert html == "<p>첫 줄<br>둘째 &lt;줄&gt;<br>&nbsp;<br>마지막 줄</p>"
+
+
 def test_render_evidence_unit_prefers_direct_content_over_legacy_evidence():
     from rag_document_parser.renderer.evidence_unit_render import render_evidence_units_html
 
