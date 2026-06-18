@@ -460,6 +460,107 @@ def test_hwp5_table_preserves_cell_spans_like_hwpx_tables():
     )
 
 
+def test_hwp5_table_clips_rowspan_when_later_header_cells_refine_same_columns():
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
+
+    records = b""
+    records += _table_ctrl(0)
+    records += _make_record(0x4D, 1, _table_body_payload(3, 4))
+    records += _make_record(
+        0x48,
+        1,
+        _list_header_payload_with_span(0, 0, rowspan=2, colspan=3),
+    )
+    records += _make_record(0x43, 2, _u16("검사항목"))
+    records += _make_record(0x48, 1, _list_header_payload(0, 3))
+    records += _make_record(0x43, 2, _u16("검사일자"))
+    records += _make_record(0x48, 1, _list_header_payload(1, 0))
+    records += _make_record(0x43, 2, _u16("1"))
+    records += _make_record(0x48, 1, _list_header_payload(1, 1))
+    records += _make_record(0x43, 2, _u16("Active arm movement"))
+    records += _make_record(0x48, 1, _list_header_payload(1, 2))
+    records += _make_record(0x43, 2, _u16("(0-4)"))
+    records += _make_record(0x48, 1, _list_header_payload(1, 3))
+    records += _make_record(0x48, 1, _list_header_payload(2, 0))
+    records += _make_record(0x43, 2, _u16("2"))
+    records += _make_record(0x48, 1, _list_header_payload(2, 1))
+    records += _make_record(0x43, 2, _u16("Active lower extremity movement"))
+    records += _make_record(0x48, 1, _list_header_payload(2, 2))
+    records += _make_record(0x43, 2, _u16("(0-4)"))
+    records += _make_record(0x48, 1, _list_header_payload(2, 3))
+    records += _make_record(0x42, 0, b"")
+
+    table = _parse_section(records).to_document().units[0]
+    content = table.content
+
+    assert content["header_rows"][0]["cells"][0] == {
+        "column_id": "c1",
+        "text": "검사항목",
+        "rowspan": 1,
+        "colspan": 3,
+        "children": [],
+    }
+    assert [column["text"] for column in content["columns"]] == [
+        "검사항목 / 1",
+        "검사항목 / Active arm movement",
+        "검사항목 / (0-4)",
+        "검사일자",
+    ]
+    assert "header 1: cols 1-3: 검사항목; col 4: 검사일자" in table.source.text
+    assert "header 2: col 1: 1; col 2: Active arm movement; col 3: (0-4)" in (
+        table.source.text
+    )
+
+
+def test_hwp5_table_clips_header_rowspan_over_hidden_blank_spacer_row():
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
+
+    records = b""
+    records += _table_ctrl(0)
+    records += _make_record(0x4D, 1, _table_body_payload(4, 4))
+    records += _make_record(
+        0x48,
+        1,
+        _list_header_payload_with_span(0, 0, rowspan=2, colspan=3),
+    )
+    records += _make_record(0x43, 2, _u16("검사항목"))
+    records += _make_record(0x48, 1, _list_header_payload(0, 3))
+    records += _make_record(0x43, 2, _u16("검사일자"))
+    records += _make_record(0x48, 1, _list_header_payload(1, 3))
+    records += _make_record(0x48, 1, _list_header_payload(2, 0))
+    records += _make_record(0x43, 2, _u16("1"))
+    records += _make_record(0x48, 1, _list_header_payload(2, 1))
+    records += _make_record(0x43, 2, _u16("Active arm movement"))
+    records += _make_record(0x48, 1, _list_header_payload(2, 2))
+    records += _make_record(0x43, 2, _u16("(0-4)"))
+    records += _make_record(0x48, 1, _list_header_payload(2, 3))
+    records += _make_record(0x48, 1, _list_header_payload(3, 0))
+    records += _make_record(0x43, 2, _u16("2"))
+    records += _make_record(0x48, 1, _list_header_payload(3, 1))
+    records += _make_record(0x43, 2, _u16("Active lower extremity movement"))
+    records += _make_record(0x48, 1, _list_header_payload(3, 2))
+    records += _make_record(0x43, 2, _u16("(0-4)"))
+    records += _make_record(0x48, 1, _list_header_payload(3, 3))
+    records += _make_record(0x42, 0, b"")
+
+    table = _parse_section(records).to_document().units[0]
+    content = table.content
+
+    assert content["header_rows"][0]["cells"][0] == {
+        "column_id": "c1",
+        "text": "검사항목",
+        "rowspan": 1,
+        "colspan": 3,
+        "children": [],
+    }
+    assert [column["text"] for column in content["columns"]] == [
+        "검사항목 / 1",
+        "검사항목 / Active arm movement",
+        "검사항목 / (0-4)",
+        "검사일자",
+    ]
+
+
 def test_hwp5_table_source_repeats_rowspan_context_on_continuation_rows():
     from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
 
@@ -951,6 +1052,8 @@ def test_hwp5_diagram_uses_shape_ctrl_ids_and_connector_subjects():
         "ctrl_id": "loc$",
         "instance_id": 30,
         "payload_bytes": 36,
+        "raw_start_point": {"x": 300, "y": 150},
+        "raw_end_point": {"x": 500, "y": 150},
         "link_type": 1,
         "start_subject_id": 10,
         "start_subject_index": 0,
@@ -967,6 +1070,147 @@ def test_hwp5_diagram_uses_shape_ctrl_ids_and_connector_subjects():
             "connector_id": "c1",
         }
     ]
+
+
+def test_hwp5_diagram_preserves_group_container_and_nested_shapes():
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
+
+    records = b""
+    records += _shape_ctrl(
+        0,
+        b"prg$",
+        instance_id=100,
+        x=50,
+        y=50,
+        width=700,
+        height=250,
+    )
+    records += _shape_ctrl(
+        1,
+        b"cer$",
+        instance_id=10,
+        x=100,
+        y=100,
+        width=200,
+        height=100,
+    )
+    records += _make_record(0x43, 2, _u16("접수"))
+    records += _shape_ctrl(
+        1,
+        b"lle$",
+        instance_id=20,
+        x=500,
+        y=100,
+        width=200,
+        height=100,
+    )
+    records += _make_record(0x43, 2, _u16("완료"))
+
+    document = _parse_section(records).to_document()
+    diagram = document.units[0]
+
+    assert diagram.type == "diagram"
+    assert [node["shape_type"] for node in diagram.content["nodes"]] == [
+        "group",
+        "rectangle",
+        "ellipse",
+    ]
+    assert diagram.content["nodes"][0]["text"] == ""
+    assert diagram.content["nodes"][0]["bbox"] == {
+        "x": 50,
+        "y": 50,
+        "width": 700,
+        "height": 250,
+        "unit": "hwp",
+    }
+    assert diagram.content["nodes"][0]["metadata"] == {
+        "source": "hwp5_drawing_text",
+        "instance_id": 100,
+        "ctrl_id": "prg$",
+        "container": True,
+    }
+    assert [node["text"] for node in diagram.content["nodes"][1:]] == ["접수", "완료"]
+    assert diagram.content["nodes"][1]["metadata"] == {
+        "source": "hwp5_drawing_text",
+        "parent_instance_id": 100,
+        "parent_ctrl_id": "prg$",
+        "instance_id": 10,
+        "ctrl_id": "cer$",
+    }
+    assert diagram.content["nodes"][2]["metadata"] == {
+        "source": "hwp5_drawing_text",
+        "parent_instance_id": 100,
+        "parent_ctrl_id": "prg$",
+        "instance_id": 20,
+        "ctrl_id": "lle$",
+    }
+
+
+def test_hwp5_diagram_preserves_parent_metadata_on_nested_connectors():
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
+
+    records = b""
+    records += _shape_ctrl(
+        0,
+        b"prg$",
+        instance_id=100,
+        x=50,
+        y=50,
+        width=700,
+        height=250,
+    )
+    records += _shape_ctrl(
+        1,
+        b"cer$",
+        instance_id=10,
+        x=100,
+        y=100,
+        width=200,
+        height=100,
+    )
+    records += _make_record(0x43, 2, _u16("접수"))
+    records += _shape_ctrl(
+        1,
+        b"lle$",
+        instance_id=20,
+        x=500,
+        y=100,
+        width=200,
+        height=100,
+    )
+    records += _make_record(0x43, 2, _u16("완료"))
+    records += _shape_ctrl(1, b"loc$", instance_id=30)
+    records += _make_record(
+        0x4E,
+        2,
+        _connector_line_payload(
+            10,
+            20,
+            link_type=1,
+            start=(300, 150),
+            end=(500, 150),
+        ),
+    )
+
+    document = _parse_section(records).to_document()
+    connector = document.units[0].content["connectors"][0]
+
+    assert connector["metadata"] == {
+        "source": "hwp5_gso_line",
+        "parent_instance_id": 100,
+        "parent_ctrl_id": "prg$",
+        "ctrl_id": "loc$",
+        "instance_id": 30,
+        "payload_bytes": 36,
+        "raw_start_point": {"x": 300, "y": 150},
+        "raw_end_point": {"x": 500, "y": 150},
+        "link_type": 1,
+        "start_subject_id": 10,
+        "start_subject_index": 0,
+        "end_subject_id": 20,
+        "end_subject_index": 0,
+    }
+    assert document.units[0].content["edges"][0]["confidence"] == "parsed_subject_ids"
 
 
 def test_hwp5_diagram_preserves_unresolved_connector_and_warns():
@@ -998,6 +1242,87 @@ def test_hwp5_diagram_preserves_unresolved_connector_and_warns():
         if warning["type"] == "hwp5_diagram_connector_unresolved"
     )
     assert unresolved["connector_ids"] == ["c1"]
+
+
+def test_hwp5_unresolved_connector_warning_includes_original_connector_details():
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
+
+    records = b""
+    records += _shape_ctrl(0, b"cer$", instance_id=10)
+    records += _make_record(0x43, 1, _u16("접수"))
+    records += _shape_ctrl(0, b"lle$", instance_id=20)
+    records += _make_record(0x43, 1, _u16("완료"))
+    records += _shape_ctrl(
+        0,
+        b"loc$",
+        instance_id=30,
+        x=300,
+        y=100,
+        width=200,
+        height=20,
+    )
+    records += _make_record(0x4E, 1, _connector_line_payload(10, 999, link_type=1))
+
+    document = _parse_section(records).to_document()
+    unresolved = next(
+        warning
+        for warning in document.quality_warnings
+        if warning["type"] == "hwp5_diagram_connector_unresolved"
+    )
+
+    assert unresolved["connectors"] == [
+        {
+            "id": "c1",
+            "type": "arrow",
+            "bbox": {
+                "x": 300,
+                "y": 100,
+                "width": 200,
+                "height": 20,
+                "unit": "hwp",
+            },
+            "points": [{"x": 300, "y": 110}, {"x": 500, "y": 110}],
+            "arrow": True,
+            "metadata": {
+                "source": "hwp5_gso_line",
+                "ctrl_id": "loc$",
+                "instance_id": 30,
+                "payload_bytes": 36,
+                "raw_start_point": {"x": 0, "y": 0},
+                "raw_end_point": {"x": 0, "y": 0},
+                "link_type": 1,
+                "start_subject_id": 10,
+                "start_subject_index": 0,
+                "end_subject_id": 999,
+                "end_subject_index": 0,
+            },
+            "resolution_failure": "subject_id_unmatched",
+        }
+    ]
+
+
+def test_hwp5_unsupported_drawing_shape_component_warns_with_ctrl_id():
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
+
+    records = b""
+    records += _gso_ctrl_with_bbox(0, x=100, y=200, width=300, height=120)
+    records += _make_record(0x4C, 1, b"zzzz" + b"\x00" * 8)
+    records += _make_record(0x43, 1, _u16("미지원 도형"))
+
+    document = _parse_section(records).to_document()
+
+    assert [unit.type for unit in document.units] == ["text"]
+    assert document.units[0].source.text == "미지원 도형"
+    assert document.quality_warnings == [
+        {
+            "type": "hwp5_unsupported_drawing_shape",
+            "severity": "medium",
+            "ctrl_id": "zzzz",
+            "tag_id": 0x4C,
+            "level": 1,
+            "message": "Unsupported HWP5 drawing shape component was preserved as text.",
+        }
+    ]
 
 
 def test_hwp5_drawing_inside_table_cell_becomes_diagram_child():
