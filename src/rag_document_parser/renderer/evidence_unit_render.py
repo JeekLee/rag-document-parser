@@ -147,7 +147,7 @@ def _render_structured_table(
     header_rows = [
         row
         for row in table.get("header_rows", [])
-        if isinstance(row, dict)
+        if isinstance(row, dict) and _table_row_has_content(row)
     ]
     if header_rows:
         html.append("<thead>")
@@ -181,6 +181,55 @@ def _render_structured_table(
     if not columns and not rows:
         return "<p class=\"empty-table\">빈 표</p>"
     return "".join(html)
+
+
+def _render_table_rows(
+    rows: list[dict[str, Any]],
+    tag: str,
+    assets_by_id: dict[str, dict[str, Any]],
+    *,
+    column_count: int,
+) -> str:
+    html: list[str] = []
+    active_rowspans: dict[int, int] = {}
+    for row in rows:
+        cells = row.get("cells", [])
+        next_rowspans = {
+            column: remaining - 1
+            for column, remaining in active_rowspans.items()
+            if remaining > 1
+        }
+        html.append("<tr>")
+        html.append(
+            _render_table_row_cells(
+                cells,
+                tag,
+                assets_by_id,
+                column_count=column_count,
+                active_rowspans=active_rowspans,
+                next_rowspans=next_rowspans,
+            )
+        )
+        if not cells and column_count:
+            html.append(f'<{tag} colspan="{column_count}">&nbsp;</{tag}>')
+        html.append("</tr>")
+        active_rowspans = next_rowspans
+    return "".join(html)
+
+
+def _table_row_has_content(row: dict[str, Any]) -> bool:
+    cells = row.get("cells")
+    if not isinstance(cells, list):
+        return False
+    for cell in cells:
+        if not isinstance(cell, dict):
+            continue
+        if str(cell.get("text", "")).strip():
+            return True
+        children = cell.get("children")
+        if isinstance(children, list) and children:
+            return True
+    return False
 
 
 def _render_structured_diagram(diagram: dict[str, Any]) -> str:
@@ -415,7 +464,14 @@ def _render_positioned_label_diagram(
         height = bbox["height"] / canvas_height * 100
         text = str(node.get("text", "")).strip()
         shape_type = str(node.get("shape_type", node.get("type", "label"))).strip()
-        shape_class = _diagram_shape_class(shape_type)
+        shape_class = " ".join(
+            part
+            for part in [
+                _diagram_shape_class(shape_type),
+                _diagram_node_text_flow_class(text, bbox),
+            ]
+            if part
+        )
         html.append(
             f'<div class="diagram-positioned-node {shape_class}" '
             f'style="left:{left:.3f}%;top:{top:.3f}%;'
@@ -425,6 +481,21 @@ def _render_positioned_label_diagram(
         )
     html.append("</div></section>")
     return "".join(html)
+
+
+def _diagram_node_text_flow_class(text: str, bbox: dict[str, float]) -> str:
+    if (
+        text
+        and not any(char.isspace() for char in text)
+        and _contains_hangul(text)
+        and bbox["width"] <= bbox["height"] * 0.75
+    ):
+        return "diagram-node-vertical"
+    return ""
+
+
+def _contains_hangul(text: str) -> bool:
+    return any("\uac00" <= char <= "\ud7a3" for char in text)
 
 
 def _diagram_shape_class(shape_type: str) -> str:
@@ -1157,6 +1228,12 @@ th {
 }
 .diagram-positioned-node.diagram-shape-textbox {
   border-style: dashed;
+}
+.diagram-positioned-node.diagram-node-vertical {
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+  padding: 4px 2px;
+  line-height: 1.1;
 }
 .diagram-positioned-node.diagram-shape-group,
 .diagram-positioned-node.diagram-shape-container {

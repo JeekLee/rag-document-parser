@@ -370,6 +370,148 @@ def test_render_structured_table_uses_header_rows_with_spans():
     assert '<th rowspan="2" colspan="2">관련 근거</th>' in html
 
 
+def test_render_structured_table_does_not_fill_header_gaps_covered_by_rowspan():
+    from rag_document_parser.renderer.evidence_unit_render import render_evidence_html
+
+    html = render_evidence_html(
+        {
+            "kind": "table",
+            "format": "structured_table",
+            "content": {
+                "caption": None,
+                "columns": [
+                    {"id": "c1", "text": "구 분"},
+                    {"id": "c2", "text": "일반식"},
+                    {"id": "c3", "text": "치료식"},
+                    {"id": "c4", "text": "멸균식"},
+                    {"id": "c5", "text": "분 유 / 일반 분유"},
+                    {"id": "c6", "text": "분 유 / 특수 분유"},
+                ],
+                "header_rows": [
+                    {
+                        "index": 1,
+                        "cells": [
+                            {
+                                "column_id": "c1",
+                                "text": "구 분",
+                                "rowspan": 2,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                            {
+                                "column_id": "c2",
+                                "text": "일반식",
+                                "rowspan": 2,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                            {
+                                "column_id": "c3",
+                                "text": "치료식",
+                                "rowspan": 2,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                            {
+                                "column_id": "c4",
+                                "text": "멸균식",
+                                "rowspan": 2,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                            {
+                                "column_id": "c5",
+                                "text": "분 유",
+                                "rowspan": 1,
+                                "colspan": 2,
+                                "children": [],
+                            },
+                        ],
+                    },
+                    {
+                        "index": 2,
+                        "cells": [
+                            {
+                                "column_id": "c5",
+                                "text": "일반 분유",
+                                "rowspan": 1,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                            {
+                                "column_id": "c6",
+                                "text": "특수 분유",
+                                "rowspan": 1,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                        ],
+                    },
+                ],
+                "rows": [],
+            },
+        }
+    )
+
+    assert "<tr><th>일반 분유</th><th>특수 분유</th></tr>" in html
+    assert "<tr><th>&nbsp;</th><th>&nbsp;</th><th>&nbsp;</th><th>&nbsp;</th>" not in html
+
+
+def test_render_structured_table_omits_empty_header_rows():
+    from rag_document_parser.renderer.evidence_unit_render import render_evidence_html
+
+    html = render_evidence_html(
+        {
+            "kind": "table",
+            "format": "structured_table",
+            "content": {
+                "caption": None,
+                "columns": [
+                    {"id": "c1", "text": "[별지29호]"},
+                    {"id": "c2", "text": "[별지29호]"},
+                ],
+                "header_rows": [
+                    {
+                        "index": 1,
+                        "cells": [
+                            {
+                                "column_id": "c1",
+                                "text": "[별지29호]",
+                                "rowspan": 1,
+                                "colspan": 2,
+                                "children": [],
+                            }
+                        ],
+                    },
+                    {
+                        "index": 2,
+                        "cells": [
+                            {
+                                "column_id": "c1",
+                                "text": "",
+                                "rowspan": 1,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                            {
+                                "column_id": "c2",
+                                "text": "",
+                                "rowspan": 1,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                        ],
+                    },
+                ],
+                "rows": [],
+            },
+        }
+    )
+
+    assert '<th colspan="2">[별지29호]</th>' in html
+    assert "<tr><th>&nbsp;</th><th>&nbsp;</th></tr>" not in html
+
+
 def test_render_structured_table_fills_column_gaps_from_cell_ids():
     from rag_document_parser.renderer.evidence_unit_render import render_evidence_html
 
@@ -1061,6 +1203,51 @@ def test_render_structured_diagram_marks_arrow_connectors():
 
     assert '<marker id="diagram-arrow"' in html
     assert 'marker-end="url(#diagram-arrow)"' in html
+
+
+def test_render_structured_diagram_marks_narrow_korean_nodes_vertical():
+    from rag_document_parser.renderer.evidence_unit_render import render_evidence_html
+
+    html = render_evidence_html(
+        {
+            "kind": "diagram",
+            "format": "structured_diagram",
+            "content": {
+                "caption": None,
+                "nodes": [
+                    {
+                        "id": "n1",
+                        "shape_type": "label",
+                        "text": "의료기관",
+                        "bbox": {
+                            "x": 1,
+                            "y": 7,
+                            "width": 1,
+                            "height": 2,
+                            "unit": "hwpx_table_grid",
+                        },
+                    },
+                    {
+                        "id": "n2",
+                        "shape_type": "label",
+                        "text": "건강보험심사평가원",
+                        "bbox": {
+                            "x": 6,
+                            "y": 7,
+                            "width": 6,
+                            "height": 2,
+                            "unit": "hwpx_table_grid",
+                        },
+                    },
+                ],
+                "connectors": [],
+                "edges": [],
+                "mermaid": None,
+            },
+        }
+    )
+
+    assert "diagram-node-vertical" in html
 
 
 def test_render_structured_diagram_places_step_labels_near_connectors():
