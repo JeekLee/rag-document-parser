@@ -173,6 +173,24 @@
         "min_units": 3,
         "min_tables": 0
       }
+    },
+    {
+      "id": "pdf-infection-prevention-management-fee-qa",
+      "pair_id": "infection-prevention-management-fee-qa",
+      "format": "pdf",
+      "path": "pdf/infection-prevention-management-fee-qa.pdf",
+      "source_uri": "s3://clic/raw/20160823-2-0001/(안내)감염예방관리료_질의응답.pdf",
+      "original_name": "(안내)감염예방관리료_질의응답.pdf",
+      "bytes": 253434,
+      "sha256": "a979bf1bbe9bd3c6f9dcb1f33f5162f0bafd37b8562ae2118bd851ccf99d0679",
+      "parser_supported": true,
+      "purpose": "Real clic MinIO PDF with nested tables embedded inside table cells and page-spanning Q&A tables.",
+      "expected": {
+        "standalone_regression": true,
+        "min_units": 8,
+        "min_tables": 4,
+        "min_assets": 0
+      }
     }
   ]
 }
