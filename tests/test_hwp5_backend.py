@@ -951,6 +951,8 @@ def test_hwp5_diagram_uses_shape_ctrl_ids_and_connector_subjects():
         "ctrl_id": "loc$",
         "instance_id": 30,
         "payload_bytes": 36,
+        "raw_start_point": {"x": 300, "y": 150},
+        "raw_end_point": {"x": 500, "y": 150},
         "link_type": 1,
         "start_subject_id": 10,
         "start_subject_index": 0,
@@ -1043,6 +1045,73 @@ def test_hwp5_diagram_preserves_group_container_and_nested_shapes():
     }
 
 
+def test_hwp5_diagram_preserves_parent_metadata_on_nested_connectors():
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
+
+    records = b""
+    records += _shape_ctrl(
+        0,
+        b"prg$",
+        instance_id=100,
+        x=50,
+        y=50,
+        width=700,
+        height=250,
+    )
+    records += _shape_ctrl(
+        1,
+        b"cer$",
+        instance_id=10,
+        x=100,
+        y=100,
+        width=200,
+        height=100,
+    )
+    records += _make_record(0x43, 2, _u16("접수"))
+    records += _shape_ctrl(
+        1,
+        b"lle$",
+        instance_id=20,
+        x=500,
+        y=100,
+        width=200,
+        height=100,
+    )
+    records += _make_record(0x43, 2, _u16("완료"))
+    records += _shape_ctrl(1, b"loc$", instance_id=30)
+    records += _make_record(
+        0x4E,
+        2,
+        _connector_line_payload(
+            10,
+            20,
+            link_type=1,
+            start=(300, 150),
+            end=(500, 150),
+        ),
+    )
+
+    document = _parse_section(records).to_document()
+    connector = document.units[0].content["connectors"][0]
+
+    assert connector["metadata"] == {
+        "source": "hwp5_gso_line",
+        "parent_instance_id": 100,
+        "parent_ctrl_id": "prg$",
+        "ctrl_id": "loc$",
+        "instance_id": 30,
+        "payload_bytes": 36,
+        "raw_start_point": {"x": 300, "y": 150},
+        "raw_end_point": {"x": 500, "y": 150},
+        "link_type": 1,
+        "start_subject_id": 10,
+        "start_subject_index": 0,
+        "end_subject_id": 20,
+        "end_subject_index": 0,
+    }
+    assert document.units[0].content["edges"][0]["confidence"] == "parsed_subject_ids"
+
+
 def test_hwp5_diagram_preserves_unresolved_connector_and_warns():
     from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
 
@@ -1118,6 +1187,8 @@ def test_hwp5_unresolved_connector_warning_includes_original_connector_details()
                 "ctrl_id": "loc$",
                 "instance_id": 30,
                 "payload_bytes": 36,
+                "raw_start_point": {"x": 0, "y": 0},
+                "raw_end_point": {"x": 0, "y": 0},
                 "link_type": 1,
                 "start_subject_id": 10,
                 "start_subject_index": 0,

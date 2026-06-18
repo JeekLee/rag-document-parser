@@ -130,6 +130,7 @@ class _DrawingLineBlock:
     ctrl_id: str | None = None
     instance_id: int | None = None
     payload: bytes | None = None
+    metadata: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass
@@ -562,6 +563,7 @@ def _structured_connector(
     metadata: dict[str, object] = {
         "source": "hwp5_gso_line",
     }
+    metadata.update(line.metadata)
     if line.ctrl_id is not None:
         metadata["ctrl_id"] = line.ctrl_id
     if line.instance_id is not None:
@@ -581,6 +583,10 @@ def _line_payload_metadata(payload: bytes | None) -> dict[str, object]:
     if payload is None:
         return {}
     metadata: dict[str, object] = {"payload_bytes": len(payload)}
+    if len(payload) >= 16:
+        start_x, start_y, end_x, end_y = struct.unpack_from("<4i", payload)
+        metadata["raw_start_point"] = {"x": start_x, "y": start_y}
+        metadata["raw_end_point"] = {"x": end_x, "y": end_y}
     if len(payload) >= 20:
         metadata["link_type"] = struct.unpack_from("<I", payload, 16)[0]
     if len(payload) >= 36:
@@ -1111,6 +1117,7 @@ def _parse_section(
                     ctrl_id=gso_ctrl_id,
                     instance_id=gso_instance_id,
                     payload=gso_line_payload,
+                    metadata=dict(gso_metadata),
             )
             if table_stack and table_stack[-1].in_cell:
                 table_stack[-1].current_cell_children.append(
