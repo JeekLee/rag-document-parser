@@ -215,8 +215,106 @@ def test_hwpx_minio_diagram_fixture_extracts_real_file_diagram_evidence():
     assert "시군구 (읍면동 포함)" in node_texts
     assert "지원대상자" in node_texts
     assert len(diagram.content["edges"]) >= 4
-    assert all(edge["confidence"] == "inferred_sequence" for edge in diagram.content["edges"])
+    assert all(edge["confidence"] == "inferred_table_grid" for edge in diagram.content["edges"])
+    assert all(edge["connector_id"] for edge in diagram.content["edges"])
+    assert len(diagram.content["connectors"]) >= 4
     assert diagram.content["mermaid"] is None
+
+
+def test_hwpx_minio_diagram_fixture_preserves_flowchart_geometry():
+    from rag_document_parser import HwpxBackend
+
+    path = CORPUS_DIR / "hwpx" / "medical-fee-criteria-2022-139.hwpx"
+    assert path.is_file()
+
+    parsed = HwpxBackend().parse(path.read_bytes(), ".hwpx")
+    diagram = next(
+        unit
+        for unit in parsed.units
+        if unit.type == "diagram" and "조산아 및 저체중 출생아 등록절차" in unit.source.text
+    )
+
+    nodes_by_text = {
+        str(node["text"]): node
+        for node in diagram.content["nodes"]
+        if isinstance(node, dict)
+    }
+    assert nodes_by_text["조산아 및 저체중 출생아 등록절차"]["bbox"] == {
+        "x": 0,
+        "y": 0,
+        "width": 23,
+        "height": 1,
+        "unit": "hwpx_table_grid",
+    }
+    assert nodes_by_text["건강보험공단 (자격관리시스템)"]["bbox"] == {
+        "x": 6,
+        "y": 2,
+        "width": 6,
+        "height": 2,
+        "unit": "hwpx_table_grid",
+    }
+    assert nodes_by_text["지원대상자"]["bbox"] == {
+        "x": 13,
+        "y": 11,
+        "width": 4,
+        "height": 2,
+        "unit": "hwpx_table_grid",
+    }
+    assert "④자료전송" in nodes_by_text
+    assert nodes_by_text["④자료전송"]["bbox"] is None
+
+    connectors = diagram.content["connectors"]
+    assert len(connectors) >= 8
+    assert connectors[0] == {
+        "id": "c1",
+        "type": "arrow",
+        "bbox": {
+            "x": 13,
+            "y": 2,
+            "width": 7,
+            "height": 1,
+            "unit": "hwpx_table_grid",
+        },
+        "points": [{"x": 20, "y": 2.5}, {"x": 13, "y": 2.5}],
+        "arrow": True,
+        "metadata": {
+            "source": "hwpx_table_flowchart",
+            "label": "④자료전송",
+            "raw_label": "← (④자료전송)",
+        },
+    }
+    assert len(diagram.content["edges"]) >= 8
+    assert all(edge["connector_id"] for edge in diagram.content["edges"])
+    assert all(edge["confidence"] == "inferred_table_grid" for edge in diagram.content["edges"])
+    assert "relations:" in diagram.source.text
+
+
+def test_hwpx_minio_diagram_fixture_does_not_duplicate_flowchart_rows_in_table():
+    from rag_document_parser import HwpxBackend
+
+    path = CORPUS_DIR / "hwpx" / "medical-fee-criteria-2022-139.hwpx"
+    assert path.is_file()
+
+    parsed = HwpxBackend().parse(path.read_bytes(), ".hwpx")
+    form_table = next(
+        unit
+        for unit in parsed.units
+        if unit.type == "table"
+        and "의료급여 2종 조산아 및 저체중출생아 등록 신청서" in unit.source.text
+    )
+    diagram = next(
+        unit
+        for unit in parsed.units
+        if unit.type == "diagram"
+        and "조산아 및 저체중 출생아 등록절차" in unit.source.text
+    )
+
+    assert "조산아 및 저체중 출생아 등록절차" not in form_table.source.text
+    assert "건강보험공단 (자격관리시스템)" not in form_table.source.text
+    assert "지원대상자" not in form_table.source.text
+    assert len(form_table.content["rows"]) == 11
+    assert "조산아 및 저체중 출생아 등록절차" in diagram.source.text
+    assert "지원대상자" in diagram.source.text
 
 
 def test_supported_hwp5_and_pdf_corpus_extracts_evidence_units():
