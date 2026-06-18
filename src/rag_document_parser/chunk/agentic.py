@@ -7,10 +7,9 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
-from ..enrichment.backend import Enricher
-from ..enrichment.chunk import RagChunkEnricher
-from ..enrichment.llm import LlmConfig, chat_json
 from ..models import Evidence, EvidenceItem, EvidenceUnit, RagChunk, SourceEvidence
+from .enrichment import Enricher, RagChunkEnricher
+from .llm import LlmConfig, chat_json
 
 PlanFn = Callable[[list[EvidenceUnit], LlmConfig | None, int], Any]
 BoundaryMergeFn = Callable[[RagChunk, RagChunk, LlmConfig | None, int], Any]

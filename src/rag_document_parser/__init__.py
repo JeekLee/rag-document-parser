@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from .chunk import EvidenceUnitAgenticChunker
-from .enrichment import RagChunkEnricher
-from .enrichment.llm import LlmConfig
+from .chunk import EvidenceUnitAgenticChunker, RagChunkEnricher
+from .chunk.llm import LlmConfig
 from .evidence_unit_extraction.backend import DocumentBackend, ParsedDocument
 from .evidence_unit_extraction.formats.hwp5 import Hwp5Backend
 from .evidence_unit_extraction.formats.hwpx import HwpxBackend

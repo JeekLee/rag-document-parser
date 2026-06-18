@@ -1281,7 +1281,7 @@ def test_agentic_chunker_carries_rowspan_context_when_splitting_large_table():
 
 def test_agentic_chunker_enriches_after_final_table_split():
     from rag_document_parser.chunk import EvidenceUnitAgenticChunker
-    from rag_document_parser.enrichment import RagChunkEnricher
+    from rag_document_parser.chunk.enrichment import RagChunkEnricher
 
     repeated = " ".join(["의료급여", "심사결정", "본인부담금", "청구금액"] * 5)
     unit = _table_unit_with_rows("tbl1", [f"{repeated} {index}" for index in range(1, 5)])

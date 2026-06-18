@@ -109,8 +109,8 @@ input -> evidence_unit_extraction EvidenceUnit -> agentic chunk -> RagChunk
   extraction entrypoints for Markdown, HWPX, HWP5, and PDF.
 - `renderer/`: EvidenceUnit and RagChunk HTML rendering.
 - `pipeline/`: orchestration for the public parser API.
-- `chunk/`: chunker protocol and `EvidenceUnitAgenticChunker`.
-- `enrichment/`: LLM client and future chunk enrichment logic.
+- `chunk/`: chunker protocol, `EvidenceUnitAgenticChunker`, chunk LLM
+  planning helpers, and final `RagChunk` enrichment.
 
 ## Optional dependencies
 

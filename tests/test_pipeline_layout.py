@@ -17,9 +17,9 @@ def test_pipeline_layout_exports_stage_and_format_modules():
     )
     from rag_document_parser.chunk import EvidenceUnitAgenticChunker as StageAgenticChunker
     from rag_document_parser.chunk.backend import Chunker
-    from rag_document_parser.enrichment import RagChunkEnricher as StageRagChunkEnricher
-    from rag_document_parser.enrichment.backend import Enricher
-    from rag_document_parser.enrichment.llm import LlmConfig
+    from rag_document_parser.chunk.enrichment import Enricher
+    from rag_document_parser.chunk.enrichment import RagChunkEnricher as StageRagChunkEnricher
+    from rag_document_parser.chunk.llm import LlmConfig
     from rag_document_parser.evidence_unit_extraction.backend import (
         DocumentBackend,
         ParsedDocument,
@@ -72,3 +72,4 @@ def test_legacy_import_paths_are_removed():
     assert importlib.util.find_spec("rag_document_parser.hwpx") is None
     assert importlib.util.find_spec("rag_document_parser.llm") is None
     assert importlib.util.find_spec("rag_document_parser.parser") is None
+    assert importlib.util.find_spec("rag_document_parser.enrichment") is None

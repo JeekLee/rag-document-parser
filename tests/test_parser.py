@@ -23,7 +23,7 @@ def test_parse_text_document_returns_evidence_units_without_llm(monkeypatch):
         raise AssertionError("parse() must not call LLM enrichment")
 
     monkeypatch.setattr(
-        "rag_document_parser.enrichment.llm.chat_json",
+        "rag_document_parser.chunk.llm.chat_json",
         fail_chat_json,
         raising=False,
     )
@@ -271,7 +271,7 @@ def test_unsupported_suffix_fails_before_llm_call(monkeypatch):
         raise AssertionError("parse() must not call LLM enrichment")
 
     monkeypatch.setattr(
-        "rag_document_parser.enrichment.llm.chat_json",
+        "rag_document_parser.chunk.llm.chat_json",
         fail_chat_json,
         raising=False,
     )

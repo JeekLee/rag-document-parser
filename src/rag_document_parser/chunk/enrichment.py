@@ -5,13 +5,19 @@ import re
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from ..models import RagChunk
 from .llm import LlmConfig, chat_json
 
 ChunkEnrichmentFn = Callable[[RagChunk, LlmConfig | None], Any]
 ChatJsonFn = Callable[[str, LlmConfig], Any]
+
+
+class Enricher(Protocol):
+    def enrich(self, chunks: list[RagChunk]) -> list[RagChunk]:
+        """Add summary, keyword, and question metadata to chunks."""
+        ...
 
 
 _CHUNK_ENRICHMENT_PROMPT = """\
