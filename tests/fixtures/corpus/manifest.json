@@ -102,6 +102,24 @@
       }
     },
     {
+      "id": "hwpx-medical-fee-criteria-2022-139",
+      "pair_id": "medical-fee-criteria-2022-139",
+      "format": "hwpx",
+      "path": "hwpx/medical-fee-criteria-2022-139.hwpx",
+      "source_uri": "s3://clic/raw/20220607-1-0001/의료급여수가의_기준_및_일반기준(고시_제2022-139호_2022.6.7.)_전문.hwpx",
+      "original_name": "의료급여수가의_기준_및_일반기준(고시_제2022-139호_2022.6.7.)_전문.hwpx",
+      "bytes": 615650,
+      "sha256": "c6a71f2464fb5cb7ebda9fe5658ba52ed87ba6e90658170f0727848bc2b63b71",
+      "parser_supported": true,
+      "purpose": "Standalone HWPX corpus document from clic MinIO with a registration procedure flowchart and HWPX drawing tags.",
+      "expected": {
+        "standalone_regression": true,
+        "min_units": 740,
+        "min_tables": 60,
+        "min_diagram_units": 1
+      }
+    },
+    {
       "id": "hwp-medical-aid-overpayment-deduction",
       "pair_id": "medical-aid-overpayment-deduction",
       "format": "hwp",

@@ -70,6 +70,32 @@ def _table(*rows: list[str]) -> str:
     return f"<hp:tbl>{body}</hp:tbl>"
 
 
+def _rect(text: str, *, x: int, y: int, width: int, height: int) -> str:
+    return (
+        f'<hp:rect><hp:pos x="{x}" y="{y}" />'
+        f'<hp:sz width="{width}" height="{height}" />'
+        "<hp:drawText><hp:p>"
+        f"{_run(text)}"
+        "</hp:p></hp:drawText></hp:rect>"
+    )
+
+
+def _line(
+    *,
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    arrow: bool = False,
+) -> str:
+    arrow_xml = '<hp:lineShape endArrowType="NORMAL" />' if arrow else ""
+    return (
+        f'<hp:line><hp:pos x="{x}" y="{y}" />'
+        f'<hp:sz width="{width}" height="{height}" />'
+        f"{arrow_xml}</hp:line>"
+    )
+
+
 def _make_hwpx(section_xml: str, *, image_bytes: bytes | None = None) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
@@ -214,6 +240,7 @@ def test_hwpx_table_cell_image_is_preserved_as_nested_asset_ref():
         "content": {"asset_id": "img-0001", "caption": None},
     }
     assert parsed.assets[0].id == "img-0001"
+    assert "image: img-0001" in table_unit.source.text
 
 
 def test_nested_asset_refs_are_uploaded_and_resolved_in_table_evidence(monkeypatch):
@@ -652,3 +679,236 @@ def test_hwpx_table_does_not_promote_grouped_code_rows_to_headers():
         "EDI코드: EB441\n"
         "row 4: 구분 [2]: 간·담낭·담도·비장·췌장(정밀); EDI코드: EB442"
     )
+
+
+def test_hwpx_drawing_shapes_become_structured_diagram():
+    from rag_document_parser import HwpxBackend
+
+    xml = (
+        f'<hp:sec xmlns:hp="{HP}">'
+        "<hp:p><hp:run>"
+        f"{_rect('수급권자', x=100, y=100, width=200, height=100)}"
+        f"{_line(x=300, y=145, width=200, height=10, arrow=True)}"
+        f"{_rect('심사평가원', x=500, y=100, width=200, height=100)}"
+        "</hp:run></hp:p>"
+        "</hp:sec>"
+    )
+
+    parsed = HwpxBackend().parse(_make_hwpx(xml), ".hwpx")
+
+    assert [unit.type for unit in parsed.units] == ["diagram"]
+    diagram = parsed.units[0]
+    assert diagram.format == "structured_diagram"
+    assert diagram.source.kind == "diagram"
+    assert diagram.metadata["common"]["display_format"] == "structured_diagram"
+    assert [node["text"] for node in diagram.content["nodes"]] == [
+        "수급권자",
+        "심사평가원",
+    ]
+    assert diagram.content["nodes"][0]["bbox"] == {
+        "x": 100,
+        "y": 100,
+        "width": 200,
+        "height": 100,
+        "unit": "hwpx",
+    }
+    assert diagram.content["connectors"] == [
+        {
+            "id": "c1",
+            "type": "line",
+            "bbox": {
+                "x": 300,
+                "y": 145,
+                "width": 200,
+                "height": 10,
+                "unit": "hwpx",
+            },
+            "points": [{"x": 300, "y": 150}, {"x": 500, "y": 150}],
+            "arrow": True,
+            "metadata": {"source": "hwpx_line"},
+        }
+    ]
+    assert diagram.content["edges"] == [
+        {
+            "from": "n1",
+            "to": "n2",
+            "type": "arrow",
+            "label": "",
+            "confidence": "inferred_geometry",
+            "connector_id": "c1",
+        }
+    ]
+    assert diagram.content["mermaid"] is None
+    assert "relations:\nn1 -> n2" in diagram.source.text
+    assert parsed.quality_warnings == []
+
+
+def test_hwpx_single_text_box_stays_text_unit():
+    from rag_document_parser import HwpxBackend
+
+    xml = (
+        f'<hp:sec xmlns:hp="{HP}">'
+        "<hp:p><hp:run>"
+        f"{_rect('단일 텍스트박스', x=100, y=100, width=200, height=100)}"
+        "</hp:run></hp:p>"
+        "</hp:sec>"
+    )
+
+    parsed = HwpxBackend().parse(_make_hwpx(xml), ".hwpx")
+
+    assert [unit.type for unit in parsed.units] == ["text"]
+    assert parsed.units[0].source.text == "단일 텍스트박스"
+    assert parsed.units[0].format == "plain"
+    assert parsed.quality_warnings == []
+
+
+def test_hwpx_table_cell_diagram_is_preserved_as_nested_evidence():
+    from rag_document_parser import HwpxBackend
+
+    diagram_xml = (
+        f"{_rect('수급권자', x=100, y=100, width=200, height=100)}"
+        f"{_line(x=300, y=145, width=200, height=10, arrow=True)}"
+        f"{_rect('심사평가원', x=500, y=100, width=200, height=100)}"
+    )
+    table = _table(
+        [_text_cell("구분"), _text_cell("흐름도")],
+        [_text_cell("처리"), _table_cell(diagram_xml)],
+    )
+    xml = (
+        f'<hp:sec xmlns:hp="{HP}">'
+        f"<hp:p><hp:run>{table}</hp:run></hp:p>"
+        "</hp:sec>"
+    )
+
+    parsed = HwpxBackend().parse(_make_hwpx(xml), ".hwpx")
+
+    table_unit = parsed.units[0]
+    diagram_child = table_unit.content["rows"][0]["cells"][1]["children"][0]
+    assert diagram_child["type"] == "diagram"
+    assert diagram_child["format"] == "structured_diagram"
+    assert [node["text"] for node in diagram_child["content"]["nodes"]] == [
+        "수급권자",
+        "심사평가원",
+    ]
+    assert diagram_child["content"]["edges"][0]["from"] == "n1"
+    assert diagram_child["content"]["edges"][0]["to"] == "n2"
+    assert "diagram: 수급권자 / 심사평가원" in table_unit.source.text
+
+
+def test_hwpx_broken_image_reference_is_reported_as_quality_warning():
+    from rag_document_parser import HwpxBackend
+
+    xml = (
+        f'<hp:sec xmlns:hp="{HP}" xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core">'
+        '<hp:p><hp:run><hp:pic><hc:img binaryItemIDRef="missing" /></hp:pic></hp:run></hp:p>'
+        "</hp:sec>"
+    )
+
+    parsed = HwpxBackend().parse(_make_hwpx(xml), ".hwpx")
+
+    assert parsed.units == []
+    assert parsed.assets == []
+    assert parsed.quality_warnings == [
+        {
+            "type": "hwpx_image_reference_unresolved",
+            "severity": "medium",
+            "ref": "missing",
+            "message": "HWPX image reference could not be resolved: missing",
+        }
+    ]
+
+
+def test_hwpx_unsupported_drawing_structure_is_reported_as_quality_warning():
+    from rag_document_parser import HwpxBackend
+
+    xml = (
+        f'<hp:sec xmlns:hp="{HP}">'
+        '<hp:p><hp:run><hp:arc><hp:pos x="10" y="20" />'
+        '<hp:sz width="100" height="50" /></hp:arc></hp:run></hp:p>'
+        "</hp:sec>"
+    )
+
+    parsed = HwpxBackend().parse(_make_hwpx(xml), ".hwpx")
+
+    assert parsed.units == []
+    assert parsed.quality_warnings == [
+        {
+            "type": "hwpx_drawing_structure_unsupported",
+            "severity": "medium",
+            "element": "arc",
+            "message": "Unsupported HWPX drawing structure was skipped: arc",
+        }
+    ]
+
+
+def test_hwpx_image_only_document_uses_ocr_fallback_without_duplicate_native_text():
+    from rag_document_parser import HwpxBackend
+
+    calls: list[tuple[bytes, int]] = []
+
+    def ocr_fn(data: bytes, image_index: int) -> str:
+        calls.append((data, image_index))
+        return "스캔 이미지 OCR"
+
+    image_only = (
+        f'<hp:sec xmlns:hp="{HP}" xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core">'
+        '<hp:p><hp:run><hp:pic><hc:img binaryItemIDRef="img1" /></hp:pic></hp:run></hp:p>'
+        "</hp:sec>"
+    )
+    parsed = HwpxBackend(ocr_fn=ocr_fn).parse(
+        _make_hwpx(image_only, image_bytes=PNG_BYTES),
+        ".hwpx",
+    )
+
+    assert [unit.type for unit in parsed.units] == ["image", "text"]
+    assert parsed.units[1].source.text == "스캔 이미지 OCR"
+    assert calls == [(PNG_BYTES, 0)]
+    assert parsed.quality_warnings == []
+
+    with_native_text = (
+        f'<hp:sec xmlns:hp="{HP}" xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core">'
+        f"<hp:p>{_run('기존 본문')}</hp:p>"
+        '<hp:p><hp:run><hp:pic><hc:img binaryItemIDRef="img1" /></hp:pic></hp:run></hp:p>'
+        "</hp:sec>"
+    )
+    calls.clear()
+
+    parsed = HwpxBackend(ocr_fn=ocr_fn).parse(
+        _make_hwpx(with_native_text, image_bytes=PNG_BYTES),
+        ".hwpx",
+    )
+
+    assert [unit.source.text for unit in parsed.units] == [
+        "기존 본문",
+        "image: img-0001",
+    ]
+    assert calls == []
+
+
+def test_hwpx_ocr_failure_is_reported_as_quality_warning():
+    from rag_document_parser import HwpxBackend
+
+    def fail_ocr(data: bytes, image_index: int) -> str:
+        raise RuntimeError("ocr boom")
+
+    xml = (
+        f'<hp:sec xmlns:hp="{HP}" xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core">'
+        '<hp:p><hp:run><hp:pic><hc:img binaryItemIDRef="img1" /></hp:pic></hp:run></hp:p>'
+        "</hp:sec>"
+    )
+
+    parsed = HwpxBackend(ocr_fn=fail_ocr).parse(
+        _make_hwpx(xml, image_bytes=PNG_BYTES),
+        ".hwpx",
+    )
+
+    assert [unit.type for unit in parsed.units] == ["image"]
+    assert parsed.quality_warnings == [
+        {
+            "type": "hwpx_ocr_failed",
+            "severity": "medium",
+            "image_index": 1,
+            "asset_id": "img-0001",
+            "message": "ocr boom",
+        }
+    ]

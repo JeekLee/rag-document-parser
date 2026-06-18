@@ -4,6 +4,7 @@ import io
 import re
 import zipfile
 from dataclasses import dataclass
+from typing import Any, Callable
 from xml.etree import ElementTree as ET
 
 from ....models import EvidenceUnit, PendingAsset, SourceEvidence
@@ -16,17 +17,41 @@ from ...table_source import (
 
 _HP = "http://www.hancom.co.kr/hwpml/2011/paragraph"
 _OPF = "http://www.idpf.org/2007/opf/"
+_DRAWING_NODE_TAGS = {
+    "container",
+    "ellipse",
+    "rect",
+    "roundRect",
+    "shapeObject",
+    "textBox",
+    "textbox",
+}
+_DRAWING_CONNECTOR_TAGS = {"connectLine", "line"}
+_UNSUPPORTED_DRAWING_TAGS = {"arc", "curve", "polygon"}
+_DIAGRAM_STEP_LABEL_RE = re.compile(
+    r"^(?:[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]|\d+[.)])"
+)
 
 
 def _q(local: str) -> str:
     return f"{{{_HP}}}{local}"
 
 
+@dataclass(frozen=True)
+class _DrawingResult:
+    structured: dict[str, object] | None = None
+    single_text: str | None = None
+
+
 @dataclass
 class HwpxBackend:
+    supported_suffixes = (".hwpx",)
+    ocr_fn: Callable[[bytes, int], str] | None = None
+
     def parse(self, data: bytes, suffix: str) -> ParsedDocument:
         units: list[EvidenceUnit] = []
         assets: list[PendingAsset] = []
+        warnings: list[dict[str, Any]] = []
         block_index = 1
         table_index = 1
 
@@ -37,7 +62,13 @@ class HwpxBackend:
                 for paragraph in root.findall(_q("p")):
                     table = paragraph.find(f".//{_q('tbl')}")
                     if table is not None:
-                        structured = _structured_table(table, z, bin_data_map, assets)
+                        structured = _structured_table(
+                            table,
+                            z,
+                            bin_data_map,
+                            assets,
+                            warnings,
+                        )
                         if not structured["columns"] and not structured["rows"]:
                             continue
                         text_box = _single_cell_text_table_text(structured)
@@ -90,11 +121,21 @@ class HwpxBackend:
                             )
                         )
                         block_index += 1
+                        table_diagram = _table_flowchart_diagram(structured)
+                        if table_diagram is not None:
+                            units.append(_diagram_unit(f"b{block_index}", table_diagram))
+                            block_index += 1
                         continue
 
                     picture = paragraph.find(f".//{_q('pic')}")
                     if picture is not None:
-                        image = _extract_image(picture, z, bin_data_map, len(assets) + 1)
+                        image = _extract_image(
+                            picture,
+                            z,
+                            bin_data_map,
+                            len(assets) + 1,
+                            warnings,
+                        )
                         if image is None:
                             continue
                         asset_id, asset = image
@@ -122,28 +163,73 @@ class HwpxBackend:
                         block_index += 1
                         continue
 
+                    drawing = _paragraph_drawing(paragraph, warnings)
+                    if drawing is not None:
+                        if drawing.single_text is not None:
+                            units.append(
+                                _text_unit(f"b{block_index}", drawing.single_text)
+                            )
+                            block_index += 1
+                            continue
+                        if drawing.structured is not None:
+                            units.append(
+                                _diagram_unit(f"b{block_index}", drawing.structured)
+                            )
+                            block_index += 1
+                            continue
+
                     text = _paragraph_text(paragraph).strip()
                     if not text:
                         continue
-                    units.append(
-                        EvidenceUnit(
-                            id=f"b{block_index}",
-                            type="text",
-                            format="plain",
-                            source=SourceEvidence(kind="text", text=text),
-                            content=text,
-                            metadata={
-                                "common": {
-                                    "chunk_kind": "text",
-                                    "section_path": [],
-                                    "display_format": "plain",
-                                }
-                            },
-                        )
-                    )
+                    units.append(_text_unit(f"b{block_index}", text))
                     block_index += 1
 
-        return ParsedDocument(units=units, assets=assets)
+        block_index = _append_ocr_fallback_units(
+            units,
+            assets,
+            warnings,
+            self.ocr_fn,
+            block_index,
+        )
+        return ParsedDocument(units=units, assets=assets, quality_warnings=warnings)
+
+
+def _text_unit(unit_id: str, text: str) -> EvidenceUnit:
+    return EvidenceUnit(
+        id=unit_id,
+        type="text",
+        format="plain",
+        source=SourceEvidence(kind="text", text=text),
+        content=text,
+        metadata={
+            "common": {
+                "chunk_kind": "text",
+                "section_path": [],
+                "display_format": "plain",
+            }
+        },
+    )
+
+
+def _diagram_unit(unit_id: str, structured: dict[str, object]) -> EvidenceUnit:
+    return EvidenceUnit(
+        id=unit_id,
+        type="diagram",
+        format="structured_diagram",
+        source=SourceEvidence(kind="diagram", text=_diagram_source_text(structured)),
+        content=structured,
+        metadata={
+            "common": {
+                "chunk_kind": "diagram",
+                "section_path": [],
+                "display_format": "structured_diagram",
+            },
+            "diagram": {
+                "node_count": len(structured["nodes"]),
+                "edge_count": len(structured["edges"]),
+            },
+        },
+    )
 
 
 def _section_names(z: zipfile.ZipFile) -> list[str]:
@@ -189,9 +275,10 @@ def _structured_table(
     z: zipfile.ZipFile,
     bin_data_map: dict[str, str],
     assets: list[PendingAsset],
+    warnings: list[dict[str, Any]],
 ) -> dict[str, object]:
     raw_rows = [
-        _table_row(row, row_index, z, bin_data_map, assets)
+        _table_row(row, row_index, z, bin_data_map, assets, warnings)
         for row_index, row in enumerate(table.findall(_q("tr")))
     ]
     raw_rows = [row for row in raw_rows if row]
@@ -418,11 +505,20 @@ def _table_row(
     z: zipfile.ZipFile,
     bin_data_map: dict[str, str],
     assets: list[PendingAsset],
+    warnings: list[dict[str, Any]],
 ) -> list[dict[str, object]]:
     cells: list[dict[str, object]] = []
     col_cursor = 0
     for cell in row.findall(_q("tc")):
-        raw_cell = _table_cell(cell, row_index, col_cursor, z, bin_data_map, assets)
+        raw_cell = _table_cell(
+            cell,
+            row_index,
+            col_cursor,
+            z,
+            bin_data_map,
+            assets,
+            warnings,
+        )
         cells.append(raw_cell)
         col_cursor = int(raw_cell["col_addr"]) + int(raw_cell["colspan"])
     return cells
@@ -435,6 +531,7 @@ def _table_cell(
     z: zipfile.ZipFile,
     bin_data_map: dict[str, str],
     assets: list[PendingAsset],
+    warnings: list[dict[str, Any]],
 ) -> dict[str, object]:
     sub_list = cell.find(_q("subList"))
     texts: list[str] = []
@@ -447,12 +544,38 @@ def _table_cell(
                     {
                         "type": "table",
                         "format": "structured_table",
-                        "content": _structured_table(nested, z, bin_data_map, assets),
+                        "content": _structured_table(
+                            nested,
+                            z,
+                            bin_data_map,
+                            assets,
+                            warnings,
+                        ),
                     }
                 )
                 continue
+            drawing = _paragraph_drawing(paragraph, warnings)
+            if drawing is not None:
+                if drawing.single_text is not None:
+                    texts.append(drawing.single_text)
+                    continue
+                if drawing.structured is not None:
+                    children.append(
+                        {
+                            "type": "diagram",
+                            "format": "structured_diagram",
+                            "content": drawing.structured,
+                        }
+                    )
+                    continue
             for picture in paragraph.findall(f".//{_q('pic')}"):
-                image = _extract_image(picture, z, bin_data_map, len(assets) + 1)
+                image = _extract_image(
+                    picture,
+                    z,
+                    bin_data_map,
+                    len(assets) + 1,
+                    warnings,
+                )
                 if image is None:
                     continue
                 asset_id, asset = image
@@ -544,14 +667,34 @@ def _table_source_cells(
             use_header_labels=use_header_labels,
         )
         value = str(cell["text"])
-        child_texts = [
-            "nested table: " + _inline_table_source(child["content"])
-            for child in cell["children"]
-            if child.get("type", child.get("kind")) == "table"
-        ]
+        child_texts = _nested_child_source_texts(cell["children"])
         combined = "; ".join(part for part in [value, *child_texts] if part)
         if combined:
             result.append(f"{header}: {combined}")
+    return result
+
+
+def _nested_child_source_texts(children: object) -> list[str]:
+    if not isinstance(children, list):
+        return []
+    result: list[str] = []
+    for child in children:
+        if not isinstance(child, dict):
+            continue
+        child_type = child.get("type", child.get("kind"))
+        content = child.get("content")
+        if child_type == "table" and isinstance(content, dict):
+            result.append("nested table: " + _inline_table_source(content))
+            continue
+        if child_type == "image" and isinstance(content, dict):
+            asset_id = str(content.get("asset_id", "")).strip()
+            if asset_id:
+                result.append(f"image: {asset_id}")
+            continue
+        if child_type == "diagram" and isinstance(content, dict):
+            source = _diagram_source_text(content).replace("\n", " / ")
+            if source:
+                result.append(f"diagram: {source}")
     return result
 
 
@@ -604,17 +747,557 @@ def _inline_table_source(table: dict[str, object]) -> str:
     return source.replace("\n", " / ")
 
 
+def _paragraph_drawing(
+    paragraph: ET.Element,
+    warnings: list[dict[str, Any]],
+) -> _DrawingResult | None:
+    candidates = list(_drawing_candidates(paragraph))
+    if not candidates:
+        return None
+
+    nodes: list[dict[str, object]] = []
+    connectors: list[dict[str, object]] = []
+    for element in candidates:
+        local = _local_name(element.tag)
+        if local in _UNSUPPORTED_DRAWING_TAGS:
+            _warn_unsupported_drawing(warnings, local)
+            continue
+        if local in _DRAWING_CONNECTOR_TAGS:
+            connector = _structured_connector(len(connectors) + 1, element)
+            if connector is not None:
+                connectors.append(connector)
+            continue
+        if local not in _DRAWING_NODE_TAGS:
+            continue
+        text = _element_text(element)
+        if not text:
+            continue
+        nodes.append(
+            {
+                "id": f"n{len(nodes) + 1}",
+                "shape_type": local,
+                "text": text,
+                "bbox": _bbox_from_element(element),
+                "metadata": {"source": "hwpx_drawing_text"},
+            }
+        )
+
+    if len(nodes) == 1 and not connectors:
+        return _DrawingResult(single_text=str(nodes[0]["text"]))
+    if not nodes:
+        return None
+
+    structured: dict[str, object] = {
+        "caption": None,
+        "nodes": nodes,
+        "edges": _infer_connector_edges(nodes, connectors),
+        "connectors": connectors,
+        "mermaid": None,
+    }
+    return _DrawingResult(structured=structured)
+
+
+def _drawing_candidates(paragraph: ET.Element) -> list[ET.Element]:
+    candidates: list[ET.Element] = []
+    for run in paragraph.findall(_q("run")):
+        for child in list(run):
+            candidates.extend(_drawing_candidates_from_element(child))
+    return candidates
+
+
+def _drawing_candidates_from_element(element: ET.Element) -> list[ET.Element]:
+    local = _local_name(element.tag)
+    if local in {"drawText", "pic", "tbl"}:
+        return []
+    if local in _DRAWING_CONNECTOR_TAGS or local in _UNSUPPORTED_DRAWING_TAGS:
+        return [element]
+    if local in _DRAWING_NODE_TAGS:
+        text = _element_text(element)
+        if text or local != "container":
+            return [element]
+        candidates: list[ET.Element] = []
+        for child in list(element):
+            candidates.extend(_drawing_candidates_from_element(child))
+        return candidates
+
+    candidates = []
+    for child in list(element):
+        candidates.extend(_drawing_candidates_from_element(child))
+    return candidates
+
+
+def _structured_connector(
+    index: int,
+    element: ET.Element,
+) -> dict[str, object] | None:
+    bbox = _bbox_from_element(element)
+    if bbox is None:
+        return None
+    return {
+        "id": f"c{index}",
+        "type": "line",
+        "bbox": bbox,
+        "points": _line_points_from_bbox(bbox),
+        "arrow": _line_has_arrow(element),
+        "metadata": {"source": "hwpx_line"},
+    }
+
+
+def _bbox_from_element(element: ET.Element) -> dict[str, int | str] | None:
+    pos = _first_descendant(element, "pos")
+    size = _first_descendant(element, "sz")
+    x = _int_attr(pos, ("x", "left")) if pos is not None else 0
+    y = _int_attr(pos, ("y", "top")) if pos is not None else 0
+    width = _int_attr(size, ("width", "w", "cx")) if size is not None else 0
+    height = _int_attr(size, ("height", "h", "cy")) if size is not None else 0
+    x = _int_attr(element, ("x", "left"), x)
+    y = _int_attr(element, ("y", "top"), y)
+    width = _int_attr(element, ("width", "w", "cx"), width)
+    height = _int_attr(element, ("height", "h", "cy"), height)
+    if width <= 0 or height <= 0:
+        return None
+    return {
+        "x": x,
+        "y": y,
+        "width": width,
+        "height": height,
+        "unit": "hwpx",
+    }
+
+
+def _first_descendant(element: ET.Element, local_name: str) -> ET.Element | None:
+    for descendant in element.iter():
+        if descendant is element:
+            continue
+        if _local_name(descendant.tag) == local_name:
+            return descendant
+    return None
+
+
+def _int_attr(
+    element: ET.Element | None,
+    names: tuple[str, ...],
+    default: int = 0,
+) -> int:
+    if element is None:
+        return default
+    for name in names:
+        value = element.get(name)
+        if value is None:
+            continue
+        try:
+            return int(float(value))
+        except ValueError:
+            continue
+    return default
+
+
+def _line_points_from_bbox(bbox: dict[str, int | str]) -> list[dict[str, int]]:
+    x = _bbox_int(bbox, "x")
+    y = _bbox_int(bbox, "y")
+    width = _bbox_int(bbox, "width")
+    height = _bbox_int(bbox, "height")
+    if width >= max(height, 1) * 3:
+        y_mid = y + max(height, 1) // 2
+        return [{"x": x, "y": y_mid}, {"x": x + width, "y": y_mid}]
+    if height >= max(width, 1) * 3:
+        x_mid = x + max(width, 1) // 2
+        return [{"x": x_mid, "y": y}, {"x": x_mid, "y": y + height}]
+    return [{"x": x, "y": y}, {"x": x + width, "y": y + height}]
+
+
+def _line_has_arrow(element: ET.Element) -> bool:
+    for item in element.iter():
+        for attr, value in item.attrib.items():
+            if "arrow" not in _local_name(attr).lower():
+                continue
+            normalized = value.strip().lower()
+            if normalized not in {"", "0", "false", "none", "null"}:
+                return True
+    return False
+
+
+def _infer_connector_edges(
+    nodes: list[dict[str, object]],
+    connectors: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    bbox_nodes = [
+        (str(node.get("id", "")), bbox)
+        for node in nodes
+        if (bbox := _diagram_node_bbox(node)) is not None
+    ]
+    if len(bbox_nodes) < 2:
+        return []
+
+    edges: list[dict[str, object]] = []
+    seen: set[tuple[str, str, str]] = set()
+    edge_labels = _diagram_connector_labels(nodes)
+    for connector_index, connector in enumerate(connectors):
+        points = connector.get("points")
+        if not isinstance(points, list) or len(points) < 2:
+            continue
+        start = _diagram_point(points[0])
+        end = _diagram_point(points[1])
+        if start is None or end is None:
+            continue
+        from_id = _nearest_node_id(start, bbox_nodes)
+        to_id = _nearest_node_id(end, bbox_nodes)
+        if from_id is None or to_id is None or from_id == to_id:
+            continue
+        connector_id = str(connector.get("id", ""))
+        key = (from_id, to_id, connector_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        edges.append(
+            {
+                "from": from_id,
+                "to": to_id,
+                "type": "arrow" if connector.get("arrow") else "line",
+                "label": (
+                    edge_labels[connector_index]
+                    if connector_index < len(edge_labels)
+                    else ""
+                ),
+                "confidence": "inferred_geometry",
+                "connector_id": connector_id,
+            }
+        )
+    return edges
+
+
+def _diagram_connector_labels(nodes: list[dict[str, object]]) -> list[str]:
+    labels: list[str] = []
+    for node in nodes:
+        if _diagram_node_bbox(node) is not None:
+            continue
+        text = str(node.get("text", "")).strip()
+        if not text:
+            continue
+        if _is_diagram_step_label(text):
+            labels.append(text)
+            continue
+        if (
+            labels
+            and not _is_diagram_section_heading(text)
+            and not _is_diagram_note(text)
+        ):
+            labels[-1] = f"{labels[-1]}\n{text}"
+    return labels
+
+
+def _is_diagram_step_label(text: str) -> bool:
+    return bool(_DIAGRAM_STEP_LABEL_RE.match(text.strip()))
+
+
+def _is_diagram_section_heading(text: str) -> bool:
+    stripped = text.strip()
+    return stripped.startswith("<") and stripped.endswith(">")
+
+
+def _is_diagram_note(text: str) -> bool:
+    stripped = text.strip()
+    return (
+        (stripped.startswith("(") and stripped.endswith(")"))
+        or (stripped.startswith("[") and stripped.endswith("]"))
+    )
+
+
+def _diagram_node_bbox(node: dict[str, object]) -> dict[str, int] | None:
+    bbox = node.get("bbox")
+    if not isinstance(bbox, dict):
+        return None
+    x = _bbox_int(bbox, "x")
+    y = _bbox_int(bbox, "y")
+    width = _bbox_int(bbox, "width")
+    height = _bbox_int(bbox, "height")
+    if width <= 0 or height <= 0:
+        return None
+    return {"x": x, "y": y, "width": width, "height": height}
+
+
+def _diagram_point(point: object) -> dict[str, int] | None:
+    if not isinstance(point, dict):
+        return None
+    try:
+        return {"x": int(point["x"]), "y": int(point["y"])}
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _nearest_node_id(
+    point: dict[str, int],
+    bbox_nodes: list[tuple[str, dict[str, int]]],
+) -> str | None:
+    best_id: str | None = None
+    best_distance: int | None = None
+    for node_id, bbox in bbox_nodes:
+        distance = _point_bbox_distance_squared(point, bbox)
+        if best_distance is None or distance < best_distance:
+            best_id = node_id
+            best_distance = distance
+    return best_id
+
+
+def _point_bbox_distance_squared(
+    point: dict[str, int],
+    bbox: dict[str, int],
+) -> int:
+    min_x = bbox["x"]
+    max_x = bbox["x"] + bbox["width"]
+    min_y = bbox["y"]
+    max_y = bbox["y"] + bbox["height"]
+    dx = max(min_x - point["x"], 0, point["x"] - max_x)
+    dy = max(min_y - point["y"], 0, point["y"] - max_y)
+    return dx * dx + dy * dy
+
+
+def _diagram_source_text(diagram: dict[str, object]) -> str:
+    nodes = diagram.get("nodes", [])
+    if not isinstance(nodes, list):
+        return ""
+    lines = [
+        text
+        for text in (
+            str(node.get("text", "")).strip()
+            for node in nodes
+            if isinstance(node, dict)
+        )
+        if text
+    ]
+    edge_lines = _diagram_edge_source_lines(diagram.get("edges", []))
+    if edge_lines:
+        lines.append("relations:")
+        lines.extend(edge_lines)
+    return "\n".join(lines)
+
+
+def _table_flowchart_diagram(table: dict[str, object]) -> dict[str, object] | None:
+    rows = table.get("rows")
+    if not isinstance(rows, list):
+        return None
+
+    flowchart_rows = _flowchart_rows(rows)
+    if not flowchart_rows:
+        return None
+
+    node_texts: list[str] = []
+    edge_labels: list[str] = []
+    for row in flowchart_rows:
+        if not isinstance(row, dict):
+            continue
+        cells = row.get("cells")
+        if not isinstance(cells, list):
+            continue
+        for cell in cells:
+            if not isinstance(cell, dict):
+                continue
+            text = _flowchart_cell_text(cell)
+            if not text:
+                continue
+            if _is_flowchart_edge_label(text):
+                edge_labels.append(text)
+                continue
+            if text not in node_texts:
+                node_texts.append(text)
+
+    if len(node_texts) < 2:
+        return None
+
+    nodes = [
+        {
+            "id": f"n{index}",
+            "shape_type": "label",
+            "text": text,
+            "bbox": None,
+            "metadata": {"source": "hwpx_table_flowchart"},
+        }
+        for index, text in enumerate(node_texts, start=1)
+    ]
+    edges = [
+        {
+            "from": f"n{index}",
+            "to": f"n{index + 1}",
+            "type": "arrow",
+            "label": edge_labels[index - 1] if index <= len(edge_labels) else "",
+            "confidence": "inferred_sequence",
+            "connector_id": "",
+        }
+        for index in range(1, len(nodes))
+    ]
+    return {
+        "caption": None,
+        "nodes": nodes,
+        "edges": edges,
+        "connectors": [],
+        "mermaid": None,
+    }
+
+
+def _flowchart_rows(rows: list[object]) -> list[object]:
+    start: int | None = None
+    for index, row in enumerate(rows):
+        texts = _row_cell_texts(row)
+        if any(_is_flowchart_title(text) for text in texts):
+            start = index
+            break
+    if start is None:
+        return []
+
+    result: list[object] = []
+    for row in rows[start:]:
+        texts = _row_cell_texts(row)
+        if result and any(_is_paper_size_note(text) for text in texts):
+            break
+        result.append(row)
+    return result
+
+
+def _row_cell_texts(row: object) -> list[str]:
+    if not isinstance(row, dict):
+        return []
+    cells = row.get("cells")
+    if not isinstance(cells, list):
+        return []
+    return [
+        text
+        for cell in cells
+        if isinstance(cell, dict)
+        and (text := _flowchart_cell_text(cell))
+    ]
+
+
+def _flowchart_cell_text(cell: dict[str, object]) -> str:
+    return _clean_text(str(cell.get("text", ""))).strip("<> ")
+
+
+def _is_flowchart_title(text: str) -> bool:
+    return "등록절차" in text or "처리절차" in text or "업무처리" in text
+
+
+def _is_flowchart_edge_label(text: str) -> bool:
+    return bool(re.search(r"[→←↑↓↕]", text))
+
+
+def _is_paper_size_note(text: str) -> bool:
+    return "mm×" in text or "일반용지" in text
+
+
+def _diagram_edge_source_lines(edges: object) -> list[str]:
+    if not isinstance(edges, list):
+        return []
+    lines: list[str] = []
+    for edge in edges:
+        if not isinstance(edge, dict):
+            continue
+        from_id = str(edge.get("from", "")).strip()
+        to_id = str(edge.get("to", "")).strip()
+        if not from_id or not to_id:
+            continue
+        label = str(edge.get("label", "")).strip()
+        line = f"{from_id} -> {to_id}"
+        if label:
+            line = f"{line}: {label}"
+        lines.append(line)
+    return lines
+
+
+def _element_text(element: ET.Element) -> str:
+    parts: list[str] = []
+    for descendant in element.iter():
+        if _local_name(descendant.tag) != "t":
+            continue
+        if descendant.text:
+            parts.append("".join(char for char in descendant.text if char > "\x1f"))
+    return _clean_text(" ".join(parts))
+
+
+def _clean_text(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _bbox_int(bbox: dict[str, int | str], key: str) -> int:
+    try:
+        return int(bbox[key])
+    except (KeyError, TypeError, ValueError):
+        return 0
+
+
+def _warn_unsupported_drawing(
+    warnings: list[dict[str, Any]],
+    element: str,
+) -> None:
+    warning = {
+        "type": "hwpx_drawing_structure_unsupported",
+        "severity": "medium",
+        "element": element,
+        "message": f"Unsupported HWPX drawing structure was skipped: {element}",
+    }
+    if warning not in warnings:
+        warnings.append(warning)
+
+
+def _append_ocr_fallback_units(
+    units: list[EvidenceUnit],
+    assets: list[PendingAsset],
+    warnings: list[dict[str, Any]],
+    ocr_fn: Callable[[bytes, int], str] | None,
+    block_index: int,
+) -> int:
+    if ocr_fn is None or not assets or _has_native_source_text(units):
+        return block_index
+
+    for image_index, asset in enumerate(assets):
+        try:
+            text = _clean_text(ocr_fn(asset.data, image_index) or "")
+        except Exception as exc:
+            warnings.append(
+                {
+                    "type": "hwpx_ocr_failed",
+                    "severity": "medium",
+                    "image_index": image_index + 1,
+                    "asset_id": asset.id,
+                    "message": str(exc),
+                }
+            )
+            continue
+        if not text:
+            warnings.append(
+                {
+                    "type": "hwpx_ocr_failed",
+                    "severity": "medium",
+                    "image_index": image_index + 1,
+                    "asset_id": asset.id,
+                    "message": "empty OCR result",
+                }
+            )
+            continue
+        units.append(_text_unit(f"b{block_index}", text))
+        block_index += 1
+    return block_index
+
+
+def _has_native_source_text(units: list[EvidenceUnit]) -> bool:
+    return any(
+        unit.type in {"text", "table", "diagram"} and unit.source.text.strip()
+        for unit in units
+    )
+
+
 def _extract_image(
     picture: ET.Element,
     z: zipfile.ZipFile,
     bin_data_map: dict[str, str],
     index: int,
+    warnings: list[dict[str, Any]],
 ) -> tuple[str, PendingAsset] | None:
     ref = _image_ref(picture)
     if ref is None:
+        _warn_unresolved_image(warnings, "")
         return None
     href = bin_data_map.get(ref, "")
     if not href or href not in z.namelist():
+        _warn_unresolved_image(warnings, ref)
         return None
     data = z.read(href)
     mime = _detect_mime(data)
@@ -630,6 +1313,20 @@ def _extract_image(
             ext=ext,
             metadata={"source_path": href},
         ),
+    )
+
+
+def _warn_unresolved_image(
+    warnings: list[dict[str, Any]],
+    ref: str,
+) -> None:
+    warnings.append(
+        {
+            "type": "hwpx_image_reference_unresolved",
+            "severity": "medium",
+            "ref": ref,
+            "message": f"HWPX image reference could not be resolved: {ref}",
+        }
     )
 
 
