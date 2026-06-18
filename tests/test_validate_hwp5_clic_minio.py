@@ -92,6 +92,46 @@ def test_hwp5_validation_metrics_include_tables_diagrams_and_warnings():
     }
 
 
+def test_hwp5_validation_skips_non_hwp5_signature_without_parsing(monkeypatch):
+    validate_hwp5_clic_minio = _load_validation_script()
+
+    class FailingBackend:
+        def parse(self, data, suffix):
+            raise AssertionError("parser should not be called")
+
+    monkeypatch.setattr(validate_hwp5_clic_minio, "Hwp5Backend", FailingBackend)
+
+    parsed, skip_reason = validate_hwp5_clic_minio._parse_hwp5_or_skip(
+        b"PK\x03\x04not-hwp5",
+    )
+
+    assert parsed.units == []
+    assert parsed.assets == []
+    assert skip_reason == "non_hwp5_signature"
+    assert parsed.quality_warnings == [
+        {
+            "type": "non_hwp5_skipped",
+            "severity": "low",
+            "stage": "hwp5_validation",
+            "message": "Input does not have an HWP5/OLE container signature.",
+        }
+    ]
+
+    metrics = validate_hwp5_clic_minio._metrics(
+        parsed=parsed,
+        raw_bytes=12,
+        document_sha256="abc",
+        evidence_elapsed=0.0,
+        uploads={},
+        uploaded_assets=[],
+        skip_reason=skip_reason,
+    )
+
+    assert metrics["skipped"] is True
+    assert metrics["skip_reason"] == "non_hwp5_signature"
+    assert metrics["quality_warnings"]["by_type"] == {"non_hwp5_skipped": 1}
+
+
 def _load_validation_script():
     script_path = Path(__file__).resolve().parents[1] / "scripts" / "validate_hwp5_clic_minio.py"
     spec = importlib.util.spec_from_file_location("validate_hwp5_clic_minio", script_path)

@@ -16,6 +16,8 @@ from rag_document_parser.backends import ParsedDocument
 from rag_document_parser.renderer.evidence_unit_render import render_evidence_units_html
 from rag_document_parser.storage import public_url_for_s3_uri, put_object
 
+_OLE_COMPOUND_HEADER = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
 
 def main() -> None:
     args = _parse_args()
@@ -36,7 +38,7 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     evidence_started = time.perf_counter()
-    parsed = Hwp5Backend().parse(raw, ".hwp")
+    parsed, skip_reason = _parse_hwp5_or_skip(raw)
     evidence_elapsed = time.perf_counter() - evidence_started
     public_asset_endpoint = None
     if args.html_asset_url_mode == "public":
@@ -94,6 +96,7 @@ def main() -> None:
         evidence_elapsed=evidence_elapsed,
         uploads=uploads,
         uploaded_assets=uploaded_assets,
+        skip_reason=skip_reason,
     )
     metrics_json = _json_bytes(metrics)
     metrics_path = output_dir / "metrics.json"
@@ -116,6 +119,7 @@ def _metrics(
     evidence_elapsed: float,
     uploads: dict[str, str],
     uploaded_assets: list[dict[str, Any]],
+    skip_reason: str | None = None,
 ) -> dict[str, Any]:
     unit_dicts = [unit.to_dict() for unit in parsed.units]
     counts = Counter(unit.type for unit in parsed.units)
@@ -124,7 +128,7 @@ def _metrics(
         for warning in parsed.quality_warnings
         if warning.get("type")
     )
-    return {
+    metrics = {
         "source": {
             "sha256": document_sha256,
             "bytes": raw_bytes,
@@ -154,6 +158,33 @@ def _metrics(
         },
         "uploads": dict(uploads),
     }
+    if skip_reason is not None:
+        metrics["skipped"] = True
+        metrics["skip_reason"] = skip_reason
+    return metrics
+
+
+def _parse_hwp5_or_skip(raw: bytes) -> tuple[ParsedDocument, str | None]:
+    if not _has_hwp5_container_signature(raw):
+        return (
+            ParsedDocument(
+                units=[],
+                quality_warnings=[
+                    {
+                        "type": "non_hwp5_skipped",
+                        "severity": "low",
+                        "stage": "hwp5_validation",
+                        "message": "Input does not have an HWP5/OLE container signature.",
+                    }
+                ],
+            ),
+            "non_hwp5_signature",
+        )
+    return Hwp5Backend().parse(raw, ".hwp"), None
+
+
+def _has_hwp5_container_signature(raw: bytes) -> bool:
+    return raw.startswith(_OLE_COMPOUND_HEADER)
 
 
 def _table_metrics(units: list[dict[str, Any]]) -> dict[str, int]:

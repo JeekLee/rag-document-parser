@@ -1431,6 +1431,30 @@ def test_hwp5_picture_shape_becomes_image_asset_ref():
     }
 
 
+def test_hwp5_picture_shape_component_does_not_warn_as_unsupported():
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _BinEntry, _parse_section
+
+    picture_payload = bytearray(80)
+    struct.pack_into("<H", picture_payload, 71, 1)
+    records = b""
+    records += _gso_ctrl(0)
+    records += _make_record(0x4C, 1, b"cip$")
+    records += _make_record(0x55, 1, bytes(picture_payload))
+    records += _make_record(0x42, 0, b"")
+
+    document = _parse_section(
+        records,
+        bin_entries={1: _BinEntry(storage_id=7, ext="png")},
+        bin_streams={7: (PNG_BYTES, "png")},
+    ).to_document()
+
+    assert [unit.type for unit in document.units] == ["image"]
+    assert {
+        warning["type"]
+        for warning in document.quality_warnings
+    } == set()
+
+
 def test_hwp5_image_only_document_uses_ocr_fallback():
     from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _BinEntry, _parse_section
 
@@ -1458,7 +1482,7 @@ def test_hwp5_image_only_document_uses_ocr_fallback():
     assert document.quality_warnings == []
 
 
-def test_hwp5_ocr_fallback_skips_when_native_text_exists():
+def test_hwp5_ocr_fallback_skips_duplicate_native_text():
     from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _BinEntry, _parse_section
 
     calls = []
@@ -1475,14 +1499,47 @@ def test_hwp5_ocr_fallback_skips_when_native_text_exists():
         bin_streams={7: (PNG_BYTES, "png")},
     )
     document = parsed.to_document(
-        ocr_fn=lambda image, index: calls.append(index) or "중복 OCR"
+        ocr_fn=lambda image, index: calls.append(index) or "네이티브 본문"
     )
 
     assert [unit.source.text for unit in document.units] == [
         "image: img-0001",
         "네이티브 본문",
     ]
-    assert calls == []
+    assert calls == [0]
+
+
+def test_hwp5_ocr_fallback_keeps_image_text_when_native_text_exists():
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _BinEntry, _parse_section
+
+    calls = []
+    picture_payload = bytearray(80)
+    struct.pack_into("<H", picture_payload, 71, 1)
+    records = b""
+    records += _make_record(0x43, 0, _u16("네이티브 본문"))
+    records += _make_record(0x47, 0, b" osg" + b"\x00" * 8)
+    records += _make_record(0x55, 1, bytes(picture_payload))
+
+    parsed = _parse_section(
+        records,
+        bin_entries={1: _BinEntry(storage_id=7, ext="png")},
+        bin_streams={7: (PNG_BYTES, "png")},
+    )
+    document = parsed.to_document(
+        ocr_fn=lambda image, index: calls.append(index) or "이미지 안 문구"
+    )
+
+    assert [unit.source.text for unit in document.units] == [
+        "네이티브 본문",
+        "image: img-0001",
+        "이미지 안 문구",
+    ]
+    assert document.units[2].metadata["common"]["chunk_kind"] == "ocr"
+    assert document.units[2].metadata["ocr"] == {
+        "source": "hwp5_image",
+        "asset_id": "img-0001",
+    }
+    assert calls == [0]
 
 
 def test_hwp5_ocr_failure_is_reported_as_quality_warning():
