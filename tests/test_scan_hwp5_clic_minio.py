@@ -11,34 +11,32 @@ def test_table_profile_counts_cells_spans_and_blank_ratio():
         {
             "id": "b12",
             "metadata": {"table": {"table_id": "t7"}},
-            "evidence": {
-                "content": {
-                    "columns": [{"id": "c1"}, {"id": "c2"}, {"id": "c3"}],
-                    "header_rows": [
-                        {
-                            "cells": [
-                                {"text": "구분", "rowspan": 2, "colspan": 1},
-                                {"text": "현행", "rowspan": 1, "colspan": 2},
-                            ]
-                        }
-                    ],
-                    "rows": [
-                        {
-                            "cells": [
-                                {"text": "A", "rowspan": 1, "colspan": 1},
-                                {"text": "", "rowspan": 1, "colspan": 1},
-                                {"text": "C", "rowspan": 1, "colspan": 1},
-                            ]
-                        },
-                        {
-                            "cells": [
-                                {"text": "", "rowspan": 1, "colspan": 1},
-                                {"text": "", "rowspan": 1, "colspan": 1},
-                                {"text": "F", "rowspan": 1, "colspan": 1},
-                            ]
-                        },
-                    ],
-                }
+            "content": {
+                "columns": [{"id": "c1"}, {"id": "c2"}, {"id": "c3"}],
+                "header_rows": [
+                    {
+                        "cells": [
+                            {"text": "구분", "rowspan": 2, "colspan": 1},
+                            {"text": "현행", "rowspan": 1, "colspan": 2},
+                        ]
+                    }
+                ],
+                "rows": [
+                    {
+                        "cells": [
+                            {"text": "A", "rowspan": 1, "colspan": 1},
+                            {"text": "", "rowspan": 1, "colspan": 1},
+                            {"text": "C", "rowspan": 1, "colspan": 1},
+                        ]
+                    },
+                    {
+                        "cells": [
+                            {"text": "", "rowspan": 1, "colspan": 1},
+                            {"text": "", "rowspan": 1, "colspan": 1},
+                            {"text": "F", "rowspan": 1, "colspan": 1},
+                        ]
+                    },
+                ],
             },
         }
     )
@@ -68,42 +66,40 @@ def test_diagram_profile_counts_geometry_edges_and_labels():
             "source": {
                 "text": "수급권자\n심사평가원\nrelations:\nn1 -> n2: ①신청"
             },
-            "evidence": {
-                "content": {
-                    "nodes": [
-                        {
-                            "id": "n1",
-                            "text": "수급권자",
-                            "bbox": {"x": 0, "y": 0, "width": 10, "height": 10},
-                        },
-                        {"id": "n2", "text": "①신청", "bbox": None},
-                        {
-                            "id": "n3",
-                            "text": "심사평가원",
-                            "bbox": {"x": 30, "y": 0, "width": 10, "height": 10},
-                        },
-                    ],
-                    "connectors": [
-                        {"id": "c1", "points": [{"x": 10, "y": 5}, {"x": 30, "y": 5}]},
-                        {"id": "c2", "points": [{"x": 30, "y": 5}, {"x": 40, "y": 5}]},
-                    ],
-                    "edges": [
-                        {
-                            "from": "n1",
-                            "to": "n3",
-                            "label": "①신청",
-                            "confidence": "inferred_geometry",
-                            "connector_id": "c1",
-                        },
-                        {
-                            "from": "n3",
-                            "to": "n1",
-                            "label": "",
-                            "confidence": "inferred_geometry",
-                            "connector_id": "c2",
-                        },
-                    ],
-                }
+            "content": {
+                "nodes": [
+                    {
+                        "id": "n1",
+                        "text": "수급권자",
+                        "bbox": {"x": 0, "y": 0, "width": 10, "height": 10},
+                    },
+                    {"id": "n2", "text": "①신청", "bbox": None},
+                    {
+                        "id": "n3",
+                        "text": "심사평가원",
+                        "bbox": {"x": 30, "y": 0, "width": 10, "height": 10},
+                    },
+                ],
+                "connectors": [
+                    {"id": "c1", "points": [{"x": 10, "y": 5}, {"x": 30, "y": 5}]},
+                    {"id": "c2", "points": [{"x": 30, "y": 5}, {"x": 40, "y": 5}]},
+                ],
+                "edges": [
+                    {
+                        "from": "n1",
+                        "to": "n3",
+                        "label": "①신청",
+                        "confidence": "inferred_geometry",
+                        "connector_id": "c1",
+                    },
+                    {
+                        "from": "n3",
+                        "to": "n1",
+                        "label": "",
+                        "confidence": "inferred_geometry",
+                        "connector_id": "c2",
+                    },
+                ],
             },
         }
     )
@@ -141,7 +137,7 @@ def test_document_scan_summary_ranks_table_outliers():
             _table_unit("b3", "t2", columns=120, rows=2, cells_per_row=120),
         ],
         assets=[],
-        warnings=[{"type": "hwp5_drawing_structure_unsupported"}],
+        warnings=[{"type": "hwp5_drawing_structure_partial"}],
     )
 
     assert document["source_uri"] == "s3://clic/raw/sample.hwp"
@@ -151,7 +147,7 @@ def test_document_scan_summary_ranks_table_outliers():
     assert document["tables"]["max_columns"] == 120
     assert document["tables"]["outliers"][0]["table_id"] == "t2"
     assert document["tables"]["outliers"][0]["flags"] == ["wide_table"]
-    assert document["warning_types"] == ["hwp5_drawing_structure_unsupported"]
+    assert document["warning_types"] == ["hwp5_drawing_structure_partial"]
 
 
 def test_document_scan_summary_reports_diagram_outliers():
@@ -324,20 +320,18 @@ def _table_unit(
         "id": unit_id,
         "type": "table",
         "metadata": {"table": {"table_id": table_id}},
-        "evidence": {
-            "content": {
-                "columns": [{"id": f"c{index}"} for index in range(1, columns + 1)],
-                "header_rows": [],
-                "rows": [
-                    {
-                        "cells": [
-                            {"text": f"r{row}c{cell}", "rowspan": 1, "colspan": 1}
-                            for cell in range(cells_per_row)
-                        ]
-                    }
-                    for row in range(rows)
-                ],
-            }
+        "content": {
+            "columns": [{"id": f"c{index}"} for index in range(1, columns + 1)],
+            "header_rows": [],
+            "rows": [
+                {
+                    "cells": [
+                        {"text": f"r{row}c{cell}", "rowspan": 1, "colspan": 1}
+                        for cell in range(cells_per_row)
+                    ]
+                }
+                for row in range(rows)
+            ],
         },
     }
 
@@ -374,30 +368,28 @@ def _diagram_unit(
                 ]
             )
         },
-        "evidence": {
-            "content": {
-                "nodes": node_payload,
-                "connectors": [
-                    {
-                        "id": f"c{index}",
-                        "points": [
-                            {"x": index * 10, "y": 1},
-                            {"x": index * 10 + 5, "y": 1},
-                        ],
-                    }
-                    for index in range(1, connectors + 1)
-                ],
-                "edges": [
-                    {
-                        "from": f"n{index}",
-                        "to": f"n{index + 1}",
-                        "label": "",
-                        "confidence": "inferred_geometry",
-                        "connector_id": f"c{index}",
-                    }
-                    for index in range(1, edges + 1)
-                ],
-            }
+        "content": {
+            "nodes": node_payload,
+            "connectors": [
+                {
+                    "id": f"c{index}",
+                    "points": [
+                        {"x": index * 10, "y": 1},
+                        {"x": index * 10 + 5, "y": 1},
+                    ],
+                }
+                for index in range(1, connectors + 1)
+            ],
+            "edges": [
+                {
+                    "from": f"n{index}",
+                    "to": f"n{index + 1}",
+                    "label": "",
+                    "confidence": "inferred_geometry",
+                    "connector_id": f"c{index}",
+                }
+                for index in range(1, edges + 1)
+            ],
         },
     }
 

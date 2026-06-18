@@ -5,7 +5,7 @@ import re
 import struct
 import zlib
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from ....models import EvidenceUnit, PendingAsset, SourceEvidence
 from ...backend import ParsedDocument
@@ -30,11 +30,24 @@ _PICTURE_BIN_DATA_ID_OFFSET = 71
 _DIAGRAM_STEP_LABEL_RE = re.compile(
     r"^(?:[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]|\d+[.)])"
 )
+_SHAPE_CTRL_TYPES = {
+    b"cer$": "rectangle",  # "$rec"
+    b"lle$": "ellipse",  # "$ell"
+    b"txt$": "textbox",  # "$txt"
+    b"prg$": "group",  # "$grp"
+    b"noc$": "container",  # "$con"
+    b"lop$": "polygon",  # "$pol"
+    b"nil$": "line",  # "$lin"
+    b"loc$": "connector",  # "$col"
+    b"cra$": "arc",  # "$arc"
+    b"ruc$": "curve",  # "$cur"
+}
 
 
 @dataclass(frozen=True)
 class Hwp5Backend:
     supported_suffixes = (".hwp",)
+    ocr_fn: Callable[[bytes, int], str] | None = None
 
     def parse(self, data: bytes, suffix: str) -> ParsedDocument:
         try:
@@ -63,7 +76,7 @@ class Hwp5Backend:
         finally:
             ole.close()
 
-        return parsed.to_document()
+        return parsed.to_document(ocr_fn=self.ocr_fn)
 
 
 @dataclass(frozen=True)
@@ -88,20 +101,28 @@ class _TextBlock:
     text: str
     origin: str = "body"
     bbox: dict[str, int | str] | None = None
+    shape_type: str = "label"
+    instance_id: int | None = None
+    ctrl_id: str | None = None
+    metadata: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass
 class _DiagramBlock:
     text: str
+    nodes: list[dict[str, object]] = field(default_factory=list)
     bboxes: list[dict[str, int | str] | None] = field(default_factory=list)
     connectors: list[dict[str, object]] = field(default_factory=list)
 
 
 @dataclass
 class _DrawingLineBlock:
-    bbox: dict[str, int | str]
+    bbox: dict[str, int | str] | None
     points: list[dict[str, int]]
     arrow: bool = False
+    ctrl_id: str | None = None
+    instance_id: int | None = None
+    payload: bytes | None = None
 
 
 @dataclass
@@ -114,6 +135,7 @@ class _TableBlock:
 @dataclass
 class _ImageBlock:
     asset_id: str
+    metadata: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass
@@ -124,15 +146,20 @@ class _ParsedBlocks:
     assets: list[PendingAsset] = field(default_factory=list)
     saw_drawing: bool = False
     missing_image_count: int = 0
+    quality_warnings: list[dict[str, Any]] = field(default_factory=list)
 
     def extend(self, other: _ParsedBlocks) -> None:
         self.blocks.extend(other.blocks)
         self.assets.extend(other.assets)
         self.saw_drawing = self.saw_drawing or other.saw_drawing
         self.missing_image_count += other.missing_image_count
+        self.quality_warnings.extend(other.quality_warnings)
 
-    def to_document(self) -> ParsedDocument:
-        return _to_document(self)
+    def to_document(
+        self,
+        ocr_fn: Callable[[bytes, int], str] | None = None,
+    ) -> ParsedDocument:
+        return _apply_ocr_fallback(_to_document(self), ocr_fn)
 
 
 @dataclass
@@ -153,6 +180,7 @@ class _TableCtx:
 
 def _to_document(parsed: _ParsedBlocks) -> ParsedDocument:
     units: list[EvidenceUnit] = []
+    warnings: list[dict[str, Any]] = list(parsed.quality_warnings)
     block_index = 1
     table_index = 1
     saw_structured_diagram = False
@@ -186,6 +214,7 @@ def _to_document(parsed: _ParsedBlocks) -> ParsedDocument:
         if isinstance(block, _DiagramBlock):
             structured = _structured_diagram(
                 block.text,
+                nodes=block.nodes,
                 bboxes=block.bboxes,
                 connectors=block.connectors,
             )
@@ -193,6 +222,7 @@ def _to_document(parsed: _ParsedBlocks) -> ParsedDocument:
             if not source_text:
                 continue
             saw_structured_diagram = True
+            unresolved_connectors = _unresolved_connector_ids(structured)
             units.append(
                 EvidenceUnit(
                     id=f"b{block_index}",
@@ -208,11 +238,25 @@ def _to_document(parsed: _ParsedBlocks) -> ParsedDocument:
                         },
                         "diagram": {
                             "node_count": len(structured["nodes"]),
+                            "connector_count": len(structured["connectors"]),
                             "edge_count": len(structured["edges"]),
                         },
                     },
                 )
             )
+            if unresolved_connectors:
+                warnings.append(
+                    {
+                        "type": "hwp5_diagram_connector_unresolved",
+                        "severity": "medium",
+                        "unit_id": f"b{block_index}",
+                        "connector_ids": unresolved_connectors,
+                        "message": (
+                            "HWP5 drawing connector(s) were preserved, but could not "
+                            "be mapped to diagram edges."
+                        ),
+                    }
+                )
             block_index += 1
             continue
 
@@ -220,6 +264,7 @@ def _to_document(parsed: _ParsedBlocks) -> ParsedDocument:
             continue
 
         if isinstance(block, _ImageBlock):
+            asset_metadata = {"asset_id": block.asset_id, **dict(block.metadata)}
             units.append(
                 EvidenceUnit(
                     id=f"b{block_index}",
@@ -233,7 +278,7 @@ def _to_document(parsed: _ParsedBlocks) -> ParsedDocument:
                             "section_path": [],
                             "display_format": "image",
                         },
-                        "asset": {"asset_id": block.asset_id},
+                        "asset": asset_metadata,
                     },
                 )
             )
@@ -274,16 +319,15 @@ def _to_document(parsed: _ParsedBlocks) -> ParsedDocument:
         block_index += 1
         table_index += 1
 
-    warnings: list[dict[str, Any]] = []
     if saw_structured_diagram:
         warnings.append(
             {
-                "type": "hwp5_drawing_structure_unsupported",
+                "type": "hwp5_drawing_structure_partial",
                 "severity": "medium",
                 "message": (
                     "HWP5 drawing object text and some geometry were extracted as "
-                    "structured diagram evidence, but the drawing structure may still "
-                    "be incomplete."
+                    "structured diagram evidence, but unsupported or undocumented "
+                    "drawing details may still be incomplete."
                 ),
             }
         )
@@ -325,18 +369,21 @@ def _coalesce_drawing_text_blocks(
             continue
 
         cluster_end = index
-        drawing_count = 1
+        drawing_text_count = 1 if _drawing_block_has_text(block) else 0
+        line_count = 0
         short_body_gap = 0
         scan = index + 1
         while scan < len(blocks):
             candidate = blocks[scan]
             if _is_drawing_text_block(candidate):
-                drawing_count += 1
+                if _drawing_block_has_text(candidate):
+                    drawing_text_count += 1
                 cluster_end = scan
                 short_body_gap = 0
                 scan += 1
                 continue
             if isinstance(candidate, _DrawingLineBlock):
+                line_count += 1
                 cluster_end = scan
                 short_body_gap = 0
                 scan += 1
@@ -347,8 +394,9 @@ def _coalesce_drawing_text_blocks(
                 continue
             break
 
-        if drawing_count < 2:
-            result.append(_TextBlock(block.text))
+        if drawing_text_count < 2 and line_count == 0:
+            if isinstance(block, _TextBlock):
+                result.append(_TextBlock(block.text))
             index += 1
             continue
 
@@ -380,6 +428,13 @@ def _coalesce_drawing_text_blocks(
                     for text in (_clean_text(item.text) for item in text_blocks)
                     if text
                 ),
+                nodes=[
+                    _diagram_node_from_text_block(node_index, item)
+                    for node_index, item in enumerate(text_blocks, start=1)
+                    if _clean_text(item.text)
+                    or item.bbox is not None
+                    or item.shape_type not in {"label", ""}
+                ],
                 bboxes=[
                     item.bbox
                     for item in text_blocks
@@ -400,6 +455,10 @@ def _is_drawing_text_block(block: object) -> bool:
     return isinstance(block, _TextBlock) and block.origin == "drawing"
 
 
+def _drawing_block_has_text(block: object) -> bool:
+    return isinstance(block, _TextBlock) and bool(_clean_text(block.text))
+
+
 def _is_short_body_text_block(block: object) -> bool:
     return (
         isinstance(block, _TextBlock)
@@ -411,15 +470,36 @@ def _is_short_body_text_block(block: object) -> bool:
 def _structured_diagram(
     text: str,
     *,
+    nodes: list[dict[str, object]] | None = None,
     bboxes: list[dict[str, int | str] | None] | None = None,
     connectors: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
+    diagram_nodes = (
+        [_normalize_diagram_node(index, node) for index, node in enumerate(nodes, start=1)]
+        if nodes is not None
+        else _diagram_nodes_from_text(text, bboxes=bboxes)
+    )
+    connector_items = connectors or []
+    return {
+        "caption": None,
+        "nodes": diagram_nodes,
+        "edges": _infer_connector_edges(diagram_nodes, connector_items),
+        "connectors": connector_items,
+        "mermaid": None,
+    }
+
+
+def _diagram_nodes_from_text(
+    text: str,
+    *,
+    bboxes: list[dict[str, int | str] | None] | None,
+) -> list[dict[str, object]]:
     labels = [
         line
         for line in (_clean_text(part) for part in text.splitlines())
         if line
     ]
-    nodes: list[dict[str, object]] = [
+    return [
         {
             "id": f"n{index}",
             "shape_type": "label",
@@ -429,28 +509,76 @@ def _structured_diagram(
         }
         for index, label in enumerate(labels, start=1)
     ]
-    connector_items = connectors or []
-    return {
-        "caption": None,
-        "nodes": nodes,
-        "edges": _infer_connector_edges(nodes, connector_items),
-        "connectors": connector_items,
-        "mermaid": None,
+
+
+def _diagram_node_from_text_block(
+    index: int,
+    block: _TextBlock,
+) -> dict[str, object]:
+    metadata: dict[str, object] = {
+        "source": "hwp5_drawing_text" if block.origin == "drawing" else "hwp5_body_text"
     }
+    metadata.update(block.metadata)
+    if block.instance_id is not None:
+        metadata["instance_id"] = block.instance_id
+    if block.ctrl_id is not None:
+        metadata["ctrl_id"] = block.ctrl_id
+    return {
+        "id": f"n{index}",
+        "shape_type": block.shape_type or "label",
+        "text": _clean_text(block.text),
+        "bbox": block.bbox,
+        "metadata": metadata,
+    }
+
+
+def _normalize_diagram_node(
+    index: int,
+    node: dict[str, object],
+) -> dict[str, object]:
+    normalized = dict(node)
+    normalized.setdefault("id", f"n{index}")
+    normalized.setdefault("shape_type", "label")
+    normalized.setdefault("text", "")
+    normalized.setdefault("bbox", None)
+    normalized.setdefault("metadata", {})
+    return normalized
 
 
 def _structured_connector(
     index: int,
     line: _DrawingLineBlock,
 ) -> dict[str, object]:
+    metadata: dict[str, object] = {
+        "source": "hwp5_gso_line",
+    }
+    if line.ctrl_id is not None:
+        metadata["ctrl_id"] = line.ctrl_id
+    if line.instance_id is not None:
+        metadata["instance_id"] = line.instance_id
+    metadata.update(_line_payload_metadata(line.payload))
     return {
         "id": f"c{index}",
-        "type": "line",
-        "bbox": dict(line.bbox),
+        "type": "arrow" if line.arrow else "line",
+        "bbox": dict(line.bbox) if line.bbox is not None else None,
         "points": [dict(point) for point in line.points],
         "arrow": line.arrow,
-        "metadata": {"source": "hwp5_gso_line"},
+        "metadata": metadata,
     }
+
+
+def _line_payload_metadata(payload: bytes | None) -> dict[str, object]:
+    if payload is None:
+        return {}
+    metadata: dict[str, object] = {"payload_bytes": len(payload)}
+    if len(payload) >= 20:
+        metadata["link_type"] = struct.unpack_from("<I", payload, 16)[0]
+    if len(payload) >= 36:
+        metadata["start_subject_id"] = struct.unpack_from("<I", payload, 20)[0]
+        metadata["start_subject_index"] = struct.unpack_from("<I", payload, 24)[0]
+        metadata["end_subject_id"] = struct.unpack_from("<I", payload, 28)[0]
+        metadata["end_subject_index"] = struct.unpack_from("<I", payload, 32)[0]
+    return metadata
 
 
 def _infer_connector_edges(
@@ -462,14 +590,30 @@ def _infer_connector_edges(
         for node in nodes
         if (bbox := _diagram_node_bbox(node)) is not None
     ]
-    if len(bbox_nodes) < 2:
-        return []
-
     edges: list[dict[str, object]] = []
     seen: set[tuple[str, str, str]] = set()
     edge_labels = _diagram_connector_labels(nodes)
     for connector_index, connector in enumerate(connectors):
+        connector_id = str(connector.get("id", ""))
+        subject_edge = _edge_from_connector_subject_ids(
+            connector,
+            nodes,
+            connector_index=connector_index,
+            edge_labels=edge_labels,
+        )
+        if subject_edge is not None:
+            key = (
+                str(subject_edge["from"]),
+                str(subject_edge["to"]),
+                connector_id,
+            )
+            if key not in seen:
+                seen.add(key)
+                edges.append(subject_edge)
+            continue
         points = connector.get("points")
+        if len(bbox_nodes) < 2:
+            continue
         if not isinstance(points, list) or len(points) < 2:
             continue
         start = _diagram_point(points[0])
@@ -480,7 +624,6 @@ def _infer_connector_edges(
         to_id = _nearest_node_id(end, bbox_nodes)
         if from_id is None or to_id is None or from_id == to_id:
             continue
-        connector_id = str(connector.get("id", ""))
         key = (from_id, to_id, connector_id)
         if key in seen:
             continue
@@ -500,6 +643,53 @@ def _infer_connector_edges(
             }
         )
     return edges
+
+
+def _edge_from_connector_subject_ids(
+    connector: dict[str, object],
+    nodes: list[dict[str, object]],
+    *,
+    connector_index: int,
+    edge_labels: list[str],
+) -> dict[str, object] | None:
+    metadata = connector.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    start_subject_id = metadata.get("start_subject_id")
+    end_subject_id = metadata.get("end_subject_id")
+    if start_subject_id in (None, 0) or end_subject_id in (None, 0):
+        return None
+    node_by_instance_id = _nodes_by_instance_id(nodes)
+    from_id = node_by_instance_id.get(str(start_subject_id))
+    to_id = node_by_instance_id.get(str(end_subject_id))
+    if from_id is None or to_id is None or from_id == to_id:
+        return None
+    connector_id = str(connector.get("id", ""))
+    return {
+        "from": from_id,
+        "to": to_id,
+        "type": "arrow" if connector.get("arrow") else "line",
+        "label": (
+            edge_labels[connector_index]
+            if connector_index < len(edge_labels)
+            else ""
+        ),
+        "confidence": "parsed_subject_ids",
+        "connector_id": connector_id,
+    }
+
+
+def _nodes_by_instance_id(nodes: list[dict[str, object]]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for node in nodes:
+        metadata = node.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        instance_id = metadata.get("instance_id")
+        if instance_id in (None, ""):
+            continue
+        result[str(instance_id)] = str(node.get("id", ""))
+    return result
 
 
 def _diagram_connector_labels(nodes: list[dict[str, object]]) -> list[str]:
@@ -629,6 +819,95 @@ def _diagram_edge_source_lines(edges: object) -> list[str]:
     return lines
 
 
+def _unresolved_connector_ids(diagram: dict[str, object]) -> list[str]:
+    connectors = diagram.get("connectors", [])
+    edges = diagram.get("edges", [])
+    if not isinstance(connectors, list) or not isinstance(edges, list):
+        return []
+    resolved = {
+        str(edge.get("connector_id", ""))
+        for edge in edges
+        if isinstance(edge, dict) and edge.get("connector_id")
+    }
+    return [
+        str(connector.get("id", ""))
+        for connector in connectors
+        if isinstance(connector, dict)
+        and connector.get("id")
+        and str(connector.get("id")) not in resolved
+    ]
+
+
+def _apply_ocr_fallback(
+    document: ParsedDocument,
+    ocr_fn: Callable[[bytes, int], str] | None,
+) -> ParsedDocument:
+    if ocr_fn is None or not _should_ocr_hwp5(document):
+        return document
+
+    units = list(document.units)
+    warnings = list(document.quality_warnings)
+    next_index = len(units) + 1
+    for image_index, asset in enumerate(document.assets):
+        if asset.kind != "image":
+            continue
+        try:
+            text = _clean_text(ocr_fn(asset.data, image_index) or "")
+        except Exception as exc:
+            warnings.append(_hwp5_ocr_warning(asset.id, str(exc)))
+            continue
+        if not text:
+            warnings.append(_hwp5_ocr_warning(asset.id, "empty OCR result"))
+            continue
+        units.append(
+            EvidenceUnit(
+                id=f"b{next_index}",
+                type="text",
+                format="plain",
+                source=SourceEvidence(kind="text", text=text),
+                content=text,
+                metadata={
+                    "common": {
+                        "chunk_kind": "ocr",
+                        "section_path": [],
+                        "display_format": "plain",
+                    },
+                    "ocr": {
+                        "source": "hwp5_image",
+                        "asset_id": asset.id,
+                    },
+                },
+            )
+        )
+        next_index += 1
+    return ParsedDocument(
+        units=units,
+        assets=document.assets,
+        quality_warnings=warnings,
+    )
+
+
+def _should_ocr_hwp5(document: ParsedDocument) -> bool:
+    if not document.assets:
+        return False
+    for unit in document.units:
+        if unit.type == "image":
+            continue
+        if unit.source.text.strip():
+            return False
+    return True
+
+
+def _hwp5_ocr_warning(asset_id: str, message: str) -> dict[str, Any]:
+    return {
+        "type": "hwp5_ocr_failed",
+        "severity": "medium",
+        "asset_id": asset_id,
+        "stage": "ocr",
+        "message": message,
+    }
+
+
 def _parse_section(
     data: bytes,
     bin_entries: dict[int, _BinEntry] | None = None,
@@ -646,22 +925,61 @@ def _parse_section(
     gso_bbox: dict[str, int | str] | None = None
     gso_shape_type: str | None = None
     gso_line_payload: bytes | None = None
+    gso_instance_id: int | None = None
+    gso_ctrl_id: str | None = None
 
     def close_gso() -> None:
         nonlocal in_gso, gso_level, gso_text_parts, gso_bbox
-        nonlocal gso_shape_type, gso_line_payload
+        nonlocal gso_shape_type, gso_line_payload, gso_instance_id, gso_ctrl_id
         text = _clean_text(" ".join(gso_text_parts))
-        if text:
-            parsed.blocks.append(_TextBlock(text, origin="drawing", bbox=gso_bbox))
-            parsed.saw_drawing = True
-        elif gso_shape_type == "line" and gso_bbox is not None:
-            parsed.blocks.append(
-                _DrawingLineBlock(
+        if gso_shape_type in {"line", "connector"}:
+            line_block = _DrawingLineBlock(
                     bbox=gso_bbox,
                     points=_line_points_from_bbox(gso_bbox, gso_line_payload),
                     arrow=_line_has_arrow(gso_line_payload),
-                )
+                    ctrl_id=gso_ctrl_id,
+                    instance_id=gso_instance_id,
+                    payload=gso_line_payload,
             )
+            if table_stack and table_stack[-1].in_cell:
+                table_stack[-1].current_cell_children.append(
+                    {
+                        "type": "diagram",
+                        "format": "structured_diagram",
+                        "content": _structured_diagram(
+                            "",
+                            nodes=[],
+                            connectors=[_structured_connector(1, line_block)],
+                        ),
+                    }
+                )
+            else:
+                parsed.blocks.append(line_block)
+            parsed.saw_drawing = True
+        elif text or gso_bbox is not None or gso_shape_type is not None:
+            shape_type = gso_shape_type or ("textbox" if text else "shape")
+            text_block = _TextBlock(
+                text,
+                origin="drawing",
+                bbox=gso_bbox,
+                shape_type=shape_type,
+                instance_id=gso_instance_id,
+                ctrl_id=gso_ctrl_id,
+            )
+            if table_stack and table_stack[-1].in_cell:
+                table_stack[-1].current_cell_children.append(
+                    {
+                        "type": "diagram",
+                        "format": "structured_diagram",
+                        "content": _structured_diagram(
+                            text,
+                            nodes=[_diagram_node_from_text_block(1, text_block)],
+                            connectors=[],
+                        ),
+                    }
+                )
+            else:
+                parsed.blocks.append(text_block)
             parsed.saw_drawing = True
         in_gso = False
         gso_level = -1
@@ -669,6 +987,8 @@ def _parse_section(
         gso_bbox = None
         gso_shape_type = None
         gso_line_payload = None
+        gso_instance_id = None
+        gso_ctrl_id = None
 
     def close_current_cell(ctx: _TableCtx) -> None:
         if not ctx.in_cell:
@@ -724,11 +1044,11 @@ def _parse_section(
             )
 
     for tag_id, level, payload in _iter_records(data):
-        while table_stack and level <= table_stack[-1].ctrl_level:
-            close_top_table()
-
         if in_gso and level <= gso_level and tag_id != _TAG_CTRL_HEADER:
             close_gso()
+
+        while table_stack and level <= table_stack[-1].ctrl_level:
+            close_top_table()
 
         if tag_id == _TAG_CTRL_HEADER:
             ctrl = payload[:4] if len(payload) >= 4 else b""
@@ -741,6 +1061,21 @@ def _parse_section(
                 gso_bbox = _gso_bbox_from_ctrl_header(payload)
                 gso_shape_type = None
                 gso_line_payload = None
+                gso_instance_id = _gso_instance_id(payload)
+                gso_ctrl_id = _ctrl_id_text(ctrl)
+            elif ctrl in _SHAPE_CTRL_TYPES:
+                shape_type = _SHAPE_CTRL_TYPES[ctrl]
+                if in_gso and level <= gso_level:
+                    close_gso()
+                if not in_gso:
+                    in_gso = True
+                    gso_level = level
+                    gso_text_parts = []
+                    gso_line_payload = None
+                gso_bbox = _shape_bbox_from_ctrl_header(payload) or gso_bbox
+                gso_shape_type = shape_type
+                gso_instance_id = _gso_instance_id(payload)
+                gso_ctrl_id = _ctrl_id_text(ctrl)
             elif ctrl == _CTRL_TABLE:
                 table_stack.append(_TableCtx(ctrl_level=level))
             continue
@@ -769,18 +1104,27 @@ def _parse_section(
             elif table_stack and table_stack[-1].in_cell:
                 table_stack[-1].current_cell_children.append(image)
             else:
-                parsed.blocks.append(_ImageBlock(str(image["content"]["asset_id"])))
+                parsed.blocks.append(
+                    _ImageBlock(
+                        str(image["content"]["asset_id"]),
+                        metadata=dict(image.get("metadata", {})),
+                    )
+                )
             in_gso = False
             gso_level = -1
             gso_text_parts = []
             gso_bbox = None
             gso_shape_type = None
             gso_line_payload = None
+            gso_instance_id = None
+            gso_ctrl_id = None
             continue
 
         if in_gso and tag_id == _TAG_SHAPE_COMPONENT:
-            if payload[:4] == b"nil$":
-                gso_shape_type = "line"
+            ctrl = payload[:4] if len(payload) >= 4 else b""
+            if ctrl in _SHAPE_CTRL_TYPES:
+                gso_shape_type = _SHAPE_CTRL_TYPES[ctrl]
+                gso_ctrl_id = _ctrl_id_text(ctrl)
             continue
 
         if in_gso and tag_id == _TAG_SHAPE_COMPONENT_LINE:
@@ -827,10 +1171,10 @@ def _parse_section(
         text = _para_text_from_payload(payload)
         if not text:
             continue
-        if table_stack and table_stack[-1].in_cell:
-            table_stack[-1].current_cell_parts.append(text)
-        elif in_gso:
+        if in_gso:
             gso_text_parts.append(text)
+        elif table_stack and table_stack[-1].in_cell:
+            table_stack[-1].current_cell_parts.append(text)
         else:
             parsed.blocks.append(_TextBlock(text))
 
@@ -879,10 +1223,47 @@ def _gso_bbox_from_ctrl_header(payload: bytes) -> dict[str, int | str] | None:
     }
 
 
+def _shape_bbox_from_ctrl_header(payload: bytes) -> dict[str, int | str] | None:
+    if len(payload) < 20:
+        return None
+    y = struct.unpack_from("<I", payload, 4)[0]
+    x = struct.unpack_from("<I", payload, 8)[0]
+    width = struct.unpack_from("<I", payload, 12)[0]
+    height = struct.unpack_from("<I", payload, 16)[0]
+    if width == 0 and height == 0:
+        return _gso_bbox_from_ctrl_header(payload)
+    return {
+        "x": x,
+        "y": y,
+        "width": width,
+        "height": height,
+        "unit": "hwp",
+    }
+
+
+def _gso_instance_id(payload: bytes) -> int | None:
+    if len(payload) < 36:
+        return None
+    instance_id = struct.unpack_from("<I", payload, 32)[0]
+    return instance_id or None
+
+
+def _ctrl_id_text(ctrl: bytes) -> str:
+    try:
+        return ctrl.decode("ascii", errors="replace")
+    except UnicodeDecodeError:
+        return ctrl.hex()
+
+
 def _line_points_from_bbox(
-    bbox: dict[str, int | str],
+    bbox: dict[str, int | str] | None,
     payload: bytes | None,
 ) -> list[dict[str, int]]:
+    if bbox is None:
+        if payload is not None and len(payload) >= 16:
+            start_x, start_y, end_x, end_y = struct.unpack_from("<4i", payload)
+            return [{"x": start_x, "y": start_y}, {"x": end_x, "y": end_y}]
+        return []
     x = _bbox_int(bbox, "x")
     y = _bbox_int(bbox, "y")
     width = _bbox_int(bbox, "width")
@@ -906,7 +1287,8 @@ def _line_points_from_bbox(
 def _line_has_arrow(payload: bytes | None) -> bool:
     if payload is None or len(payload) < 20:
         return False
-    return struct.unpack_from("<I", payload, 16)[0] != 0
+    link_type = struct.unpack_from("<I", payload, 16)[0]
+    return link_type % 3 != 0
 
 
 def _bbox_int(bbox: dict[str, int | str], key: str) -> int:
@@ -927,8 +1309,10 @@ def _image_child_from_picture(
         return None
     bin_data_id = struct.unpack_from("<H", payload, _PICTURE_BIN_DATA_ID_OFFSET)[0]
     entry = bin_entries.get(bin_data_id)
-    stream_data = bin_streams.get(entry.storage_id) if entry is not None else None
+    stream_id = entry.storage_id if entry is not None else bin_data_id
+    stream_data = bin_streams.get(stream_id)
     if stream_data is None:
+        stream_id = bin_data_id
         stream_data = bin_streams.get(bin_data_id)
     if stream_data is None:
         return None
@@ -944,12 +1328,28 @@ def _image_child_from_picture(
             data=raw_data,
             mime=mime,
             ext=ext,
+            metadata={
+                "source": "hwp5_bindata",
+                "bin_data_id": bin_data_id,
+                "storage_id": entry.storage_id if entry is not None else None,
+                "stream_id": stream_id,
+                "doc_info_ext": entry.ext if entry is not None else None,
+                "stream_ext": ext_from_name,
+            },
         )
     )
     return {
         "type": "image",
         "format": "asset_ref",
         "content": {"asset_id": asset_id, "caption": None},
+        "metadata": {
+            "asset_id": asset_id,
+            "source": "hwp5_bindata",
+            "bin_data_id": bin_data_id,
+            "storage_id": entry.storage_id if entry is not None else None,
+            "stream_id": stream_id,
+            "ext": ext,
+        },
     }
 
 
@@ -1431,8 +1831,14 @@ def _table_source_cells(
             for child in cell["children"]
             if child.get("type", child.get("kind")) == "image"
         ]
+        diagram_texts = [
+            "nested diagram: " + diagram_source
+            for child in cell["children"]
+            if child.get("type", child.get("kind")) == "diagram"
+            and (diagram_source := _inline_diagram_source(child["content"]))
+        ]
         combined = "; ".join(
-            part for part in [value, *child_texts, *image_texts] if part
+            part for part in [value, *child_texts, *image_texts, *diagram_texts] if part
         )
         if combined:
             result.append(f"{header}: {combined}")
@@ -1497,6 +1903,11 @@ def _positive_int(value: object, *, default: int) -> int:
 
 def _inline_table_source(table: dict[str, object]) -> str:
     source = _table_source_text(table)
+    return source.replace("\n", " / ")
+
+
+def _inline_diagram_source(diagram: dict[str, object]) -> str:
+    source = _diagram_source_text(diagram)
     return source.replace("\n", " / ")
 
 

@@ -64,7 +64,7 @@ def test_hwp5_backend_parses_real_fixture_text_and_tables():
     }
 
     warning_types = {warning["type"] for warning in parsed.quality_warnings}
-    assert "hwp5_drawing_structure_unsupported" in warning_types
+    assert "hwp5_drawing_structure_partial" in warning_types
 
 
 def test_hwp5_backend_keeps_source_and_evidence_payloads_separate():
@@ -232,6 +232,47 @@ def _gso_line_with_bbox(
                 struct.pack("<5i", 0, 0, 100, 100, link_type),
             ),
         ]
+    )
+
+
+def _shape_ctrl(
+    level: int,
+    ctrl: bytes,
+    *,
+    instance_id: int,
+    x: int = 0,
+    y: int = 0,
+    width: int = 0,
+    height: int = 0,
+) -> bytes:
+    payload = (
+        ctrl
+        + struct.pack("<4I", y, x, width, height)
+        + b"\x00" * 12
+        + struct.pack("<I", instance_id)
+    )
+    return _make_record(0x47, level, payload)
+
+
+def _connector_line_payload(
+    start_id: int,
+    end_id: int,
+    *,
+    link_type: int = 1,
+    start: tuple[int, int] = (0, 0),
+    end: tuple[int, int] = (0, 0),
+) -> bytes:
+    return struct.pack(
+        "<4i5I",
+        start[0],
+        start[1],
+        end[0],
+        end[1],
+        link_type,
+        start_id,
+        0,
+        end_id,
+        0,
     )
 
 
@@ -793,6 +834,136 @@ def test_hwp5_diagram_labels_inferred_edges_from_step_text():
     assert "n2 -> n3: ①신청" in document.units[0].source.text
 
 
+def test_hwp5_diagram_uses_shape_ctrl_ids_and_connector_subjects():
+    from rag_document_parser.extract.formats.hwp5.backend import _parse_section
+
+    records = b""
+    records += _shape_ctrl(
+        0,
+        b"cer$",
+        instance_id=10,
+        x=100,
+        y=100,
+        width=200,
+        height=100,
+    )
+    records += _make_record(0x43, 1, _u16("접수"))
+    records += _shape_ctrl(
+        0,
+        b"lle$",
+        instance_id=20,
+        x=500,
+        y=100,
+        width=200,
+        height=100,
+    )
+    records += _make_record(0x43, 1, _u16("완료"))
+    records += _shape_ctrl(0, b"loc$", instance_id=30)
+    records += _make_record(
+        0x4E,
+        1,
+        _connector_line_payload(
+            10,
+            20,
+            link_type=1,
+            start=(300, 150),
+            end=(500, 150),
+        ),
+    )
+
+    document = _parse_section(records).to_document()
+    diagram = document.units[0]
+    content = diagram.content
+
+    assert diagram.type == "diagram"
+    assert [node["shape_type"] for node in content["nodes"]] == [
+        "rectangle",
+        "ellipse",
+    ]
+    assert [node["metadata"]["instance_id"] for node in content["nodes"]] == [10, 20]
+    assert content["connectors"][0]["type"] == "arrow"
+    assert content["connectors"][0]["metadata"] == {
+        "source": "hwp5_gso_line",
+        "ctrl_id": "loc$",
+        "instance_id": 30,
+        "payload_bytes": 36,
+        "link_type": 1,
+        "start_subject_id": 10,
+        "start_subject_index": 0,
+        "end_subject_id": 20,
+        "end_subject_index": 0,
+    }
+    assert content["edges"] == [
+        {
+            "from": "n1",
+            "to": "n2",
+            "type": "arrow",
+            "label": "",
+            "confidence": "parsed_subject_ids",
+            "connector_id": "c1",
+        }
+    ]
+
+
+def test_hwp5_diagram_preserves_unresolved_connector_and_warns():
+    from rag_document_parser.extract.formats.hwp5.backend import _parse_section
+
+    records = b""
+    records += _shape_ctrl(0, b"cer$", instance_id=10)
+    records += _make_record(0x43, 1, _u16("접수"))
+    records += _shape_ctrl(0, b"lle$", instance_id=20)
+    records += _make_record(0x43, 1, _u16("완료"))
+    records += _shape_ctrl(0, b"loc$", instance_id=30)
+    records += _make_record(0x4E, 1, _connector_line_payload(10, 999, link_type=1))
+
+    document = _parse_section(records).to_document()
+    content = document.units[0].content
+
+    assert content["edges"] == []
+    assert content["connectors"][0]["metadata"]["end_subject_id"] == 999
+    assert {
+        warning["type"]
+        for warning in document.quality_warnings
+    } >= {
+        "hwp5_diagram_connector_unresolved",
+        "hwp5_drawing_structure_partial",
+    }
+    unresolved = next(
+        warning
+        for warning in document.quality_warnings
+        if warning["type"] == "hwp5_diagram_connector_unresolved"
+    )
+    assert unresolved["connector_ids"] == ["c1"]
+
+
+def test_hwp5_drawing_inside_table_cell_becomes_diagram_child():
+    from rag_document_parser.extract.formats.hwp5.backend import _parse_section
+
+    records = b""
+    records += _table_ctrl(0)
+    records += _make_record(0x48, 1, _list_header_payload(0, 0))
+    records += _shape_ctrl(
+        2,
+        b"cer$",
+        instance_id=1,
+        x=100,
+        y=100,
+        width=200,
+        height=100,
+    )
+    records += _make_record(0x43, 3, _u16("도형 텍스트"))
+    records += _make_record(0x42, 0, b"")
+
+    table = _parse_section(records).to_document().units[0]
+    child = table.content["rows"][0]["cells"][0]["children"][0]
+
+    assert child["type"] == "diagram"
+    assert child["format"] == "structured_diagram"
+    assert child["content"]["nodes"][0]["shape_type"] == "rectangle"
+    assert child["content"]["nodes"][0]["text"] == "도형 텍스트"
+    assert "nested diagram: 도형 텍스트" in table.source.text
+
+
 def test_hwp5_real_fixture_groups_flowchart_labels():
     pytest.importorskip("olefile")
 
@@ -849,10 +1020,110 @@ def test_hwp5_picture_shape_becomes_image_asset_ref():
         "asset_id": "img-0001",
         "caption": None,
     }
+    assert document.units[0].metadata["asset"] == {
+        "asset_id": "img-0001",
+        "source": "hwp5_bindata",
+        "bin_data_id": 1,
+        "storage_id": 7,
+        "stream_id": 7,
+        "ext": "png",
+    }
     assert document.assets[0].id == "img-0001"
     assert document.assets[0].data == PNG_BYTES
     assert document.assets[0].mime == "image/png"
     assert document.assets[0].ext == "png"
+    assert document.assets[0].metadata == {
+        "source": "hwp5_bindata",
+        "bin_data_id": 1,
+        "storage_id": 7,
+        "stream_id": 7,
+        "doc_info_ext": "png",
+        "stream_ext": "png",
+    }
+
+
+def test_hwp5_image_only_document_uses_ocr_fallback():
+    from rag_document_parser.extract.formats.hwp5.backend import _BinEntry, _parse_section
+
+    picture_payload = bytearray(80)
+    struct.pack_into("<H", picture_payload, 71, 1)
+    records = b""
+    records += _make_record(0x47, 0, b" osg" + b"\x00" * 8)
+    records += _make_record(0x55, 1, bytes(picture_payload))
+    records += _make_record(0x42, 0, b"")
+
+    parsed = _parse_section(
+        records,
+        bin_entries={1: _BinEntry(storage_id=7, ext="png")},
+        bin_streams={7: (PNG_BYTES, "png")},
+    )
+    document = parsed.to_document(ocr_fn=lambda image, index: "스캔 OCR 본문")
+
+    assert [unit.type for unit in document.units] == ["image", "text"]
+    assert document.units[1].source.text == "스캔 OCR 본문"
+    assert document.units[1].metadata["common"]["chunk_kind"] == "ocr"
+    assert document.units[1].metadata["ocr"] == {
+        "source": "hwp5_image",
+        "asset_id": "img-0001",
+    }
+    assert document.quality_warnings == []
+
+
+def test_hwp5_ocr_fallback_skips_when_native_text_exists():
+    from rag_document_parser.extract.formats.hwp5.backend import _BinEntry, _parse_section
+
+    calls = []
+    picture_payload = bytearray(80)
+    struct.pack_into("<H", picture_payload, 71, 1)
+    records = b""
+    records += _make_record(0x47, 0, b" osg" + b"\x00" * 8)
+    records += _make_record(0x55, 1, bytes(picture_payload))
+    records += _make_record(0x43, 0, _u16("네이티브 본문"))
+
+    parsed = _parse_section(
+        records,
+        bin_entries={1: _BinEntry(storage_id=7, ext="png")},
+        bin_streams={7: (PNG_BYTES, "png")},
+    )
+    document = parsed.to_document(
+        ocr_fn=lambda image, index: calls.append(index) or "중복 OCR"
+    )
+
+    assert [unit.source.text for unit in document.units] == [
+        "image: img-0001",
+        "네이티브 본문",
+    ]
+    assert calls == []
+
+
+def test_hwp5_ocr_failure_is_reported_as_quality_warning():
+    from rag_document_parser.extract.formats.hwp5.backend import _BinEntry, _parse_section
+
+    picture_payload = bytearray(80)
+    struct.pack_into("<H", picture_payload, 71, 1)
+    records = b""
+    records += _make_record(0x47, 0, b" osg" + b"\x00" * 8)
+    records += _make_record(0x55, 1, bytes(picture_payload))
+
+    parsed = _parse_section(
+        records,
+        bin_entries={1: _BinEntry(storage_id=7, ext="png")},
+        bin_streams={7: (PNG_BYTES, "png")},
+    )
+    document = parsed.to_document(
+        ocr_fn=lambda image, index: (_ for _ in ()).throw(RuntimeError("ocr boom"))
+    )
+
+    assert [unit.type for unit in document.units] == ["image"]
+    assert document.quality_warnings == [
+        {
+            "type": "hwp5_ocr_failed",
+            "severity": "medium",
+            "asset_id": "img-0001",
+            "stage": "ocr",
+            "message": "ocr boom",
+        }
+    ]
 
 
 def test_hwp5_load_bin_data_keeps_raw_image_when_file_is_compressed():

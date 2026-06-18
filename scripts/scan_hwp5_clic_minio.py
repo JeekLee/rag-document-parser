@@ -231,7 +231,7 @@ def _document_summary(
 
 
 def _table_profile(unit: dict[str, Any]) -> dict[str, Any]:
-    content = unit.get("evidence", {}).get("content", {})
+    content = _unit_content(unit)
     columns = content.get("columns", [])
     header_rows = content.get("header_rows", [])
     data_rows = content.get("rows", [])
@@ -280,8 +280,20 @@ def _cell_has_content(cell: dict[str, Any]) -> bool:
     return bool(text or children)
 
 
+def _unit_content(unit: dict[str, Any]) -> dict[str, Any]:
+    content = unit.get("content")
+    if isinstance(content, dict):
+        return content
+    legacy = unit.get("evidence", {})
+    if isinstance(legacy, dict):
+        legacy_content = legacy.get("content")
+        if isinstance(legacy_content, dict):
+            return legacy_content
+    return {}
+
+
 def _diagram_profile(unit: dict[str, Any]) -> dict[str, Any]:
-    content = unit.get("evidence", {}).get("content", {})
+    content = _unit_content(unit)
     nodes = [
         node
         for node in content.get("nodes", [])
