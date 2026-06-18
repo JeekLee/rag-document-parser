@@ -11,6 +11,7 @@ from ..enrichment.llm import LlmConfig, chat_json
 from ..models import Evidence, EvidenceItem, EvidenceUnit, RagChunk, SourceEvidence
 
 PlanFn = Callable[[list[EvidenceUnit], LlmConfig | None, int], Any]
+BoundaryMergeFn = Callable[[RagChunk, RagChunk, LlmConfig | None, int], Any]
 
 
 _PROMPT = """\
@@ -52,6 +53,32 @@ JSON 배열만 출력하세요:
 """
 
 
+_BOUNDARY_PROMPT = """\
+You are a RAG window boundary merge planner.
+Decide whether two adjacent chunks from neighboring EvidenceUnit windows are one continuous semantic unit.
+
+Rules:
+- Return only a JSON object.
+- Use action "merge" only when the right chunk directly continues the same topic, table, section, or Q&A block.
+- Use action "keep" when the chunks are merely related but answer different retrieval questions.
+- Do not invent evidence content. Evidence content will be copied from the existing chunks.
+- Keep merged chunks reasonably close to {max_units} source units when possible.
+
+Boundary payload:
+{boundary}
+
+JSON object only:
+{{
+  "action": "merge",
+  "reason": "short reason",
+  "title": "optional merged title",
+  "summary": "optional merged summary",
+  "keywords": ["optional", "keywords"],
+  "questions": ["optional retrieval question"]
+}}
+"""
+
+
 @dataclass(frozen=True)
 class _WindowResult:
     chunks: list[RagChunk]
@@ -67,12 +94,14 @@ class EvidenceUnitAgenticChunker:
         window_size: int = 40,
         max_concurrency: int = 4,
         plan_fn: PlanFn | None = None,
+        boundary_merge_fn: BoundaryMergeFn | None = None,
     ) -> None:
         self._llm = llm
         self._max_units = max(1, max_units_per_chunk)
         self._window_size = max(1, window_size)
         self._concurrency = max(1, max_concurrency)
         self._plan_fn = plan_fn or self._default_plan
+        self._boundary_merge_fn = boundary_merge_fn
 
     def chunk(self, units: list[EvidenceUnit]) -> list[RagChunk]:
         if not units:
@@ -82,9 +111,7 @@ class EvidenceUnitAgenticChunker:
         with ThreadPoolExecutor(max_workers=self._concurrency) as executor:
             results = list(executor.map(self._chunk_window, windows))
 
-        chunks: list[RagChunk] = []
-        for result in results:
-            chunks.extend(result.chunks)
+        chunks = self._merge_window_boundaries(results)
 
         return [_reindex_chunk(index, chunk) for index, chunk in enumerate(chunks, start=1)]
 
@@ -108,6 +135,58 @@ class EvidenceUnitAgenticChunker:
         if cfg is None:
             return None
         return chat_json(_plan_prompt(window, max_units), cfg)
+
+    def _merge_window_boundaries(self, results: list[_WindowResult]) -> list[RagChunk]:
+        if not results:
+            return []
+        if len(results) == 1 or (self._boundary_merge_fn is None and self._llm is None):
+            return [chunk for result in results for chunk in result.chunks]
+
+        chunks = list(results[0].chunks)
+        previous_result = results[0]
+        for result in results[1:]:
+            next_chunks = list(result.chunks)
+            if (
+                chunks
+                and next_chunks
+                and previous_result.fallback_reason is None
+                and result.fallback_reason is None
+            ):
+                try:
+                    decision = self._plan_boundary_merge(chunks[-1], next_chunks[0])
+                except Exception as exc:
+                    chunks[-1] = _chunk_with_boundary_merge_warning(
+                        chunks[-1],
+                        next_chunks[0],
+                        _fallback_reason(exc),
+                    )
+                    decision = {"action": "keep"}
+                if _boundary_action(decision) == "merge":
+                    chunks[-1] = _merge_adjacent_chunks(
+                        chunks[-1],
+                        next_chunks.pop(0),
+                        decision,
+                        self._max_units,
+                    )
+            chunks.extend(next_chunks)
+            previous_result = result
+        return chunks
+
+    def _plan_boundary_merge(self, left: RagChunk, right: RagChunk) -> Any:
+        if self._boundary_merge_fn is not None:
+            return self._boundary_merge_fn(left, right, self._llm, self._max_units)
+        return self._default_boundary_merge(left, right, self._llm, self._max_units)
+
+    def _default_boundary_merge(
+        self,
+        left: RagChunk,
+        right: RagChunk,
+        cfg: LlmConfig | None,
+        max_units: int,
+    ) -> Any:
+        if cfg is None:
+            return {"action": "keep", "reason": "llm is not configured"}
+        return chat_json(_boundary_prompt(left, right, max_units), cfg)
 
 
 def _windows(units: list[EvidenceUnit], size: int) -> list[list[EvidenceUnit]]:
@@ -194,6 +273,134 @@ def _fallback_reason(exc: Exception) -> str:
     if reason:
         return reason
     return exc.__class__.__name__
+
+
+def _boundary_action(decision: Any) -> str:
+    if not isinstance(decision, dict):
+        return "keep"
+    action = decision.get("action")
+    return action if action in {"merge", "keep"} else "keep"
+
+
+def _merge_adjacent_chunks(
+    left: RagChunk,
+    right: RagChunk,
+    decision: Any,
+    max_units_per_chunk: int,
+) -> RagChunk:
+    decision = decision if isinstance(decision, dict) else {}
+    evidence_items = [*left.evidence.items, *right.evidence.items]
+    source_text = "\n\n".join(
+        text for text in [left.source.text, right.source.text] if text
+    )
+    source_unit_ids = _unique(
+        [
+            *_strings(left.metadata.get("source_unit_ids")),
+            *_strings(right.metadata.get("source_unit_ids")),
+        ]
+    )
+    context_unit_ids = [
+        unit_id
+        for unit_id in _unique(
+            [
+                *_strings(left.metadata.get("context_unit_ids")),
+                *_strings(right.metadata.get("context_unit_ids")),
+            ]
+        )
+        if unit_id not in source_unit_ids
+    ]
+    operations = [
+        *_dicts(left.metadata.get("operations")),
+        *_dicts(right.metadata.get("operations")),
+    ]
+    title = decision.get("title") if isinstance(decision.get("title"), str) else ""
+    summary = decision.get("summary") if isinstance(decision.get("summary"), str) else ""
+    if not summary:
+        summary = _fallback_summary_from_text(source_text)
+
+    keywords = _strings(decision.get("keywords")) or _unique(
+        [*left.keywords, *right.keywords]
+    )
+    question_topic = source_text.strip().replace("\n", " ")[:160] or title or summary
+    questions = _strings(decision.get("questions")) or _unique(
+        [*left.questions, *right.questions]
+    ) or _fallback_questions(question_topic)
+    chunk_type = _chunk_type(evidence_items)
+    metadata = {
+        "source_unit_ids": source_unit_ids,
+        "source_units": _merge_source_units(
+            left.metadata.get("source_units"),
+            right.metadata.get("source_units"),
+        ),
+        "context_unit_ids": context_unit_ids,
+        "operations": operations,
+        "title": title,
+        "common": {
+            "unit_types": _unique([item.type for item in evidence_items]),
+            "display_format": "composite",
+        },
+        "_boundary_merges": [
+            *_dicts(left.metadata.get("_boundary_merges")),
+            *_dicts(right.metadata.get("_boundary_merges")),
+            {
+                "left_source_unit_ids": _strings(left.metadata.get("source_unit_ids")),
+                "right_source_unit_ids": _strings(right.metadata.get("source_unit_ids")),
+                "reason": decision.get("reason") if isinstance(decision.get("reason"), str) else "",
+            },
+        ],
+    }
+    warnings = [
+        *_dicts(left.metadata.get("_warnings")),
+        *_dicts(right.metadata.get("_warnings")),
+    ]
+    if len(source_unit_ids) > max_units_per_chunk:
+        warnings.append(
+            {
+                "type": "agentic_chunk_exceeds_max_units",
+                "source_unit_count": len(source_unit_ids),
+                "max_units_per_chunk": max_units_per_chunk,
+            }
+        )
+    if warnings:
+        metadata["_warnings"] = warnings
+
+    return RagChunk(
+        id=left.id,
+        type=chunk_type,
+        source=SourceEvidence(kind=chunk_type, text=source_text),
+        evidence=Evidence(items=evidence_items),
+        summary=summary,
+        keywords=keywords,
+        questions=questions,
+        metadata=metadata,
+    )
+
+
+def _chunk_with_boundary_merge_warning(
+    left: RagChunk,
+    right: RagChunk,
+    reason: str,
+) -> RagChunk:
+    metadata = dict(left.metadata)
+    warnings = _dicts(metadata.get("_warnings"))
+    warnings.append(
+        {
+            "type": "agentic_boundary_merge_failed",
+            "reason": reason,
+            "right_source_unit_ids": _strings(right.metadata.get("source_unit_ids")),
+        }
+    )
+    metadata["_warnings"] = warnings
+    return RagChunk(
+        id=left.id,
+        type=left.type,
+        source=left.source,
+        evidence=left.evidence,
+        summary=left.summary,
+        keywords=list(left.keywords),
+        questions=list(left.questions),
+        metadata=metadata,
+    )
 
 
 def _validate_unique_unit_ids(units: list[EvidenceUnit]) -> None:
@@ -543,6 +750,12 @@ def _strings(value: Any) -> list[str]:
     return [item for item in value if isinstance(item, str) and item]
 
 
+def _dicts(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
 def _context_unit_ids(
     value: Any,
     by_id: dict[str, EvidenceUnit],
@@ -582,6 +795,18 @@ def _source_units(units: list[EvidenceUnit]) -> list[dict[str, Any]]:
                 "metadata": dict(unit.metadata),
             }
         )
+    return records
+
+
+def _merge_source_units(left: Any, right: Any) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in [*_dicts(left), *_dicts(right)]:
+        unit_id = item.get("id")
+        if not isinstance(unit_id, str) or unit_id in seen:
+            continue
+        seen.add(unit_id)
+        records.append(dict(item))
     return records
 
 
@@ -716,6 +941,39 @@ def _plan_prompt(window: list[EvidenceUnit], max_units: int) -> str:
     ).replace(
         "{units}", json.dumps(payload, ensure_ascii=False, indent=2)
     )
+
+
+def _boundary_prompt(left: RagChunk, right: RagChunk, max_units: int) -> str:
+    payload = {
+        "max_units_per_chunk": max_units,
+        "left_chunk": _boundary_chunk_payload(left),
+        "right_chunk": _boundary_chunk_payload(right),
+    }
+    return _BOUNDARY_PROMPT.replace("{max_units}", str(max_units)).replace(
+        "{boundary}",
+        json.dumps(payload, ensure_ascii=False),
+    )
+
+
+def _boundary_chunk_payload(chunk: RagChunk) -> dict[str, Any]:
+    return {
+        "id": chunk.id,
+        "type": chunk.type,
+        "source_unit_ids": _strings(chunk.metadata.get("source_unit_ids")),
+        "context_unit_ids": _strings(chunk.metadata.get("context_unit_ids")),
+        "summary": chunk.summary,
+        "keywords": list(chunk.keywords),
+        "questions": list(chunk.questions),
+        "source_preview": _truncate(chunk.source.text, 900),
+        "evidence_items": [
+            {
+                "type": item.type,
+                "format": item.format,
+                "source_unit_ids": list(item.source_unit_ids),
+            }
+            for item in chunk.evidence.items
+        ],
+    }
 
 
 def _example_row_range(unit: EvidenceUnit) -> list[int] | None:
