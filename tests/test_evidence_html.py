@@ -907,6 +907,156 @@ def test_render_rag_chunks_html_shows_final_evidence_and_chunk_fields():
     assert "agentic_chunk_exceeds_max_units" in html
 
 
+def test_render_rag_chunks_html_renders_wide_tables_as_evidence():
+    from rag_document_parser.renderer.rag_chunk_render import render_rag_chunks_html
+
+    columns = [{"id": f"c{index}", "text": ""} for index in range(1, 51)]
+    wide_table = {
+        "columns": columns,
+        "header_rows": [
+            {
+                "index": 1,
+                "cells": [
+                    {
+                        "column_id": "c1",
+                        "text": "청구사항",
+                        "rowspan": 1,
+                        "colspan": 50,
+                        "children": [],
+                    }
+                ],
+            }
+        ],
+        "rows": [
+            {
+                "index": 1,
+                "cells": [
+                    {
+                        "column_id": "c1",
+                        "text": "합계",
+                        "rowspan": 1,
+                        "colspan": 10,
+                        "children": [],
+                    },
+                    {
+                        "column_id": "c11",
+                        "text": "1000",
+                        "rowspan": 1,
+                        "colspan": 10,
+                        "children": [],
+                    },
+                ],
+            }
+        ],
+    }
+    html = render_rag_chunks_html(
+        [
+            {
+                "id": "chunk-wide",
+                "source": {"kind": "chunk", "text": "wide source"},
+                "evidence": {
+                    "items": [
+                        {
+                            "type": "table",
+                            "format": "structured_table",
+                            "content": wide_table,
+                            "source_unit_ids": ["b1"],
+                            "metadata": {},
+                        }
+                    ]
+                },
+                "metadata": {"source_unit_ids": ["b1"]},
+            }
+        ]
+    )
+
+    assert "청구사항" in html
+    assert "합계" in html
+    assert "1000" in html
+    assert "layout table" not in html
+    assert "text extraction preview" not in html
+    assert "rag-line-table" not in html
+    assert '<table class="evidence-table"' in html
+    assert '<th colspan="50">청구사항</th>' in html
+    assert '<td colspan="10">합계</td>' in html
+
+
+def test_render_rag_chunks_html_clips_overlapping_rowspans():
+    from rag_document_parser.renderer.rag_chunk_render import render_rag_chunks_html
+
+    table = {
+        "columns": [{"id": f"c{index}", "text": ""} for index in range(1, 5)],
+        "header_rows": [],
+        "rows": [
+            {
+                "index": 1,
+                "cells": [
+                    {
+                        "column_id": "c1",
+                        "text": "이전 병합",
+                        "rowspan": 2,
+                        "colspan": 2,
+                        "children": [],
+                    },
+                    {
+                        "column_id": "c3",
+                        "text": "우측",
+                        "rowspan": 1,
+                        "colspan": 2,
+                        "children": [],
+                    },
+                ],
+            },
+            {
+                "index": 2,
+                "cells": [
+                    {
+                        "column_id": "c1",
+                        "text": "다음 명시 셀",
+                        "rowspan": 1,
+                        "colspan": 2,
+                        "children": [],
+                    },
+                    {
+                        "column_id": "c3",
+                        "text": "다음 우측",
+                        "rowspan": 1,
+                        "colspan": 2,
+                        "children": [],
+                    },
+                ],
+            },
+        ],
+    }
+    html = render_rag_chunks_html(
+        [
+            {
+                "id": "chunk-overlap",
+                "source": {"kind": "chunk", "text": "overlap source"},
+                "evidence": {
+                    "items": [
+                        {
+                            "type": "table",
+                            "format": "structured_table",
+                            "content": table,
+                            "source_unit_ids": ["b717"],
+                            "metadata": {},
+                        }
+                    ]
+                },
+                "metadata": {"source_unit_ids": ["b717"]},
+            }
+        ]
+    )
+
+    assert 'rowspan="2"' not in html
+    assert "<tr><td colspan=\"2\">이전 병합</td><td colspan=\"2\">우측</td></tr>" in html
+    assert (
+        "<tr><td colspan=\"2\">다음 명시 셀</td><td colspan=\"2\">다음 우측</td></tr>"
+        in html
+    )
+
+
 def test_render_rag_chunks_html_accepts_model_objects_and_escapes_diagnostics():
     from rag_document_parser import Evidence, EvidenceItem, RagChunk, SourceEvidence
     from rag_document_parser.renderer.rag_chunk_render import render_rag_chunks_html
