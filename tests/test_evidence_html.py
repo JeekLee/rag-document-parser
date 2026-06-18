@@ -221,7 +221,7 @@ def test_render_legacy_evidence_when_unit_only_has_top_level_type():
     assert "None" not in html
 
 
-def test_render_evidence_image_uses_public_url_while_showing_source_uri():
+def test_render_evidence_image_uses_public_url_for_rendering_and_link_text():
     from rag_document_parser.evidence_html import render_evidence_units_html
 
     units = [
@@ -260,7 +260,8 @@ def test_render_evidence_image_uses_public_url_while_showing_source_uri():
         'src="http://203.0.113.10:10190/rag-assets/doc/assets/img-0001.png"'
         in html
     )
-    assert "s3://rag-assets/doc/assets/img-0001.png" in html
+    assert ">http://203.0.113.10:10190/rag-assets/doc/assets/img-0001.png</a>" in html
+    assert "s3://rag-assets/doc/assets/img-0001.png" not in html
 
 
 def test_render_structured_table_uses_header_rows_with_spans():

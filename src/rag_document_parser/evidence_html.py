@@ -405,14 +405,14 @@ def _render_asset_ref(
             "<figure>"
             f'<img src="{escape(render_url)}" alt="{escape(caption)}" />'
             f"<figcaption>{escape(caption)}</figcaption>"
-            f'<a href="{escape(render_url)}">{escape(uri or render_url)}</a>'
+            f'<a href="{escape(render_url)}">{escape(render_url)}</a>'
             f'<p class="asset-meta">{escape(meta)}</p>'
             "</figure>"
         )
     return (
         '<div class="asset-ref">'
         f"<strong>{escape(caption)}</strong>"
-        f'<a href="{escape(render_url)}">{escape(uri or render_url)}</a>'
+        f'<a href="{escape(render_url)}">{escape(render_url)}</a>'
         f'<p class="asset-meta">{escape(meta)}</p>'
         "</div>"
     )

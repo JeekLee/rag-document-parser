@@ -9,6 +9,11 @@ from typing import Any
 
 from ....models import EvidenceUnit, PendingAsset, SourceEvidence
 from ...backend import ParsedDocument
+from ...table_source import (
+    build_column_source_labels as _build_column_source_labels,
+    common_semantic_header_prefix as _common_semantic_header_prefix,
+    is_semantic_column_label as _is_semantic_column_label,
+)
 
 _TAG_BIN_DATA = 0x12
 _TAG_PARA_TEXT = 0x43
@@ -498,10 +503,7 @@ def _table_has_content(rows: list[list[_Cell]]) -> bool:
 def _table_source_text(table: dict[str, object]) -> str:
     columns = table["columns"]
     rows = table["rows"]
-    column_text = {
-        str(column["id"]): _column_source_label(column)
-        for column in columns
-    }
+    column_text = _build_column_source_labels(columns, _column_source_label, rows)
     lines: list[str] = []
     if columns:
         lines.append(f"table: {len(columns)} columns")
@@ -585,24 +587,6 @@ def _cell_source_label(
 def _column_source_label(column: dict[str, object]) -> str:
     text = str(column["text"]).strip()
     return text or _column_coordinate_label(str(column["id"]))
-
-
-def _is_semantic_column_label(label: str) -> bool:
-    return bool(label) and not label.startswith("col ")
-
-
-def _common_semantic_header_prefix(labels: list[str]) -> str | None:
-    if not labels or not all(_is_semantic_column_label(label) for label in labels):
-        return None
-    split_labels = [label.split(" / ") for label in labels]
-    prefix: list[str] = []
-    for parts in zip(*split_labels):
-        if len(set(parts)) != 1:
-            break
-        prefix.append(parts[0])
-    if not prefix:
-        return None
-    return " / ".join(prefix)
 
 
 def _cell_coordinate_label(column_id: str, colspan: int) -> str:
