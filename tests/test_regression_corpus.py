@@ -19,7 +19,7 @@ def _manifest_documents() -> list[dict[str, object]]:
 def test_regression_corpus_files_are_pinned_by_hash_and_size():
     documents = _manifest_documents()
 
-    assert len(documents) == 8
+    assert len(documents) == 9
     assert {str(document["id"]) for document in documents} == {
         "hwpx-ultrasound-qa",
         "pdf-ultrasound-qa",
@@ -27,6 +27,7 @@ def test_regression_corpus_files_are_pinned_by_hash_and_size():
         "pdf-benefit-criteria-2024-278",
         "hwpx-cesarean-copay-qa",
         "pdf-cesarean-copay-qa",
+        "hwpx-medical-fee-criteria-2022-139",
         "hwp-medical-aid-overpayment-deduction",
         "pdf-medical-aid-overpayment-deduction",
     }
@@ -44,6 +45,9 @@ def test_regression_corpus_is_paired_with_pdf_counterparts():
     documents = _manifest_documents()
     pairs: dict[str, set[str]] = {}
     for document in documents:
+        expected = document.get("expected", {})
+        if isinstance(expected, dict) and expected.get("standalone_regression"):
+            continue
         pair_id = str(document["pair_id"])
         pairs.setdefault(pair_id, set()).add(str(document["format"]))
 
@@ -147,6 +151,71 @@ def test_supported_hwpx_corpus_preserves_grouped_header_context():
         "EDI코드",
     ]
     assert len(code_table["header_rows"]) == 1
+
+
+def test_supported_hwpx_corpus_uses_common_evidence_contracts():
+    from rag_document_parser import HwpxBackend
+
+    documents = [
+        document
+        for document in _manifest_documents()
+        if document["format"] == "hwpx" and document["parser_supported"]
+    ]
+    assert documents
+
+    for document in documents:
+        path = CORPUS_DIR / str(document["path"])
+        expected = document["expected"]
+        parsed = HwpxBackend().parse(path.read_bytes(), ".hwpx")
+
+        assert isinstance(parsed.quality_warnings, list), document["id"]
+        for warning in parsed.quality_warnings:
+            assert warning["type"].startswith("hwpx_"), document["id"]
+            assert warning["message"], document["id"]
+
+        for unit in parsed.units:
+            assert unit.type in {"text", "table", "image", "diagram"}, document["id"]
+            assert "common" in unit.metadata, document["id"]
+            if unit.type != "diagram":
+                continue
+            assert unit.format == "structured_diagram", document["id"]
+            assert set(unit.content) >= {
+                "nodes",
+                "edges",
+                "connectors",
+                "mermaid",
+            }, document["id"]
+            assert unit.content["mermaid"] is None, document["id"]
+        assert (
+            sum(1 for unit in parsed.units if unit.type == "diagram")
+            >= expected.get("min_diagram_units", 0)
+        ), document["id"]
+
+
+def test_hwpx_minio_diagram_fixture_extracts_real_file_diagram_evidence():
+    from rag_document_parser import HwpxBackend
+
+    path = CORPUS_DIR / "hwpx" / "medical-fee-criteria-2022-139.hwpx"
+    assert path.is_file()
+
+    parsed = HwpxBackend().parse(path.read_bytes(), ".hwpx")
+    diagram = next(
+        unit
+        for unit in parsed.units
+        if unit.type == "diagram" and "조산아 및 저체중 출생아 등록절차" in unit.source.text
+    )
+
+    assert diagram.format == "structured_diagram"
+    assert diagram.source.kind == "diagram"
+    node_texts = [str(node["text"]) for node in diagram.content["nodes"]]
+    assert "조산아 및 저체중 출생아 등록절차" in node_texts
+    assert "의료기관" in node_texts
+    assert "건강보험심사평가원" in node_texts
+    assert "시군구 (읍면동 포함)" in node_texts
+    assert "지원대상자" in node_texts
+    assert len(diagram.content["edges"]) >= 4
+    assert all(edge["confidence"] == "inferred_sequence" for edge in diagram.content["edges"])
+    assert diagram.content["mermaid"] is None
 
 
 def test_supported_hwp5_and_pdf_corpus_extracts_evidence_units():
