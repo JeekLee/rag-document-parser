@@ -56,6 +56,77 @@ def _table_unit(id: str):
     )
 
 
+def _table_unit_with_text(id: str, text: str):
+    from rag_document_parser import EvidenceUnit, SourceEvidence
+
+    table = {
+        "caption": None,
+        "columns": [
+            {"id": "c1", "text": "내용"},
+        ],
+        "rows": [
+            {
+                "index": 1,
+                "cells": [
+                    {"column_id": "c1", "text": text, "rowspan": 1, "colspan": 1, "children": []},
+                ],
+            }
+        ],
+    }
+    return EvidenceUnit(
+        id=id,
+        type="table",
+        format="structured_table",
+        source=SourceEvidence(kind="table", text=f"table: 1 columns\nrow 1: 내용={text}"),
+        content=table,
+        metadata={
+            "common": {"chunk_kind": "table", "section_path": [], "display_format": "structured_table"},
+            "table": {"table_id": id, "headers": ["내용"], "row_count": 1},
+        },
+    )
+
+
+def _table_unit_with_rows(id: str, rows: list[str]):
+    from rag_document_parser import EvidenceUnit, SourceEvidence
+
+    table_rows = [
+        {
+            "index": index,
+            "cells": [
+                {"column_id": "c1", "text": f"항목 {index}", "rowspan": 1, "colspan": 1, "children": []},
+                {"column_id": "c2", "text": text, "rowspan": 1, "colspan": 1, "children": []},
+            ],
+        }
+        for index, text in enumerate(rows, start=1)
+    ]
+    table = {
+        "caption": "상세 내역",
+        "columns": [
+            {"id": "c1", "text": "항목"},
+            {"id": "c2", "text": "설명"},
+        ],
+        "rows": table_rows,
+    }
+    source_rows = [
+        f"row {row['index']}: 항목=항목 {row['index']}; 설명={row['cells'][1]['text']}"
+        for row in table_rows
+    ]
+    return EvidenceUnit(
+        id=id,
+        type="table",
+        format="structured_table",
+        source=SourceEvidence(
+            kind="table",
+            text="table: 2 columns\ncolumns: 항목 | 설명\n" + "\n".join(source_rows),
+        ),
+        content=table,
+        metadata={
+            "common": {"chunk_kind": "table", "section_path": ["제1장"], "display_format": "structured_table"},
+            "table": {"table_id": id, "headers": ["항목", "설명"], "row_count": len(rows)},
+        },
+    )
+
+
 def _single_row_table_unit(id: str):
     from rag_document_parser import EvidenceUnit, SourceEvidence
 
@@ -242,6 +313,51 @@ def test_agentic_chunker_keeps_window_boundary_chunks_when_planner_says_keep():
     assert [chunk.metadata["source_unit_ids"] for chunk in chunks] == [["b1", "b2"], ["b3", "b4"]]
     assert "_boundary_merges" not in chunks[0].metadata
     assert "_boundary_merges" not in chunks[1].metadata
+
+
+def test_agentic_chunker_keeps_window_boundary_merge_when_it_exceeds_max_units():
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    units = [
+        _text_unit("b1", "첫 번째 설명"),
+        _text_unit("b2", "두 번째 설명"),
+        _text_unit("b3", "세 번째 설명"),
+        _text_unit("b4", "네 번째 설명"),
+    ]
+
+    def plan_fn(window, cfg, max_units):
+        unit_ids = [unit.id for unit in window]
+        return [
+            {
+                "unit_ids": unit_ids,
+                "operations": [
+                    {"unit_id": unit_id, "action": "include"}
+                    for unit_id in unit_ids
+                ],
+                "summary": f"{unit_ids[0]} window",
+            }
+        ]
+
+    def boundary_merge_fn(left, right, cfg, max_units):
+        return {"action": "merge", "reason": "같은 의미 단위다."}
+
+    chunks = EvidenceUnitAgenticChunker(
+        llm=None,
+        plan_fn=plan_fn,
+        boundary_merge_fn=boundary_merge_fn,
+        window_size=2,
+        max_units_per_chunk=3,
+    ).chunk(units)
+
+    assert [chunk.metadata["source_unit_ids"] for chunk in chunks] == [["b1", "b2"], ["b3", "b4"]]
+    assert chunks[0].metadata["_warnings"] == [
+        {
+            "type": "agentic_boundary_merge_exceeds_max_units",
+            "reason": "boundary merge would exceed max_units_per_chunk: 4 > 3",
+            "right_source_unit_ids": ["b3", "b4"],
+        }
+    ]
+    assert "_boundary_merges" not in chunks[0].metadata
 
 
 def test_agentic_chunker_keeps_boundary_chunks_when_boundary_planner_fails():
@@ -770,6 +886,210 @@ def test_agentic_chunker_records_warning_when_plan_exceeds_max_unit_hint():
             "max_units_per_chunk": 2,
         }
     ]
+
+
+def test_agentic_chunker_moves_trailing_heading_unit_to_next_chunk():
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    units = [
+        _text_unit("b1", "이전 절 본문"),
+        _text_unit("b2", "6. 새 절 제목"),
+        _text_unit("b3", "새 절 본문"),
+    ]
+
+    def plan_fn(window, cfg, max_units):
+        return [
+            {
+                "unit_ids": ["b1", "b2"],
+                "operations": [
+                    {"unit_id": "b1", "action": "include"},
+                    {"unit_id": "b2", "action": "include"},
+                ],
+                "summary": "이전 절과 다음 제목을 잘못 함께 제공한다.",
+            },
+            {
+                "unit_ids": ["b3"],
+                "operations": [{"unit_id": "b3", "action": "include"}],
+                "summary": "새 절 본문",
+            },
+        ]
+
+    chunks = EvidenceUnitAgenticChunker(llm=None, plan_fn=plan_fn).chunk(units)
+
+    assert [chunk.metadata["source_unit_ids"] for chunk in chunks] == [["b1"], ["b2", "b3"]]
+    assert [item.source_unit_ids for item in chunks[1].evidence.items] == [["b2"], ["b3"]]
+    assert chunks[0].metadata["_warnings"] == [
+        {"type": "agentic_trailing_heading_removed", "source_unit_ids": ["b2"]}
+    ]
+    assert chunks[1].metadata["_warnings"] == [
+        {"type": "agentic_heading_moved_forward", "source_unit_ids": ["b2"]}
+    ]
+
+
+def test_agentic_chunker_splits_chunk_on_independent_form_boundaries():
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    units = [
+        _text_unit("b1", "[별지 제1호 서식]"),
+        _table_unit_with_text("b2", "[별지 제1호 서식] 신청서 A"),
+        _table_unit_with_text("b3", "(뒷면) 신청서 A 작성방법"),
+        _table_unit_with_text("b4", "(별지 제2호 서식) 신청서 B"),
+        _table_unit_with_text("b5", "(뒤쪽) 신청서 B 작성방법"),
+        _table_unit_with_text("b6", "[별지3호] 신청서 C"),
+    ]
+
+    def plan_fn(window, cfg, max_units):
+        unit_ids = [unit.id for unit in window]
+        return [
+            {
+                "unit_ids": unit_ids,
+                "operations": [
+                    {"unit_id": unit_id, "action": "include"}
+                    for unit_id in unit_ids
+                ],
+                "summary": "여러 독립 서식을 하나로 잘못 제공한다.",
+            }
+        ]
+
+    chunks = EvidenceUnitAgenticChunker(
+        llm=None,
+        plan_fn=plan_fn,
+        max_units_per_chunk=3,
+    ).chunk(units)
+
+    assert [chunk.metadata["source_unit_ids"] for chunk in chunks] == [
+        ["b1", "b2", "b3"],
+        ["b4", "b5"],
+        ["b6"],
+    ]
+    assert chunks[0].metadata["_warnings"] == [
+        {
+            "type": "agentic_independent_form_boundary_split",
+            "original_source_unit_count": 6,
+            "split_group_index": 1,
+            "split_group_count": 3,
+        }
+    ]
+    assert chunks[1].metadata["_warnings"] == [
+        {
+            "type": "agentic_independent_form_boundary_split",
+            "original_source_unit_count": 6,
+            "split_group_index": 2,
+            "split_group_count": 3,
+        }
+    ]
+    assert chunks[2].metadata["_warnings"] == [
+        {
+            "type": "agentic_independent_form_boundary_split",
+            "original_source_unit_count": 6,
+            "split_group_index": 3,
+            "split_group_count": 3,
+        }
+    ]
+
+
+def test_agentic_chunker_splits_after_form_paper_size_trailer():
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    units = [
+        _table_unit_with_text("b1", "왕진신청서 절차"),
+        _text_unit("b2", "(190mmm × 268mmm 신문용지 50g/m)"),
+        _table_unit_with_text("b3", "의료급여비용심사결과통보서"),
+    ]
+
+    def plan_fn(window, cfg, max_units):
+        unit_ids = [unit.id for unit in window]
+        return [
+            {
+                "unit_ids": unit_ids,
+                "operations": [
+                    {"unit_id": unit_id, "action": "include"}
+                    for unit_id in unit_ids
+                ],
+                "summary": "두 서식을 하나로 잘못 제공한다.",
+            }
+        ]
+
+    chunks = EvidenceUnitAgenticChunker(llm=None, plan_fn=plan_fn).chunk(units)
+
+    assert [chunk.metadata["source_unit_ids"] for chunk in chunks] == [["b1", "b2"], ["b3"]]
+    assert chunks[0].metadata["_warnings"] == [
+        {
+            "type": "agentic_independent_form_boundary_split",
+            "original_source_unit_count": 3,
+            "split_group_index": 1,
+            "split_group_count": 2,
+        }
+    ]
+
+
+def test_agentic_chunker_splits_large_table_by_token_budget_rows():
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    repeated = " ".join(["의료급여", "심사결정", "본인부담금", "청구금액"] * 5)
+    unit = _table_unit_with_rows("tbl1", [f"{repeated} {index}" for index in range(1, 7)])
+
+    def plan_fn(window, cfg, max_units):
+        return [
+            {
+                "unit_ids": ["tbl1"],
+                "operations": [{"unit_id": "tbl1", "action": "include"}],
+                "summary": "상세 내역 전체",
+            }
+        ]
+
+    chunks = EvidenceUnitAgenticChunker(
+        llm=None,
+        plan_fn=plan_fn,
+        target_tokens_per_chunk=45,
+        max_tokens_per_chunk=90,
+    ).chunk([unit])
+
+    assert len(chunks) > 1
+    assert all(chunk.metadata["source_unit_ids"] == ["tbl1"] for chunk in chunks)
+    assert [chunk.metadata["operations"][0]["action"] for chunk in chunks] == ["include_rows"] * len(chunks)
+    assert chunks[0].metadata["operations"][0]["row_ranges"][0][0] == 1
+    assert chunks[-1].metadata["operations"][0]["row_ranges"][-1][-1] == 6
+    assert "context:" in chunks[0].source.text
+    assert "columns:" in chunks[0].source.text
+    assert "row 1:" in chunks[0].source.text
+    assert "row 6:" in chunks[-1].source.text
+    assert chunks[0].metadata["_warnings"][0]["type"] == "agentic_table_split_by_token_budget"
+
+
+def test_agentic_chunker_repeats_heading_context_when_splitting_large_table():
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    repeated = " ".join(["급여비용", "심사결과", "증감내역"] * 6)
+    units = [
+        _text_unit("h1", "[별지 제1호 서식]"),
+        _table_unit_with_rows("tbl1", [f"{repeated} {index}" for index in range(1, 5)]),
+    ]
+
+    def plan_fn(window, cfg, max_units):
+        return [
+            {
+                "unit_ids": ["h1", "tbl1"],
+                "operations": [
+                    {"unit_id": "h1", "action": "include"},
+                    {"unit_id": "tbl1", "action": "include"},
+                ],
+                "summary": "제목과 표 전체",
+            }
+        ]
+
+    chunks = EvidenceUnitAgenticChunker(
+        llm=None,
+        plan_fn=plan_fn,
+        target_tokens_per_chunk=45,
+        max_tokens_per_chunk=90,
+    ).chunk(units)
+
+    assert len(chunks) > 1
+    assert chunks[0].metadata["source_unit_ids"] == ["h1", "tbl1"]
+    assert all("[별지 제1호 서식]" in chunk.source.text for chunk in chunks)
+    assert chunks[0].evidence.items[0].source_unit_ids == ["h1"]
+    assert chunks[1].evidence.items[0].source_unit_ids == ["tbl1"]
 
 
 def test_agentic_chunker_uses_row_subset_text_for_planned_fallback_fields():
