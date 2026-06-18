@@ -973,8 +973,11 @@ def _structured_table(
     actual_column_count = _table_column_count(normalized, column_count)
     header_count = _header_row_count(normalized)
     header_raw_rows = normalized[:header_count]
+    visible_header_raw_rows = [
+        row for row in header_raw_rows if not _row_is_blank(row)
+    ]
     data_raw_rows = normalized[header_count:]
-    columns = _table_columns(actual_column_count, header_raw_rows)
+    columns = _table_columns(actual_column_count, visible_header_raw_rows)
     omit_blank_cells = _should_omit_blank_cells(
         normalized,
         column_count=actual_column_count,
@@ -988,7 +991,7 @@ def _structured_table(
                 omit_blank_cells=omit_blank_cells,
             ),
         }
-        for index, raw_cells in enumerate(header_raw_rows, start=1)
+        for index, raw_cells in enumerate(visible_header_raw_rows, start=1)
     ]
 
     data_rows: list[dict[str, object]] = []
@@ -1122,7 +1125,7 @@ def _should_omit_blank_cells(
     column_count: int,
 ) -> bool:
     cells = [cell for row in rows for cell in row]
-    if column_count < 20 or len(cells) < 50:
+    if column_count < 10 or len(cells) < 50:
         return False
     blank_count = _omitted_blank_cell_count(rows, omit=True)
     return blank_count / len(cells) >= 0.5
@@ -1226,15 +1229,25 @@ def _header_row_count(rows: list[list[_Cell]]) -> int:
         return 1
     count = 1
     header_row_end = _row_span_end(first_row)
+    last_header_row = first_row
     while count < len(rows):
         row = rows[count]
+        if _row_is_blank(row):
+            if (
+                count + 1 < len(rows)
+                and _row_refines_previous_header(rows[count + 1], last_header_row)
+            ):
+                count += 1
+                continue
+            break
         row_start = _row_start(row)
         if (
             row_start < header_row_end
-            or _row_refines_previous_header(row, rows[count - 1])
+            or _row_refines_previous_header(row, last_header_row)
         ):
             count += 1
             header_row_end = max(header_row_end, _row_span_end(row))
+            last_header_row = row
             continue
         break
     return count

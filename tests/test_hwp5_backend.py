@@ -363,6 +363,86 @@ def test_hwp5_table_source_repeats_rowspan_context_on_continuation_rows():
     assert "row 2: 구분: 진료; 내용: 기준 B" in table.source.text
 
 
+def test_hwp5_table_header_detection_crosses_blank_spacer_row():
+    from rag_document_parser.extract.formats.hwp5.backend import _parse_section
+
+    records = b""
+    records += _table_ctrl(0)
+    records += _make_record(0x4D, 1, _table_body_payload(5, 5))
+    records += _make_record(0x48, 1, _list_header_payload_with_span(0, 0, colspan=5))
+    records += _make_record(0x43, 2, _u16("【병동별 근무간호사 현황】"))
+    records += _make_record(0x48, 1, _list_header_payload_with_span(1, 0, colspan=5))
+    records += _make_record(0x48, 1, _list_header_payload_with_span(2, 0, rowspan=2))
+    records += _make_record(0x43, 2, _u16("구분"))
+    records += _make_record(0x48, 1, _list_header_payload_with_span(2, 1, rowspan=2))
+    records += _make_record(0x43, 2, _u16("직종"))
+    records += _make_record(0x48, 1, _list_header_payload_with_span(2, 2, colspan=3))
+    records += _make_record(0x43, 2, _u16("산정여부"))
+    records += _make_record(0x48, 1, _list_header_payload(3, 2))
+    records += _make_record(0x43, 2, _u16("1월"))
+    records += _make_record(0x48, 1, _list_header_payload(3, 3))
+    records += _make_record(0x43, 2, _u16("2월"))
+    records += _make_record(0x48, 1, _list_header_payload(3, 4))
+    records += _make_record(0x43, 2, _u16("3월"))
+    records += _make_record(0x48, 1, _list_header_payload(4, 0))
+    records += _make_record(0x43, 2, _u16("001병동"))
+    records += _make_record(0x48, 1, _list_header_payload(4, 1))
+    records += _make_record(0x43, 2, _u16("간호사"))
+    records += _make_record(0x48, 1, _list_header_payload(4, 2))
+    records += _make_record(0x43, 2, _u16("Y"))
+    records += _make_record(0x48, 1, _list_header_payload(4, 3))
+    records += _make_record(0x43, 2, _u16("N"))
+    records += _make_record(0x48, 1, _list_header_payload(4, 4))
+    records += _make_record(0x43, 2, _u16("Y"))
+    records += _make_record(0x42, 0, b"")
+
+    table = _parse_section(records).to_document().units[0]
+    content = table.evidence.content
+
+    assert len(content["header_rows"]) == 3
+    assert len(content["rows"]) == 1
+    assert [column["text"] for column in content["columns"]] == [
+        "【병동별 근무간호사 현황】 / 구분",
+        "【병동별 근무간호사 현황】 / 직종",
+        "【병동별 근무간호사 현황】 / 산정여부 / 1월",
+        "【병동별 근무간호사 현황】 / 산정여부 / 2월",
+        "【병동별 근무간호사 현황】 / 산정여부 / 3월",
+    ]
+    assert "row 1: 【병동별 근무간호사 현황】 / 구분: 001병동" in table.source.text
+    assert "row 2: 구분:" not in table.source.text
+
+
+def test_hwp5_sparse_mid_width_table_omits_blank_evidence_cells():
+    from rag_document_parser.extract.formats.hwp5.backend import _Cell, _structured_table
+
+    rows: list[list[_Cell]] = [
+        [
+            _Cell(text=f"c{column}", row_addr=0, col_addr=column - 1)
+            for column in range(1, 11)
+        ]
+    ]
+    for row_addr in range(1, 6):
+        rows.append(
+            [
+                _Cell(
+                    text=(
+                        f"r{row_addr}c{column}"
+                        if column in {1, 2}
+                        else ""
+                    ),
+                    row_addr=row_addr,
+                    col_addr=column - 1,
+                )
+                for column in range(1, 11)
+            ]
+        )
+
+    table = _structured_table(rows, row_count=6, column_count=10)
+
+    assert table["compact"]["omitted_blank_cells"] == 40
+    assert [len(row["cells"]) for row in table["rows"]] == [2, 2, 2, 2, 2]
+
+
 def test_hwp5_table_ignores_list_headers_outside_declared_dimensions():
     from rag_document_parser.extract.formats.hwp5.backend import _parse_section
 
