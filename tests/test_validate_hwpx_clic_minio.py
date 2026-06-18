@@ -7,7 +7,7 @@ from pathlib import Path
 
 def test_upload_assets_adds_public_url_when_public_endpoint_is_configured(monkeypatch):
     from rag_document_parser.backends import ParsedDocument, PendingAsset
-    from rag_document_parser.models import Evidence, EvidenceUnit, SourceEvidence
+    from rag_document_parser.models import EvidenceUnit, SourceEvidence
     from rag_document_parser.storage import S3Config
 
     validate_hwpx_clic_minio = _load_validation_script()
@@ -32,12 +32,9 @@ def test_upload_assets_adds_public_url_when_public_endpoint_is_configured(monkey
                 EvidenceUnit(
                     id="u1",
                     type="image",
+                    format="asset_ref",
                     source=SourceEvidence(kind="image", text="image: img-0001"),
-                    evidence=Evidence(
-                        kind="image",
-                        format="asset_ref",
-                        content={"asset_id": "img-0001"},
-                    ),
+                    content={"asset_id": "img-0001"},
                 )
             ],
             assets=[

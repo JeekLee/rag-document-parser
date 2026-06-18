@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .chunk import EvidenceUnitAgenticChunker
 from .enrichment.llm import LlmConfig
 from .extract.backend import DocumentBackend, ParsedDocument
 from .extract.formats.hwp5 import Hwp5Backend
@@ -9,6 +10,7 @@ from .extract.formats.pdf import PdfBackend, PdfOcrConfig
 from .models import (
     DocumentAsset,
     Evidence,
+    EvidenceItem,
     EvidenceUnit,
     PendingAsset,
     ParseResult,
@@ -23,7 +25,9 @@ __all__ = [
     "DocumentBackend",
     "DocumentAsset",
     "Evidence",
+    "EvidenceItem",
     "EvidenceUnit",
+    "EvidenceUnitAgenticChunker",
     "Hwp5Backend",
     "HwpxBackend",
     "LlmConfig",

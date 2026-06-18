@@ -162,9 +162,9 @@ def test_pdf_backend_extracts_evidence_units_from_text_tables_images_and_ocr(
     text_unit = parsed.units[0]
     assert text_unit.source.kind == "text"
     assert text_unit.source.text == "요양급여 안내"
-    assert text_unit.evidence.kind == "text"
-    assert text_unit.evidence.format == "plain"
-    assert text_unit.evidence.content == "요양급여 안내"
+    assert text_unit.type == "text"
+    assert text_unit.format == "plain"
+    assert text_unit.content == "요양급여 안내"
     assert text_unit.metadata["common"] == {
         "chunk_kind": "text",
         "section_path": [],
@@ -173,22 +173,22 @@ def test_pdf_backend_extracts_evidence_units_from_text_tables_images_and_ocr(
 
     table = parsed.units[1]
     assert table.source.kind == "table"
-    assert table.evidence.kind == "table"
-    assert table.evidence.format == "structured_table"
-    assert table.evidence.content["columns"] == [
+    assert table.type == "table"
+    assert table.format == "structured_table"
+    assert table.content["columns"] == [
         {"id": "c1", "text": "구분"},
         {"id": "c2", "text": "세부"},
     ]
-    assert table.evidence.content["rows"][0]["cells"][0] == {
+    assert table.content["rows"][0]["cells"][0] == {
         "column_id": "c1",
         "text": "본인부담",
         "rowspan": 1,
         "colspan": 1,
         "children": [],
     }
-    detail_cell = table.evidence.content["rows"][0]["cells"][1]
+    detail_cell = table.content["rows"][0]["cells"][1]
     assert detail_cell["text"] == "기재형식 예시"
-    assert detail_cell["children"][0]["kind"] == "table"
+    assert detail_cell["children"][0]["type"] == "table"
     assert detail_cell["children"][0]["format"] == "structured_table"
     assert detail_cell["children"][0]["content"]["columns"] == [
         {"id": "c1", "text": "항목"},
@@ -209,9 +209,9 @@ def test_pdf_backend_extracts_evidence_units_from_text_tables_images_and_ocr(
 
     image = parsed.units[2]
     assert image.source.kind == "image"
-    assert image.evidence.kind == "image"
-    assert image.evidence.format == "asset_ref"
-    assert image.evidence.content == {"asset_id": "img-0001", "caption": None}
+    assert image.type == "image"
+    assert image.format == "asset_ref"
+    assert image.content == {"asset_id": "img-0001", "caption": None}
     assert parsed.assets[0].id == "img-0001"
     assert parsed.assets[0].data == PNG_BYTES
     assert parsed.assets[0].mime == "image/png"
@@ -219,7 +219,8 @@ def test_pdf_backend_extracts_evidence_units_from_text_tables_images_and_ocr(
 
     ocr_unit = parsed.units[3]
     assert ocr_unit.source.text == "스캔 OCR 본문"
-    assert ocr_unit.evidence.content == "스캔 OCR 본문"
+    assert ocr_unit.format == "plain"
+    assert ocr_unit.content == "스캔 OCR 본문"
     assert parsed.quality_warnings == []
 
 
@@ -273,7 +274,7 @@ def test_pdf_backend_merges_nested_table_continuations(monkeypatch):
 
     parsed = PdfBackend().parse(b"%PDF-1.4 fake", ".pdf")
 
-    child_tables = parsed.units[0].evidence.content["rows"][0]["cells"][1]["children"]
+    child_tables = parsed.units[0].content["rows"][0]["cells"][1]["children"]
     assert len(child_tables) == 1
     child = child_tables[0]["content"]
     assert child["columns"] == [
@@ -372,7 +373,7 @@ def test_pdf_backend_combines_grouped_header_rows(monkeypatch):
     parsed = PdfBackend().parse(b"%PDF-1.4 fake", ".pdf")
 
     table = parsed.units[0]
-    assert table.evidence.content["columns"] == [
+    assert table.content["columns"] == [
         {"id": "c1", "text": "현행 / 항목"},
         {"id": "c2", "text": "현행 / 제목"},
         {"id": "c3", "text": "현행 / 세부인정사항"},
@@ -381,7 +382,7 @@ def test_pdf_backend_combines_grouped_header_rows(monkeypatch):
         {"id": "c6", "text": "개정 / 세부인정사항"},
         {"id": "c7", "text": "비고"},
     ]
-    assert len(table.evidence.content["header_rows"]) == 2
+    assert len(table.content["header_rows"]) == 2
     assert table.metadata["table"]["headers"] == [
         "현행 / 항목",
         "현행 / 제목",
@@ -436,7 +437,7 @@ def test_pdf_backend_restores_pdf_header_cell_spans_from_missing_slots(monkeypat
 
     parsed = PdfBackend().parse(b"%PDF-1.4 fake", ".pdf")
 
-    content = parsed.units[0].evidence.content
+    content = parsed.units[0].content
     assert [column["text"] for column in content["columns"]] == [
         "본인부담률 인하 관련 / 질의",
         "본인부담률 인하 관련 / 답변",
@@ -495,7 +496,7 @@ def test_pdf_backend_restores_pdf_body_rowspans_from_missing_slots(monkeypatch):
 
     parsed = PdfBackend().parse(b"%PDF-1.4 fake", ".pdf")
 
-    rows = parsed.units[0].evidence.content["rows"]
+    rows = parsed.units[0].content["rows"]
     assert [
         (cell["column_id"], cell["text"], cell["rowspan"], cell["colspan"])
         for cell in rows[0]["cells"]
@@ -616,7 +617,7 @@ def test_pdf_backend_combines_single_group_header_rows(monkeypatch):
 
     parsed = PdfBackend().parse(b"%PDF-1.4 fake", ".pdf")
 
-    content = parsed.units[0].evidence.content
+    content = parsed.units[0].content
     assert [column["text"] for column in content["columns"]] == [
         "진료내역 / 줄번호",
         "진료내역 / 항",
@@ -694,7 +695,7 @@ def test_pdf_backend_merges_wrapped_table_rows(monkeypatch):
 
     parsed = PdfBackend().parse(b"%PDF-1.4 fake", ".pdf")
 
-    rows = parsed.units[0].evidence.content["rows"]
+    rows = parsed.units[0].content["rows"]
     assert len(rows) == 1
     assert rows[0]["index"] == 1
     assert rows[0]["cells"][1]["text"] == "장기입원\n경우의 범주"
@@ -746,7 +747,7 @@ def test_pdf_backend_keeps_bullet_subrows_separate(monkeypatch):
 
     parsed = PdfBackend().parse(b"%PDF-1.4 fake", ".pdf")
 
-    rows = parsed.units[0].evidence.content["rows"]
+    rows = parsed.units[0].content["rows"]
     assert len(rows) == 2
     assert rows[1]["cells"][2]["text"] == "- 별도 청구 기준"
 
@@ -788,7 +789,7 @@ def test_pdf_backend_keeps_table_of_contents_rows_separate(monkeypatch):
 
     parsed = PdfBackend().parse(b"%PDF-1.4 fake", ".pdf")
 
-    rows = parsed.units[0].evidence.content["rows"]
+    rows = parsed.units[0].content["rows"]
     assert len(rows) == 2
     assert [row["cells"][1]["text"] for row in rows] == [
         "일반사항",
@@ -845,7 +846,7 @@ def test_pdf_backend_restores_table_of_contents_numbers(monkeypatch):
 
     parsed = PdfBackend().parse(b"%PDF-1.4 fake", ".pdf")
 
-    rows = parsed.units[0].evidence.content["rows"]
+    rows = parsed.units[0].content["rows"]
     assert [cell["text"] for cell in rows[0]["cells"]] == ["1", "일반사항", "1"]
     assert [cell["text"] for cell in rows[1]["cells"]] == [
         "2",
@@ -1198,14 +1199,14 @@ def test_pdf_backend_promotes_revision_history_text_to_table(monkeypatch):
     assert parsed.units[1].source.text == "2024. 2."
     table = parsed.units[2]
     assert table.metadata["table"]["row_count"] == 2
-    assert table.evidence.content["columns"] == [
+    assert table.content["columns"] == [
         {"id": "c1", "text": "개정일"},
         {"id": "c2", "text": "고시"},
         {"id": "c3", "text": "시행일"},
         {"id": "c4", "text": "관련 근거"},
     ]
-    assert table.evidence.content["rows"][0]["cells"][1]["text"] == "고시 제2016-149호"
-    assert table.evidence.content["rows"][1]["cells"][3]["text"] == "<상복부 Q&A>"
+    assert table.content["rows"][0]["cells"][1]["text"] == "고시 제2016-149호"
+    assert table.content["rows"][1]["cells"][3]["text"] == "<상복부 Q&A>"
     assert parsed.units[3].source.text == "※ 이 자료는 2016년부터 현재까지 합본한 것입니다."
     assert parsed.units[4].source.text == "* 난임치료 시술 관련 초음파 검사는 별도 참고"
 

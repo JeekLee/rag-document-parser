@@ -47,9 +47,9 @@ def test_hwp5_backend_parses_real_fixture_text_and_tables():
     assert len(tables) >= 2
     first_table = tables[0]
     assert first_table.source.kind == "table"
-    assert first_table.evidence.kind == "table"
-    assert first_table.evidence.format == "structured_table"
-    assert first_table.evidence.content["columns"] == [
+    assert first_table.type == "table"
+    assert first_table.format == "structured_table"
+    assert first_table.content["columns"] == [
         {"id": "c1", "text": "수급권자"},
         {"id": "c2", "text": "주민번호"},
         {"id": "c3", "text": "진료일자"},
@@ -75,14 +75,14 @@ def test_hwp5_backend_keeps_source_and_evidence_payloads_separate():
 
     text_unit = next(unit for unit in parsed.units if unit.type == "text")
     assert text_unit.source.kind == "text"
-    assert text_unit.evidence.kind == "text"
-    assert text_unit.evidence.format == "plain"
-    assert text_unit.source.text == text_unit.evidence.content
+    assert text_unit.type == "text"
+    assert text_unit.format == "plain"
+    assert text_unit.source.text == text_unit.content
 
     table_unit = next(unit for unit in parsed.units if unit.type == "table")
     assert isinstance(table_unit.source.text, str)
-    assert isinstance(table_unit.evidence.content, dict)
-    assert table_unit.source.text != table_unit.evidence.content
+    assert isinstance(table_unit.content, dict)
+    assert table_unit.source.text != table_unit.content
 
 
 def test_hwp5_table_source_disambiguates_duplicate_header_labels():
@@ -205,10 +205,10 @@ def test_hwp5_nested_table_is_structured_child_not_flattened_text():
     parsed = _parse_section(records)
     document = parsed.to_document()
     table = document.units[0]
-    detail_cell = table.evidence.content["rows"][0]["cells"][1]
+    detail_cell = table.content["rows"][0]["cells"][1]
 
     assert detail_cell["text"] == "상세"
-    assert detail_cell["children"][0]["kind"] == "table"
+    assert detail_cell["children"][0]["type"] == "table"
     assert detail_cell["children"][0]["format"] == "structured_table"
     assert detail_cell["children"][0]["content"]["columns"] == [
         {"id": "c1", "text": "항목"},
@@ -235,12 +235,12 @@ def test_hwp5_table_preserves_column_addresses_with_blank_gaps():
 
     table = _parse_section(records).to_document().units[0]
 
-    assert table.evidence.content["columns"] == [
+    assert table.content["columns"] == [
         {"id": "c1", "text": "A"},
         {"id": "c2", "text": ""},
         {"id": "c3", "text": "C"},
     ]
-    assert [cell["text"] for cell in table.evidence.content["rows"][0]["cells"]] == [
+    assert [cell["text"] for cell in table.content["rows"][0]["cells"]] == [
         "x",
         "",
         "z",
@@ -266,7 +266,8 @@ def test_hwp5_picture_shape_becomes_image_asset_ref():
     document = parsed.to_document()
 
     assert [unit.type for unit in document.units] == ["image"]
-    assert document.units[0].evidence.content == {
+    assert document.units[0].format == "asset_ref"
+    assert document.units[0].content == {
         "asset_id": "img-0001",
         "caption": None,
     }

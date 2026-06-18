@@ -107,7 +107,7 @@ def test_supported_hwpx_corpus_preserves_grouped_header_context():
         ".hwpx",
     )
     benefit_table = [unit for unit in benefit.units if unit.type == "table"][2]
-    assert [column["text"] for column in benefit_table.evidence.content["columns"]] == [
+    assert [column["text"] for column in benefit_table.content["columns"]] == [
         "현   행 / 항목",
         "현   행 / 제목",
         "현   행 / 세부인정사항",
@@ -126,7 +126,7 @@ def test_supported_hwpx_corpus_preserves_grouped_header_context():
         ".hwpx",
     )
     cesarean_table = [unit for unit in cesarean.units if unit.type == "table"][0]
-    assert [column["text"] for column in cesarean_table.evidence.content["columns"]] == [
+    assert [column["text"] for column in cesarean_table.content["columns"]] == [
         "연번",
         "본인부담률 인하(5%) 관련 / 질의",
         "본인부담률 인하(5%) 관련 / 답변",
@@ -140,9 +140,7 @@ def test_supported_hwpx_corpus_preserves_grouped_header_context():
         for unit in ultrasound.units
         if unit.type == "table" and "1 기존 90번" in unit.source.text
     )
-    code_table = upper_abdomen.evidence.content["rows"][0]["cells"][2]["children"][0][
-        "content"
-    ]
+    code_table = upper_abdomen.content["rows"][0]["cells"][2]["children"][0]["content"]
     assert [column["text"] for column in code_table["columns"]] == [
         "구분",
         "구분",
@@ -190,12 +188,12 @@ def test_supported_hwp5_and_pdf_corpus_extracts_evidence_units():
 
         for unit in parsed.units:
             assert unit.source.text, document["id"]
-            assert unit.evidence.kind == unit.type, document["id"]
+            assert unit.type in {"text", "table", "image"}, document["id"]
             assert "common" in unit.metadata, document["id"]
         for unit in table_units:
             assert unit.source.text.startswith("table: "), document["id"]
-            assert unit.evidence.format == "structured_table", document["id"]
-            assert isinstance(unit.evidence.content, dict), document["id"]
+            assert unit.format == "structured_table", document["id"]
+            assert isinstance(unit.content, dict), document["id"]
 
 
 def test_pdf_corpus_preserves_grouped_headers_and_reduces_fragmentation():
@@ -211,14 +209,14 @@ def test_pdf_corpus_preserves_grouped_headers_and_reduces_fragmentation():
     benefit_tables = [unit for unit in benefit.units if unit.type == "table"]
     assert len(benefit.units) == 14
     assert len(benefit_tables) <= 4
-    assert [len(unit.evidence.content["rows"]) for unit in benefit_tables] == [1, 1, 4]
+    assert [len(unit.content["rows"]) for unit in benefit_tables] == [1, 1, 4]
     assert all(
         column["text"].strip()
         for unit in benefit_tables
-        for column in unit.evidence.content["columns"]
+        for column in unit.content["columns"]
     )
     assert any(
-        [column["text"] for column in unit.evidence.content["columns"]]
+        [column["text"] for column in unit.content["columns"]]
         == [
             "현행 / 항목",
             "현행 / 제목",
@@ -230,7 +228,7 @@ def test_pdf_corpus_preserves_grouped_headers_and_reduces_fragmentation():
         ]
         for unit in benefit_tables
     )
-    grouped_table = benefit_tables[2].evidence.content
+    grouped_table = benefit_tables[2].content
     assert [
         (cell["text"], cell["rowspan"], cell["colspan"])
         for cell in grouped_table["header_rows"][0]["cells"]
@@ -255,10 +253,10 @@ def test_pdf_corpus_preserves_grouped_headers_and_reduces_fragmentation():
     )
     disease_table = next(
         child["content"]
-        for row in benefit_tables[1].evidence.content["rows"]
+        for row in benefit_tables[1].content["rows"]
         for cell in row["cells"]
         for child in cell["children"]
-        if child["kind"] == "table"
+        if child.get("type", child.get("kind")) == "table"
     )
     assert [column["text"] for column in disease_table["columns"]] == [
         "질병코드 / A04.7",
@@ -277,11 +275,11 @@ def test_pdf_corpus_preserves_grouped_headers_and_reduces_fragmentation():
     cesarean_tables = [unit for unit in cesarean.units if unit.type == "table"]
     assert len(cesarean.units) == 11
     assert len(cesarean_tables) == 2
-    assert [len(unit.evidence.content["rows"]) for unit in cesarean_tables] == [2, 9]
-    assert all(unit.evidence.content["rows"] for unit in cesarean_tables)
+    assert [len(unit.content["rows"]) for unit in cesarean_tables] == [2, 9]
+    assert all(unit.content["rows"] for unit in cesarean_tables)
     assert [
         (cell["text"], cell["rowspan"], cell["colspan"])
-        for cell in cesarean_tables[0].evidence.content["header_rows"][0]["cells"]
+        for cell in cesarean_tables[0].content["header_rows"][0]["cells"]
     ] == [
         ("연번", 2, 1),
         ("본인부담률 인하(5%) 관련", 1, 2),
@@ -289,10 +287,10 @@ def test_pdf_corpus_preserves_grouped_headers_and_reduces_fragmentation():
     ]
     assert [
         (cell["column_id"], cell["rowspan"], cell["colspan"])
-        for cell in cesarean_tables[0].evidence.content["rows"][0]["cells"]
+        for cell in cesarean_tables[0].content["rows"][0]["cells"]
     ][:2] == [("c1", 2, 1), ("c2", 2, 1)]
     assert all(
-        [column["text"] for column in unit.evidence.content["columns"]]
+        [column["text"] for column in unit.content["columns"]]
         == [
             "연번",
             "본인부담률 인하(5%) 관련 / 질의",
@@ -328,7 +326,7 @@ def test_pdf_ultrasound_promotes_revision_history_text_to_table():
     assert parsed.units[1].source.text == "2024. 2."
     revision_table = tables[0]
     assert revision_table.metadata["table"]["row_count"] == 14
-    assert [column["text"] for column in revision_table.evidence.content["columns"]] == [
+    assert [column["text"] for column in revision_table.content["columns"]] == [
         "개정일",
         "고시",
         "시행일",
@@ -338,7 +336,7 @@ def test_pdf_ultrasound_promotes_revision_history_text_to_table():
     assert "<하복부, 비뇨기 초음파 검사 급여기준 개선 관련 Q&A>" in (
         revision_table.source.text
     )
-    toc_table = tables[1].evidence.content
+    toc_table = tables[1].content
     assert [cell["text"] for cell in toc_table["rows"][0]["cells"]] == [
         "1",
         "일반사항",
@@ -354,7 +352,7 @@ def test_pdf_ultrasound_promotes_revision_history_text_to_table():
         for unit in parsed.units
         if unit.type == "table" and "1 기존 90번" in unit.source.text
     )
-    code_table = upper_abdomen.evidence.content["rows"][0]["cells"][2]["children"][0][
+    code_table = upper_abdomen.content["rows"][0]["cells"][2]["children"][0][
         "content"
     ]
     assert [column["text"] for column in code_table["columns"]] == [

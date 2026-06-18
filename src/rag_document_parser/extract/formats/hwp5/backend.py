@@ -7,7 +7,7 @@ import zlib
 from dataclasses import dataclass, field
 from typing import Any
 
-from ....models import Evidence, EvidenceUnit, PendingAsset, SourceEvidence
+from ....models import EvidenceUnit, PendingAsset, SourceEvidence
 from ...backend import ParsedDocument
 from ...table_source import (
     build_column_source_labels as _build_column_source_labels,
@@ -131,8 +131,9 @@ def _to_document(parsed: _ParsedBlocks) -> ParsedDocument:
                 EvidenceUnit(
                     id=f"b{block_index}",
                     type="text",
+                    format="plain",
                     source=SourceEvidence(kind="text", text=text),
-                    evidence=Evidence(kind="text", format="plain", content=text),
+                    content=text,
                     metadata={
                         "common": {
                             "chunk_kind": "text",
@@ -150,12 +151,9 @@ def _to_document(parsed: _ParsedBlocks) -> ParsedDocument:
                 EvidenceUnit(
                     id=f"b{block_index}",
                     type="image",
+                    format="asset_ref",
                     source=SourceEvidence(kind="image", text=f"image: {block.asset_id}"),
-                    evidence=Evidence(
-                        kind="image",
-                        format="asset_ref",
-                        content={"asset_id": block.asset_id, "caption": None},
-                    ),
+                    content={"asset_id": block.asset_id, "caption": None},
                     metadata={
                         "common": {
                             "chunk_kind": "image",
@@ -177,12 +175,9 @@ def _to_document(parsed: _ParsedBlocks) -> ParsedDocument:
             EvidenceUnit(
                 id=f"b{block_index}",
                 type="table",
+                format="structured_table",
                 source=SourceEvidence(kind="table", text=_table_source_text(structured)),
-                evidence=Evidence(
-                    kind="table",
-                    format="structured_table",
-                    content=structured,
-                ),
+                content=structured,
                 metadata={
                     "common": {
                         "chunk_kind": "table",
@@ -288,7 +283,7 @@ def _parse_section(
         if _table_has_content(ctx.rows):
             table_stack[-1].current_cell_children.append(
                 {
-                    "kind": "table",
+                    "type": "table",
                     "format": "structured_table",
                     "content": _structured_table(ctx.rows),
                 }
@@ -402,7 +397,7 @@ def _image_child_from_picture(
         )
     )
     return {
-        "kind": "image",
+        "type": "image",
         "format": "asset_ref",
         "content": {"asset_id": asset_id, "caption": None},
     }
@@ -548,12 +543,12 @@ def _table_source_cells(
         child_texts = [
             "nested table: " + _inline_table_source(child["content"])
             for child in cell["children"]
-            if child.get("kind") == "table"
+            if child.get("type", child.get("kind")) == "table"
         ]
         image_texts = [
             f"image: {child['content']['asset_id']}"
             for child in cell["children"]
-            if child.get("kind") == "image"
+            if child.get("type", child.get("kind")) == "image"
         ]
         combined = "; ".join(
             part for part in [value, *child_texts, *image_texts] if part

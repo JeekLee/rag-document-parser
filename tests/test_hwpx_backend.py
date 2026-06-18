@@ -112,23 +112,24 @@ def test_hwpx_backend_parses_text_table_nested_table_and_image_asset():
 
     assert [unit.type for unit in parsed.units] == ["text", "table", "image"]
     assert parsed.units[0].source.text == "요양급여 기준 안내"
-    assert parsed.units[0].evidence.content == "요양급여 기준 안내"
+    assert parsed.units[0].format == "plain"
+    assert parsed.units[0].content == "요양급여 기준 안내"
 
     table = parsed.units[1]
-    assert table.evidence.format == "structured_table"
-    assert table.evidence.content["columns"] == [
+    assert table.format == "structured_table"
+    assert table.content["columns"] == [
         {"id": "c1", "text": "구분"},
         {"id": "c2", "text": "세부"},
     ]
-    assert table.evidence.content["rows"][0]["cells"][0] == {
+    assert table.content["rows"][0]["cells"][0] == {
         "column_id": "c1",
         "text": "본인부담",
         "rowspan": 1,
         "colspan": 1,
         "children": [],
     }
-    nested_child = table.evidence.content["rows"][0]["cells"][1]["children"][0]
-    assert nested_child["kind"] == "table"
+    nested_child = table.content["rows"][0]["cells"][1]["children"][0]
+    assert nested_child["type"] == "table"
     assert nested_child["format"] == "structured_table"
     assert nested_child["content"]["columns"] == [
         {"id": "c1", "text": "항목"},
@@ -144,8 +145,8 @@ def test_hwpx_backend_parses_text_table_nested_table_and_image_asset():
 
     image = parsed.units[2]
     assert image.source.kind == "image"
-    assert image.evidence.format == "asset_ref"
-    assert image.evidence.content == {"asset_id": "img-0001", "caption": None}
+    assert image.format == "asset_ref"
+    assert image.content == {"asset_id": "img-0001", "caption": None}
     assert parsed.assets[0].id == "img-0001"
     assert parsed.assets[0].data == PNG_BYTES
     assert parsed.assets[0].mime == "image/png"
@@ -186,7 +187,7 @@ def test_parser_registers_hwpx_backend_and_uploads_hwpx_images(monkeypatch):
     assert result.assets[0].uri == (
         f"s3://rag-assets/documents/{document_hash}/assets/img-0001.png"
     )
-    assert result.units[0].evidence.content["uri"] == result.assets[0].uri
+    assert result.units[0].content["uri"] == result.assets[0].uri
     assert not hasattr(result.units[0], "summary")
 
 
@@ -206,9 +207,9 @@ def test_hwpx_table_cell_image_is_preserved_as_nested_asset_ref():
     parsed = HwpxBackend().parse(_make_hwpx(xml, image_bytes=PNG_BYTES), ".hwpx")
 
     table_unit = parsed.units[0]
-    image_child = table_unit.evidence.content["rows"][0]["cells"][1]["children"][0]
+    image_child = table_unit.content["rows"][0]["cells"][1]["children"][0]
     assert image_child == {
-        "kind": "image",
+        "type": "image",
         "format": "asset_ref",
         "content": {"asset_id": "img-0001", "caption": None},
     }
@@ -250,11 +251,76 @@ def test_nested_asset_refs_are_uploaded_and_resolved_in_table_evidence(monkeypat
             "image/png",
         )
     ]
-    image_child = result.units[0].evidence.content["rows"][0]["cells"][1]["children"][0]
+    image_child = result.units[0].content["rows"][0]["cells"][1]["children"][0]
     assert image_child["content"]["uri"] == (
         f"s3://rag-assets/documents/{document_hash}/assets/img-0001.png"
     )
     assert image_child["content"]["sha256"] == hashlib.sha256(PNG_BYTES).hexdigest()
+
+
+def test_legacy_nested_kind_asset_ref_is_resolved_and_canonicalized():
+    from rag_document_parser.extract.assets import resolve_units
+    from rag_document_parser.models import DocumentAsset, EvidenceUnit, SourceEvidence
+
+    unit = EvidenceUnit(
+        id="b1",
+        type="table",
+        format="structured_table",
+        source=SourceEvidence(kind="table", text="table with legacy image"),
+        content={
+            "caption": None,
+            "columns": [{"id": "c1", "text": "이미지"}],
+            "rows": [
+                {
+                    "index": 1,
+                    "cells": [
+                        {
+                            "column_id": "c1",
+                            "text": "",
+                            "rowspan": 1,
+                            "colspan": 1,
+                            "children": [
+                                {
+                                    "kind": "image",
+                                    "format": "asset_ref",
+                                    "content": {
+                                        "asset_id": "img-0001",
+                                        "caption": "legacy nested",
+                                    },
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+    asset = DocumentAsset(
+        id="img-0001",
+        kind="image",
+        uri="s3://rag-assets/documents/doc-sha/assets/img-0001.png",
+        mime="image/png",
+        ext="png",
+        sha256=hashlib.sha256(PNG_BYTES).hexdigest(),
+        bytes=len(PNG_BYTES),
+    )
+
+    resolved = resolve_units([unit], [asset])
+
+    image_child = resolved[0].content["rows"][0]["cells"][0]["children"][0]
+    assert image_child == {
+        "type": "image",
+        "format": "asset_ref",
+        "content": {
+            "asset_id": "img-0001",
+            "caption": "legacy nested",
+            "uri": "s3://rag-assets/documents/doc-sha/assets/img-0001.png",
+            "mime": "image/png",
+            "ext": "png",
+            "sha256": hashlib.sha256(PNG_BYTES).hexdigest(),
+            "bytes": len(PNG_BYTES),
+        },
+    }
 
 
 def test_hwpx_table_first_row_with_image_is_not_lost_as_header():
@@ -272,7 +338,7 @@ def test_hwpx_table_first_row_with_image_is_not_lost_as_header():
 
     parsed = HwpxBackend().parse(_make_hwpx(xml, image_bytes=PNG_BYTES), ".hwpx")
 
-    table_content = parsed.units[0].evidence.content
+    table_content = parsed.units[0].content
     assert table_content["columns"] == [
         {"id": "c1", "text": ""},
         {"id": "c2", "text": ""},
@@ -315,7 +381,7 @@ def test_hwpx_table_uses_cell_addresses_and_spans_for_grid_width():
 
     parsed = HwpxBackend().parse(_make_hwpx(xml), ".hwpx")
 
-    content = parsed.units[0].evidence.content
+    content = parsed.units[0].content
     assert len(content["columns"]) == 6
     assert [column["text"] for column in content["columns"]] == [
         "",
@@ -356,7 +422,8 @@ def test_hwpx_single_cell_text_table_is_emitted_as_text_unit():
 
     assert [unit.type for unit in parsed.units] == ["text"]
     assert parsed.units[0].source.text == "목  차"
-    assert parsed.units[0].evidence.content == "목  차"
+    assert parsed.units[0].format == "plain"
+    assert parsed.units[0].content == "목  차"
 
 
 def test_hwpx_table_keeps_header_rows_covered_by_rowspan_out_of_body():
@@ -385,7 +452,7 @@ def test_hwpx_table_keeps_header_rows_covered_by_rowspan_out_of_body():
 
     parsed = HwpxBackend().parse(_make_hwpx(xml), ".hwpx")
 
-    content = parsed.units[0].evidence.content
+    content = parsed.units[0].content
     assert len(content["header_rows"]) == 2
     assert len(content["rows"]) == 1
     assert content["header_rows"][1]["cells"][0]["text"] == "영상"
@@ -432,7 +499,7 @@ def test_hwpx_table_propagates_colspan_header_groups_to_leaf_columns():
 
     parsed = HwpxBackend().parse(_make_hwpx(xml), ".hwpx")
 
-    content = parsed.units[0].evidence.content
+    content = parsed.units[0].content
     assert [column["text"] for column in content["columns"]] == [
         "현행 / 항목",
         "현행 / 제목",
@@ -483,7 +550,7 @@ def test_hwpx_table_treats_colspan_only_second_row_as_header():
 
     parsed = HwpxBackend().parse(_make_hwpx(xml), ".hwpx")
 
-    content = parsed.units[0].evidence.content
+    content = parsed.units[0].content
     assert [column["text"] for column in content["columns"]] == [
         "검사 / 일반",
         "검사 / 정밀",
@@ -536,7 +603,7 @@ def test_hwpx_table_does_not_promote_grouped_code_rows_to_headers():
 
     parsed = HwpxBackend().parse(_make_hwpx(xml), ".hwpx")
 
-    content = parsed.units[0].evidence.content
+    content = parsed.units[0].content
     assert [column["text"] for column in content["columns"]] == [
         "구분",
         "구분",
