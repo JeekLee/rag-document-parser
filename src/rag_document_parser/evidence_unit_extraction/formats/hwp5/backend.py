@@ -1550,9 +1550,7 @@ def _structured_table(
     actual_column_count = _table_column_count(normalized, column_count)
     header_count = _header_row_count(normalized)
     header_raw_rows = normalized[:header_count]
-    visible_header_raw_rows = [
-        row for row in header_raw_rows if not _row_is_blank(row)
-    ]
+    visible_header_raw_rows = _visible_header_rows(header_raw_rows)
     data_raw_rows = normalized[header_count:]
     columns = _table_columns(actual_column_count, visible_header_raw_rows)
     omit_blank_cells = _should_omit_blank_cells(
@@ -1636,8 +1634,6 @@ def _normalize_rows(
 ) -> list[list[_Cell]]:
     row_map: dict[int, list[_Cell]] = {}
     all_cells: list[_Cell] = []
-    max_row_end = 0
-    max_col_end = 0
     for fallback_row, row in enumerate(rows):
         fallback_col = 0
         for cell in row:
@@ -1662,10 +1658,17 @@ def _normalize_rows(
             )
             row_map.setdefault(row_addr, []).append(cleaned)
             all_cells.append(cleaned)
-            max_row_end = max(max_row_end, row_addr + cleaned.rowspan)
-            max_col_end = max(max_col_end, col_addr + cleaned.colspan)
             fallback_col = col_addr + cleaned.colspan
 
+    _clip_rowspans_that_overlap_real_cells(all_cells)
+    max_row_end = max(
+        ((cell.row_addr or 0) + cell.rowspan for cell in all_cells),
+        default=0,
+    )
+    max_col_end = max(
+        ((cell.col_addr or 0) + cell.colspan for cell in all_cells),
+        default=0,
+    )
     actual_column_count = max(column_count or 0, max_col_end)
     if actual_column_count <= 0:
         return []
@@ -1693,6 +1696,70 @@ def _normalize_rows(
         if materialized:
             normalized.append(sorted(materialized, key=lambda item: item.col_addr or 0))
     return normalized
+
+
+def _visible_header_rows(rows: list[list[_Cell]]) -> list[list[_Cell]]:
+    visible = [
+        (_row_start(row), row)
+        for row in rows
+        if not _row_is_blank(row)
+    ]
+    visible_row_addrs = [row_addr for row_addr, _ in visible]
+    adjusted_rows: list[list[_Cell]] = []
+    for row_addr, row in visible:
+        adjusted_row: list[_Cell] = []
+        for cell in row:
+            span_start = cell.row_addr if cell.row_addr is not None else row_addr
+            span_end = span_start + max(1, cell.rowspan)
+            visible_span = sum(
+                1
+                for visible_addr in visible_row_addrs
+                if span_start <= visible_addr < span_end
+            )
+            adjusted_row.append(
+                _Cell(
+                    text=cell.text,
+                    children=list(cell.children),
+                    row_addr=cell.row_addr,
+                    col_addr=cell.col_addr,
+                    rowspan=max(1, visible_span),
+                    colspan=cell.colspan,
+                    synthetic=cell.synthetic,
+                )
+            )
+        adjusted_rows.append(adjusted_row)
+    return adjusted_rows
+
+
+def _clip_rowspans_that_overlap_real_cells(cells: list[_Cell]) -> None:
+    cells_by_row: dict[int, list[_Cell]] = {}
+    for cell in cells:
+        cells_by_row.setdefault(cell.row_addr or 0, []).append(cell)
+
+    for cell in cells:
+        if cell.rowspan <= 1:
+            continue
+        row_addr = cell.row_addr or 0
+        start = cell.col_addr or 0
+        end = start + cell.colspan
+        for covered_row in range(row_addr + 1, row_addr + cell.rowspan):
+            if any(
+                _cells_overlap_columns(start, end, other)
+                and _cell_has_real_content(other)
+                for other in cells_by_row.get(covered_row, [])
+            ):
+                cell.rowspan = max(1, covered_row - row_addr)
+                break
+
+
+def _cells_overlap_columns(start: int, end: int, cell: _Cell) -> bool:
+    other_start = cell.col_addr or 0
+    other_end = other_start + cell.colspan
+    return start < other_end and other_start < end
+
+
+def _cell_has_real_content(cell: _Cell) -> bool:
+    return bool(cell.text.strip() or cell.children)
 
 
 def _should_omit_blank_cells(

@@ -460,6 +460,107 @@ def test_hwp5_table_preserves_cell_spans_like_hwpx_tables():
     )
 
 
+def test_hwp5_table_clips_rowspan_when_later_header_cells_refine_same_columns():
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
+
+    records = b""
+    records += _table_ctrl(0)
+    records += _make_record(0x4D, 1, _table_body_payload(3, 4))
+    records += _make_record(
+        0x48,
+        1,
+        _list_header_payload_with_span(0, 0, rowspan=2, colspan=3),
+    )
+    records += _make_record(0x43, 2, _u16("검사항목"))
+    records += _make_record(0x48, 1, _list_header_payload(0, 3))
+    records += _make_record(0x43, 2, _u16("검사일자"))
+    records += _make_record(0x48, 1, _list_header_payload(1, 0))
+    records += _make_record(0x43, 2, _u16("1"))
+    records += _make_record(0x48, 1, _list_header_payload(1, 1))
+    records += _make_record(0x43, 2, _u16("Active arm movement"))
+    records += _make_record(0x48, 1, _list_header_payload(1, 2))
+    records += _make_record(0x43, 2, _u16("(0-4)"))
+    records += _make_record(0x48, 1, _list_header_payload(1, 3))
+    records += _make_record(0x48, 1, _list_header_payload(2, 0))
+    records += _make_record(0x43, 2, _u16("2"))
+    records += _make_record(0x48, 1, _list_header_payload(2, 1))
+    records += _make_record(0x43, 2, _u16("Active lower extremity movement"))
+    records += _make_record(0x48, 1, _list_header_payload(2, 2))
+    records += _make_record(0x43, 2, _u16("(0-4)"))
+    records += _make_record(0x48, 1, _list_header_payload(2, 3))
+    records += _make_record(0x42, 0, b"")
+
+    table = _parse_section(records).to_document().units[0]
+    content = table.content
+
+    assert content["header_rows"][0]["cells"][0] == {
+        "column_id": "c1",
+        "text": "검사항목",
+        "rowspan": 1,
+        "colspan": 3,
+        "children": [],
+    }
+    assert [column["text"] for column in content["columns"]] == [
+        "검사항목 / 1",
+        "검사항목 / Active arm movement",
+        "검사항목 / (0-4)",
+        "검사일자",
+    ]
+    assert "header 1: cols 1-3: 검사항목; col 4: 검사일자" in table.source.text
+    assert "header 2: col 1: 1; col 2: Active arm movement; col 3: (0-4)" in (
+        table.source.text
+    )
+
+
+def test_hwp5_table_clips_header_rowspan_over_hidden_blank_spacer_row():
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
+
+    records = b""
+    records += _table_ctrl(0)
+    records += _make_record(0x4D, 1, _table_body_payload(4, 4))
+    records += _make_record(
+        0x48,
+        1,
+        _list_header_payload_with_span(0, 0, rowspan=2, colspan=3),
+    )
+    records += _make_record(0x43, 2, _u16("검사항목"))
+    records += _make_record(0x48, 1, _list_header_payload(0, 3))
+    records += _make_record(0x43, 2, _u16("검사일자"))
+    records += _make_record(0x48, 1, _list_header_payload(1, 3))
+    records += _make_record(0x48, 1, _list_header_payload(2, 0))
+    records += _make_record(0x43, 2, _u16("1"))
+    records += _make_record(0x48, 1, _list_header_payload(2, 1))
+    records += _make_record(0x43, 2, _u16("Active arm movement"))
+    records += _make_record(0x48, 1, _list_header_payload(2, 2))
+    records += _make_record(0x43, 2, _u16("(0-4)"))
+    records += _make_record(0x48, 1, _list_header_payload(2, 3))
+    records += _make_record(0x48, 1, _list_header_payload(3, 0))
+    records += _make_record(0x43, 2, _u16("2"))
+    records += _make_record(0x48, 1, _list_header_payload(3, 1))
+    records += _make_record(0x43, 2, _u16("Active lower extremity movement"))
+    records += _make_record(0x48, 1, _list_header_payload(3, 2))
+    records += _make_record(0x43, 2, _u16("(0-4)"))
+    records += _make_record(0x48, 1, _list_header_payload(3, 3))
+    records += _make_record(0x42, 0, b"")
+
+    table = _parse_section(records).to_document().units[0]
+    content = table.content
+
+    assert content["header_rows"][0]["cells"][0] == {
+        "column_id": "c1",
+        "text": "검사항목",
+        "rowspan": 1,
+        "colspan": 3,
+        "children": [],
+    }
+    assert [column["text"] for column in content["columns"]] == [
+        "검사항목 / 1",
+        "검사항목 / Active arm movement",
+        "검사항목 / (0-4)",
+        "검사일자",
+    ]
+
+
 def test_hwp5_table_source_repeats_rowspan_context_on_continuation_rows():
     from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
 
