@@ -42,6 +42,7 @@ class _Segment:
     kind: str
     payload: Any
     page: int
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -139,68 +140,31 @@ class PdfBackend:
                         )
 
                 table_bboxes = [table.bbox for table in tables]
-                for top, bbox in _detect_diagram_bboxes(page, table_bboxes):
-                    try:
-                        img_items.append(
-                            (
-                                top,
-                                _PdfImage(
-                                    data=_render_page_to_png(data, page_idx, bbox),
-                                    mime="image/png",
-                                    ext="png",
-                                    is_diagram=True,
-                                    metadata={"source": "diagram", "bbox": bbox},
-                                ),
-                            )
-                        )
-                    except ImportError as exc:
-                        warnings.append(
-                            {
-                                "type": "pdf_diagram_render_missing_dependency",
-                                "severity": "medium",
-                                "page": page_idx + 1,
-                                "message": str(exc),
-                            }
-                        )
-                    except Exception as exc:
-                        warnings.append(
-                            {
-                                "type": "pdf_diagram_render_failed",
-                                "severity": "medium",
-                                "page": page_idx + 1,
-                                "message": str(exc),
-                            }
-                        )
-
-                image_segments: list[_Segment] = []
-                for top, item in sorted(img_items, key=lambda candidate: candidate[0]):
-                    asset_id = f"img-{len(assets) + 1:04d}"
-                    metadata = dict(getattr(item, "metadata", {}) or {})
-                    metadata.setdefault("page", page_idx + 1)
-                    if getattr(item, "is_diagram", False):
-                        metadata["is_diagram"] = True
-                    assets.append(
-                        PendingAsset(
-                            id=asset_id,
-                            kind="image",
-                            data=bytes(getattr(item, "data")),
-                            mime=str(getattr(item, "mime")),
-                            ext=str(getattr(item, "ext")),
-                            metadata=metadata,
-                        )
-                    )
-                    image_segments.append(
-                        _Segment(
-                            top=float(top),
-                            bottom=float(top) + 1.0,
-                            kind="image",
-                            payload={"asset_id": asset_id, "caption": None},
-                            page=page_idx + 1,
-                        )
-                    )
+                diagram_segments = _diagram_segments(
+                    data,
+                    page,
+                    page_idx,
+                    table_bboxes,
+                    assets,
+                    warnings,
+                )
+                image_segments, cell_image_children = _image_segments_and_cell_children(
+                    img_items,
+                    tables,
+                    assets,
+                    page_idx,
+                    warnings,
+                )
 
                 page_segments[page_idx].extend(
-                    _page_segments_ordered(page, page_idx + 1, tables, image_segments)
+                    _page_segments_ordered(
+                        page,
+                        page_idx + 1,
+                        tables,
+                        image_segments,
+                        diagram_segments,
+                        cell_image_children,
+                    )
                 )
 
             ocr_by_page = _ocr_pages(
@@ -213,15 +177,12 @@ class PdfBackend:
             for page_idx, text in ocr_by_page.items():
                 cleaned = _clean_text(text)
                 if cleaned:
-                    page_segments[page_idx].append(
-                        _Segment(
-                            top=0.0,
-                            bottom=0.0,
-                            kind="text",
-                            payload=cleaned,
-                            page=page_idx + 1,
-                        )
+                    segments, ocr_parse_warnings = _ocr_text_segments(
+                        cleaned,
+                        page_idx + 1,
                     )
+                    page_segments[page_idx].extend(segments)
+                    warnings.extend(ocr_parse_warnings)
             warnings.extend(_ocr_warnings(ocr_by_page.failed_pages))
 
         return ParsedDocument(
@@ -288,11 +249,257 @@ def _find_tables(page: object, warnings: list[dict[str, Any]], page_idx: int) ->
         return []
 
 
+def _append_pdf_image_asset(
+    assets: list[PendingAsset],
+    item: object,
+    page_idx: int,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> str:
+    asset_id = f"img-{len(assets) + 1:04d}"
+    asset_metadata = dict(getattr(item, "metadata", {}) or {})
+    if metadata:
+        asset_metadata.update(metadata)
+    asset_metadata.setdefault("page", page_idx + 1)
+    assets.append(
+        PendingAsset(
+            id=asset_id,
+            kind="image",
+            data=bytes(getattr(item, "data")),
+            mime=str(getattr(item, "mime")),
+            ext=str(getattr(item, "ext")),
+            metadata=asset_metadata,
+        )
+    )
+    return asset_id
+
+
+def _image_segments_and_cell_children(
+    img_items: list[tuple[float, object]],
+    tables: list[object],
+    assets: list[PendingAsset],
+    page_idx: int,
+    warnings: list[dict[str, Any]],
+) -> tuple[list[_Segment], dict[int, dict[tuple[int, int], list[dict[str, object]]]]]:
+    image_segments: list[_Segment] = []
+    cell_children: dict[int, dict[tuple[int, int], list[dict[str, object]]]] = {}
+    for top, item in sorted(img_items, key=lambda candidate: candidate[0]):
+        metadata = dict(getattr(item, "metadata", {}) or {})
+        bbox = _metadata_bbox(metadata)
+        cell_ref = _containing_table_cell(tables, bbox) if bbox is not None else None
+        if cell_ref is not None:
+            table_idx, row_idx, col_idx = cell_ref
+            asset_id = _append_pdf_image_asset(
+                assets,
+                item,
+                page_idx,
+                metadata={
+                    "source": "pdf_table_cell_image",
+                    "bbox": bbox,
+                    "confidence": "medium",
+                },
+            )
+            child = {
+                "type": "image",
+                "format": "asset_ref",
+                "content": {"asset_id": asset_id, "caption": None},
+                "metadata": {
+                    "source": "pdf_table_cell_image",
+                    "bbox": bbox,
+                    "confidence": "medium",
+                },
+            }
+            cell_children.setdefault(table_idx, {}).setdefault((row_idx, col_idx), []).append(
+                child
+            )
+            warnings.append(
+                {
+                    "type": "pdf_table_cell_image_inferred",
+                    "severity": "low",
+                    "page": page_idx + 1,
+                    "message": (
+                        "PDF image was assigned to a table cell by bounding-box "
+                        "containment."
+                    ),
+                }
+            )
+            continue
+
+        asset_id = _append_pdf_image_asset(assets, item, page_idx)
+        image_segments.append(
+            _Segment(
+                top=float(top),
+                bottom=float(top) + 1.0,
+                kind="image",
+                payload={"asset_id": asset_id, "caption": None},
+                page=page_idx + 1,
+                metadata={"confidence": "medium"},
+            )
+        )
+    return image_segments, cell_children
+
+
+def _metadata_bbox(metadata: dict[str, Any]) -> tuple[float, float, float, float] | None:
+    bbox = metadata.get("bbox")
+    if not isinstance(bbox, (tuple, list)) or len(bbox) != 4:
+        return None
+    try:
+        return tuple(float(value) for value in bbox)  # type: ignore[return-value]
+    except (TypeError, ValueError):
+        return None
+
+
+def _containing_table_cell(
+    tables: list[object],
+    bbox: tuple[float, float, float, float],
+) -> tuple[int, int, int] | None:
+    best: tuple[int, int, int, float] | None = None
+    for table_idx, table in enumerate(tables):
+        for row_idx, row in enumerate(getattr(table, "rows", [])):
+            for col_idx, cell_bbox in enumerate(getattr(row, "cells", []) or []):
+                if cell_bbox is None:
+                    continue
+                if not _bbox_in_cell(bbox, cell_bbox, tol=3.0):
+                    continue
+                area = _bbox_area(cell_bbox)
+                if best is None or area < best[3]:
+                    best = (table_idx, row_idx, col_idx, area)
+    if best is None:
+        return None
+    return best[:3]
+
+
+def _diagram_segments(
+    data: bytes,
+    page: object,
+    page_idx: int,
+    table_bboxes: list[tuple[float, float, float, float]],
+    assets: list[PendingAsset],
+    warnings: list[dict[str, Any]],
+) -> list[_Segment]:
+    segments: list[_Segment] = []
+    for top, bbox in _detect_diagram_bboxes(page, table_bboxes):
+        structured = _structured_diagram_from_pdf(page, bbox)
+        source_text = _diagram_source_text(structured)
+        if source_text and _should_skip_pdf_diagram(structured):
+            continue
+        asset_id: str | None = None
+        try:
+            asset_id = _append_pdf_image_asset(
+                assets,
+                _PdfImage(
+                    data=_render_page_to_png(data, page_idx, bbox),
+                    mime="image/png",
+                    ext="png",
+                    is_diagram=True,
+                    metadata={
+                        "source": "diagram_fallback",
+                        "bbox": bbox,
+                        "is_diagram": True,
+                    },
+                ),
+                page_idx,
+            )
+        except ImportError as exc:
+            warnings.append(
+                {
+                    "type": "pdf_diagram_render_missing_dependency",
+                    "severity": "medium",
+                    "page": page_idx + 1,
+                    "message": str(exc),
+                }
+            )
+        except Exception as exc:
+            warnings.append(
+                {
+                    "type": "pdf_diagram_render_failed",
+                    "severity": "medium",
+                    "page": page_idx + 1,
+                    "message": str(exc),
+                }
+            )
+
+        if source_text:
+            structured["confidence"] = "medium"
+            if asset_id is not None:
+                structured["asset_id"] = asset_id
+            segments.append(
+                _Segment(
+                    top=top,
+                    bottom=bbox[3],
+                    kind="diagram",
+                    payload=structured,
+                    page=page_idx + 1,
+                    metadata={"confidence": "medium"},
+                )
+            )
+            warnings.append(
+                {
+                    "type": "pdf_diagram_inferred",
+                    "severity": "low",
+                    "page": page_idx + 1,
+                    "message": (
+                        "PDF vector diagram structure was inferred from shapes "
+                        "and text bounding boxes."
+                    ),
+                }
+            )
+            continue
+
+        if asset_id is None:
+            warnings.append(
+                {
+                    "type": "pdf_diagram_structuring_failed",
+                    "severity": "medium",
+                    "page": page_idx + 1,
+                    "message": (
+                        "PDF diagram structure could not be inferred and no "
+                        "fallback image was available."
+                    ),
+                }
+            )
+            continue
+
+        fallback = {
+            "caption": None,
+            "nodes": [],
+            "edges": [],
+            "connectors": [],
+            "mermaid": None,
+            "asset_id": asset_id,
+            "confidence": "low",
+        }
+        segments.append(
+            _Segment(
+                top=top,
+                bottom=bbox[3],
+                kind="diagram",
+                payload=fallback,
+                page=page_idx + 1,
+                metadata={"confidence": "low"},
+            )
+        )
+        warnings.append(
+            {
+                "type": "pdf_diagram_structuring_failed",
+                "severity": "medium",
+                "page": page_idx + 1,
+                "message": (
+                    "PDF diagram was preserved as a fallback image because "
+                    "vector structure could not be inferred."
+                ),
+            }
+        )
+    return segments
+
+
 def _page_segments_ordered(
     page: object,
     page_number: int,
     tables: list[object],
     image_segments: list[_Segment],
+    diagram_segments: list[_Segment],
+    cell_image_children: dict[int, dict[tuple[int, int], list[dict[str, object]]]],
 ) -> list[_Segment]:
     segments: list[_Segment] = []
     nested = _resolve_nested_tables(tables)
@@ -305,6 +512,7 @@ def _page_segments_ordered(
             table_idx,
             nested,
             seen=set(),
+            cell_image_children=cell_image_children,
         )
         if structured is None:
             continue
@@ -333,6 +541,7 @@ def _page_segments_ordered(
         )
 
     segments.extend(image_segments)
+    segments.extend(diagram_segments)
     obstacle_bands = sorted(
         [(segment.top, segment.bottom) for segment in segments],
         key=lambda band: band[0],
@@ -381,6 +590,8 @@ def _segments_to_units(page_segments: list[list[_Segment]]) -> list[EvidenceUnit
                 text = str(segment.payload).strip()
                 if not text:
                     continue
+                pdf_metadata = {"page": segment.page}
+                pdf_metadata.update(segment.metadata)
                 units.append(
                     EvidenceUnit(
                         id=f"b{block_index}",
@@ -394,7 +605,7 @@ def _segments_to_units(page_segments: list[list[_Segment]]) -> list[EvidenceUnit
                                 "section_path": [],
                                 "display_format": "plain",
                             },
-                            "pdf": {"page": segment.page},
+                            "pdf": pdf_metadata,
                         },
                     )
                 )
@@ -404,6 +615,12 @@ def _segments_to_units(page_segments: list[list[_Segment]]) -> list[EvidenceUnit
                 table = segment.payload
                 table_id = f"t{table_index}"
                 headers = [str(column["text"]) for column in table["columns"]]
+                pdf_metadata = {
+                    "page": segment.page,
+                    "confidence": segment.metadata.get("confidence", "high"),
+                }
+                if segment.metadata.get("ocr"):
+                    pdf_metadata["ocr"] = True
                 units.append(
                     EvidenceUnit(
                         id=f"b{block_index}",
@@ -425,7 +642,7 @@ def _segments_to_units(page_segments: list[list[_Segment]]) -> list[EvidenceUnit
                                 "headers": headers,
                                 "row_count": len(table["rows"]),
                             },
-                            "pdf": {"page": segment.page},
+                            "pdf": pdf_metadata,
                         },
                     )
                 )
@@ -451,7 +668,57 @@ def _segments_to_units(page_segments: list[list[_Segment]]) -> list[EvidenceUnit
                                 "display_format": "image",
                             },
                             "asset": {"asset_id": asset_id},
-                            "pdf": {"page": segment.page},
+                            "pdf": {
+                                "page": segment.page,
+                                "confidence": segment.metadata.get(
+                                    "confidence",
+                                    "medium",
+                                ),
+                            },
+                        },
+                    )
+                )
+                block_index += 1
+                continue
+            if segment.kind == "diagram":
+                diagram = segment.payload
+                source_text = _diagram_source_text(diagram)
+                if not source_text:
+                    asset_id = str(diagram.get("asset_id", "")).strip()
+                    source_text = f"diagram image: {asset_id}" if asset_id else ""
+                if not source_text:
+                    continue
+                confidence = str(
+                    segment.metadata.get(
+                        "confidence",
+                        diagram.get("confidence", "low"),
+                    )
+                )
+                diagram_metadata: dict[str, object] = {
+                    "node_count": len(diagram.get("nodes", [])),
+                    "edge_count": len(diagram.get("edges", [])),
+                    "confidence": confidence,
+                }
+                if diagram.get("asset_id"):
+                    diagram_metadata["fallback_asset_id"] = diagram["asset_id"]
+                units.append(
+                    EvidenceUnit(
+                        id=f"b{block_index}",
+                        type="diagram",
+                        format="structured_diagram",
+                        source=SourceEvidence(kind="diagram", text=source_text),
+                        content=diagram,
+                        metadata={
+                            "common": {
+                                "chunk_kind": "diagram",
+                                "section_path": [],
+                                "display_format": "structured_diagram",
+                            },
+                            "diagram": diagram_metadata,
+                            "pdf": {
+                                "page": segment.page,
+                                "confidence": confidence,
+                            },
                         },
                     )
                 )
@@ -469,7 +736,7 @@ def _merge_continuation_tables(page_segments: list[list[_Segment]]) -> list[list
         for segment in sorted(segments, key=lambda item: item.top):
             if segment.kind != "table":
                 merged_pages[page_idx].append(segment)
-                if segment.kind in {"text", "image"}:
+                if segment.kind in {"text", "image", "diagram"}:
                     page_has_content_before_table = True
                     previous_table = None
                 continue
@@ -911,6 +1178,8 @@ def _structured_table_from_pdf_table(
     table_idx: int,
     nested: _NestedResolution,
     seen: set[int],
+    *,
+    cell_image_children: dict[int, dict[tuple[int, int], list[dict[str, object]]]] | None = None,
 ) -> dict[str, object] | None:
     if table_idx in seen:
         return None
@@ -926,6 +1195,7 @@ def _structured_table_from_pdf_table(
 
     columns = _columns_from_header_rows(normalized_rows[:header_depth], column_count)
     child_map = nested.children.get(table_idx, {})
+    image_child_map = (cell_image_children or {}).get(table_idx, {})
     cell_spans = _table_cell_spans(
         table,
         row_count=len(normalized_rows),
@@ -944,6 +1214,8 @@ def _structured_table_from_pdf_table(
             cell_spans=cell_spans,
             nested=nested,
             seen=seen | {table_idx},
+            cell_image_children=cell_image_children or {},
+            image_child_map=image_child_map,
         )
         if header_cells:
             header_rows.append({"index": header_index + 1, "cells": header_cells})
@@ -961,6 +1233,8 @@ def _structured_table_from_pdf_table(
             cell_spans=cell_spans,
             nested=nested,
             seen=seen | {table_idx},
+            cell_image_children=cell_image_children or {},
+            image_child_map=image_child_map,
         )
         if not any(str(cell["text"]).strip() or cell["children"] for cell in cells):
             continue
@@ -1751,6 +2025,8 @@ def _row_evidence_cells(
     cell_spans: _TableCellSpans,
     nested: _NestedResolution,
     seen: set[int],
+    cell_image_children: dict[int, dict[tuple[int, int], list[dict[str, object]]]],
+    image_child_map: dict[tuple[int, int], list[dict[str, object]]],
 ) -> list[dict[str, object]]:
     cells: list[dict[str, object]] = []
     row_cells = _row_cells(tables[table_idx], row_index)
@@ -1760,16 +2036,27 @@ def _row_evidence_cells(
         rowspan, colspan = cell_spans.spans.get((row_index, column_index), (1, 1))
         text = raw_row[column_index] if column_index < len(raw_row) else ""
         child_indices = child_map.get((row_index, column_index), [])
-        children = [
+        table_children = [
             child
             for child in (
-                _nested_table_child(page, tables, child_idx, nested, seen)
+                _nested_table_child(
+                    page,
+                    tables,
+                    child_idx,
+                    nested,
+                    seen,
+                    cell_image_children=cell_image_children,
+                )
                 for child_idx in child_indices
             )
             if child is not None
         ]
+        children = [
+            *table_children,
+            *image_child_map.get((row_index, column_index), []),
+        ]
         children = _merge_nested_table_children(children)
-        if children:
+        if table_children:
             cell_bbox = row_cells[column_index] if column_index < len(row_cells) else None
             if cell_bbox is not None:
                 text = _rebuild_cell_text(
@@ -1877,8 +2164,17 @@ def _nested_table_child(
     table_idx: int,
     nested: _NestedResolution,
     seen: set[int],
+    *,
+    cell_image_children: dict[int, dict[tuple[int, int], list[dict[str, object]]]] | None = None,
 ) -> dict[str, object] | None:
-    structured = _structured_table_from_pdf_table(page, tables, table_idx, nested, seen)
+    structured = _structured_table_from_pdf_table(
+        page,
+        tables,
+        table_idx,
+        nested,
+        seen,
+        cell_image_children=cell_image_children,
+    )
     if structured is None:
         return None
     return {
@@ -2158,6 +2454,133 @@ def _ocr_warnings(failed_pages: list[dict[str, object]]) -> list[dict[str, Any]]
     return warnings
 
 
+def _ocr_text_segments(
+    text: str,
+    page_number: int,
+) -> tuple[list[_Segment], list[dict[str, Any]]]:
+    segments: list[_Segment] = []
+    warnings: list[dict[str, Any]] = []
+    part_index = 0
+    for kind, payload in _ocr_text_parts(text):
+        if kind == "table":
+            table = payload
+            segments.append(
+                _Segment(
+                    top=part_index * 0.001,
+                    bottom=part_index * 0.001,
+                    kind="table",
+                    payload=table,
+                    page=page_number,
+                    metadata={"ocr": True, "confidence": "medium"},
+                )
+            )
+            warnings.append(
+                {
+                    "type": "pdf_ocr_table_inferred",
+                    "severity": "low",
+                    "page": page_number,
+                    "message": (
+                        "OCR text was converted to structured_table from a "
+                        "detected pipe table."
+                    ),
+                }
+            )
+        else:
+            segments.append(
+                _Segment(
+                    top=part_index * 0.001,
+                    bottom=part_index * 0.001,
+                    kind="text",
+                    payload=str(payload),
+                    page=page_number,
+                    metadata={"ocr": True},
+                )
+            )
+        part_index += 1
+    return segments, warnings
+
+
+def _ocr_text_parts(text: str) -> list[tuple[str, object]]:
+    lines = text.splitlines()
+    parts: list[tuple[str, object]] = []
+    paragraph: list[str] = []
+    index = 0
+
+    def flush_paragraph() -> None:
+        if not paragraph:
+            return
+        body = _clean_text("\n".join(paragraph))
+        paragraph.clear()
+        if body:
+            parts.append(("text", body))
+
+    while index < len(lines):
+        if _looks_like_pipe_table_start(lines, index):
+            flush_paragraph()
+            table_lines = [lines[index], lines[index + 1]]
+            index += 2
+            while index < len(lines) and _is_pipe_table_row(lines[index]):
+                table_lines.append(lines[index])
+                index += 1
+            table = _structured_table_from_pipe_lines(table_lines)
+            if table is not None:
+                parts.append(("table", table))
+                continue
+            paragraph.extend(table_lines)
+            continue
+        paragraph.append(lines[index])
+        index += 1
+
+    flush_paragraph()
+    return parts or [("text", text)]
+
+
+def _looks_like_pipe_table_start(lines: list[str], index: int) -> bool:
+    return (
+        index + 2 < len(lines)
+        and _is_pipe_table_row(lines[index])
+        and _is_pipe_separator_line(lines[index + 1])
+        and _is_pipe_table_row(lines[index + 2])
+    )
+
+
+def _is_pipe_table_row(line: str) -> bool:
+    stripped = line.strip()
+    return stripped.startswith("|") and stripped.endswith("|") and stripped.count("|") >= 3
+
+
+def _is_pipe_separator_line(line: str) -> bool:
+    if not _is_pipe_table_row(line):
+        return False
+    cells = _split_pipe_row(line)
+    return bool(cells) and all(re.fullmatch(r":?-{3,}:?", cell.strip()) for cell in cells)
+
+
+def _structured_table_from_pipe_lines(lines: list[str]) -> dict[str, object] | None:
+    if len(lines) < 3:
+        return None
+    headers = _split_pipe_row(lines[0])
+    rows = [_split_pipe_row(line) for line in lines[2:] if _is_pipe_table_row(line)]
+    if not headers or not rows:
+        return None
+    columns = [
+        {"id": f"c{index}", "text": header}
+        for index, header in enumerate(headers, start=1)
+    ]
+    structured_rows: list[dict[str, object]] = []
+    for row in rows:
+        cells = []
+        for index, column in enumerate(columns):
+            value = row[index] if index < len(row) else ""
+            cells.append(_simple_cell(str(column["id"]), value))
+        structured_rows.append({"index": len(structured_rows) + 1, "cells": cells})
+    return {"caption": None, "columns": columns, "rows": structured_rows}
+
+
+def _split_pipe_row(line: str) -> list[str]:
+    return [cell.strip() for cell in line.strip().strip("|").split("|")]
+
+
 def _ocr_page(data: bytes, png: bytes, page_idx: int, lang: str = "kor+eng") -> str:
     if png:
         text = _ocr_png(png, lang)
@@ -2184,11 +2607,12 @@ def _ocr_page_with_vision(
 
 _VISION_OCR_PROMPT = """\
 이 이미지는 스캔된 문서 페이지입니다.
-이미지에서 텍스트를 읽어 그대로 추출해 주세요.
+이미지에서 텍스트와 표를 읽어 문서 구조를 보존해 추출해 주세요.
 
 지침:
 - 원문의 줄바꿈과 문단 구조를 최대한 유지
-- 표는 텍스트 형태로 읽어서 그대로 출력
+- 표는 가능하면 Markdown pipe table 형식으로 출력
+- 표가 아닌 본문은 일반 텍스트로 출력
 - 텍스트 내용만 출력, 설명 없이"""
 
 
@@ -2329,13 +2753,27 @@ def _extract_page_images(
         image = pypdf_by_name.get(name)
         if image is None:
             continue
+        bbox = _image_info_bbox(image_info)
         item = _pil_to_pdf_image(
             image,
-            metadata={"source": "embedded", "name": name, "index_hint": image_index},
+            metadata={
+                "source": "embedded",
+                "name": name,
+                "index_hint": image_index,
+                "bbox": bbox,
+            },
         )
         results.append((float(image_info.get("top", 0.0)), item))
         image_index += 1
     return sorted(results, key=lambda item: item[0])
+
+
+def _image_info_bbox(image_info: dict[str, object]) -> tuple[float, float, float, float]:
+    x0 = float(image_info.get("x0", 0.0))
+    x1 = float(image_info.get("x1", x0))
+    top = float(image_info.get("top", image_info.get("y0", 0.0)))
+    bottom = float(image_info.get("bottom", image_info.get("y1", top)))
+    return (min(x0, x1), min(top, bottom), max(x0, x1), max(top, bottom))
 
 
 def _pil_to_pdf_image(pil_image: object, metadata: dict[str, Any]) -> _PdfImage:
@@ -2364,16 +2802,309 @@ def _pil_to_pdf_image(pil_image: object, metadata: dict[str, Any]) -> _PdfImage:
     )
 
 
+def _structured_diagram_from_pdf(
+    page: object,
+    bbox: tuple[float, float, float, float],
+) -> dict[str, object]:
+    node_rects = [
+        rect_bbox
+        for rect in getattr(page, "rects", [])
+        if (rect_bbox := _pdf_shape_bbox(rect)) is not None
+        and _bbox_in_cell(rect_bbox, bbox, tol=2.0)
+        and rect_bbox[2] - rect_bbox[0] >= 10
+        and rect_bbox[3] - rect_bbox[1] >= 10
+    ]
+    nodes: list[dict[str, object]] = []
+    for index, rect_bbox in enumerate(sorted(node_rects, key=lambda item: (item[1], item[0])), start=1):
+        text = _crop_text(page, *rect_bbox)
+        if not text:
+            continue
+        nodes.append(
+            {
+                "id": f"n{len(nodes) + 1}",
+                "shape_type": "rect",
+                "text": text,
+                "bbox": _pdf_bbox_payload(rect_bbox),
+                "metadata": {"source": "pdf_vector_rect"},
+            }
+        )
+
+    connectors = _pdf_diagram_connectors(page, bbox)
+    return {
+        "caption": None,
+        "nodes": nodes,
+        "edges": _infer_pdf_edges(nodes, connectors),
+        "connectors": connectors,
+        "mermaid": None,
+    }
+
+
+_TABLE_LIKE_DIAGRAM_LABELS = {
+    "연번",
+    "질의",
+    "답변",
+    "현행",
+    "현행",
+    "개정",
+    "비고",
+    "항목",
+    "제목",
+    "세부인정사항",
+    "구분",
+    "EDI코드",
+    "코드",
+    "부위",
+    "분류",
+    "번호",
+    "행위명",
+    "수가",
+    "본인부담률",
+}
+
+
+def _should_skip_pdf_diagram(diagram: dict[str, object]) -> bool:
+    nodes = diagram.get("nodes")
+    if not isinstance(nodes, list):
+        return True
+    if len(nodes) < 2:
+        return True
+    labels = [
+        _normalize_diagram_label(str(node.get("text", "")))
+        for node in nodes
+        if isinstance(node, dict)
+    ]
+    table_like = sum(label in _TABLE_LIKE_DIAGRAM_LABELS for label in labels)
+    return table_like >= 3 and table_like / max(len(labels), 1) >= 0.5
+
+
+def _normalize_diagram_label(text: str) -> str:
+    return re.sub(r"\s+", "", text.strip())
+
+
+def _pdf_diagram_connectors(
+    page: object,
+    bbox: tuple[float, float, float, float],
+) -> list[dict[str, object]]:
+    connectors: list[dict[str, object]] = []
+    shapes = [
+        ("line", item)
+        for item in getattr(page, "lines", [])
+    ] + [
+        ("curve", item)
+        for item in getattr(page, "curves", [])
+    ]
+    for kind, shape in shapes:
+        shape_bbox = _pdf_shape_bbox(shape)
+        if shape_bbox is None or not _bbox_in_cell(shape_bbox, bbox, tol=3.0):
+            continue
+        width = abs(shape_bbox[2] - shape_bbox[0])
+        height = abs(shape_bbox[3] - shape_bbox[1])
+        if max(width, height) < 10:
+            continue
+        connectors.append(
+            {
+                "id": f"c{len(connectors) + 1}",
+                "type": kind,
+                "bbox": _pdf_bbox_payload(shape_bbox),
+                "points": _pdf_connector_points(shape, shape_bbox),
+                "arrow": bool(shape.get("arrow")) if isinstance(shape, dict) else False,
+                "metadata": {"source": f"pdf_vector_{kind}"},
+            }
+        )
+    return connectors
+
+
+def _infer_pdf_edges(
+    nodes: list[dict[str, object]],
+    connectors: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    bbox_nodes = [
+        (str(node.get("id", "")), bbox)
+        for node in nodes
+        if (bbox := _diagram_node_bbox(node)) is not None
+    ]
+    if len(bbox_nodes) < 2:
+        return []
+
+    edges: list[dict[str, object]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for connector in connectors:
+        points = connector.get("points")
+        if not isinstance(points, list) or len(points) < 2:
+            continue
+        start = _diagram_point(points[0])
+        end = _diagram_point(points[-1])
+        if start is None or end is None:
+            continue
+        from_id = _nearest_node_id(start, bbox_nodes)
+        to_id = _nearest_node_id(end, bbox_nodes)
+        if from_id is None or to_id is None or from_id == to_id:
+            continue
+        connector_id = str(connector.get("id", ""))
+        key = (from_id, to_id, connector_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        edges.append(
+            {
+                "from": from_id,
+                "to": to_id,
+                "type": "arrow" if connector.get("arrow") else "line",
+                "label": "",
+                "confidence": "inferred_geometry",
+                "connector_id": connector_id,
+            }
+        )
+    return edges
+
+
+def _pdf_shape_bbox(shape: object) -> tuple[float, float, float, float] | None:
+    if not isinstance(shape, dict):
+        return None
+    try:
+        x0 = float(shape.get("x0", 0.0))
+        x1 = float(shape.get("x1", x0))
+        top = float(shape.get("top", shape.get("y0", 0.0)))
+        bottom = float(shape.get("bottom", shape.get("y1", top)))
+    except (TypeError, ValueError):
+        return None
+    return (min(x0, x1), min(top, bottom), max(x0, x1), max(top, bottom))
+
+
+def _pdf_bbox_payload(bbox: tuple[float, float, float, float]) -> dict[str, object]:
+    x0, top, x1, bottom = bbox
+    return {
+        "x": round(x0, 3),
+        "y": round(top, 3),
+        "width": round(x1 - x0, 3),
+        "height": round(bottom - top, 3),
+        "unit": "pt",
+    }
+
+
+def _pdf_connector_points(
+    shape: object,
+    bbox: tuple[float, float, float, float],
+) -> list[dict[str, float]]:
+    if isinstance(shape, dict):
+        try:
+            return [
+                {
+                    "x": float(shape.get("x0", bbox[0])),
+                    "y": float(shape.get("top", shape.get("y0", bbox[1]))),
+                },
+                {
+                    "x": float(shape.get("x1", bbox[2])),
+                    "y": float(shape.get("bottom", shape.get("y1", bbox[3]))),
+                },
+            ]
+        except (TypeError, ValueError):
+            pass
+    x0, top, x1, bottom = bbox
+    return [{"x": x0, "y": top}, {"x": x1, "y": bottom}]
+
+
+def _diagram_node_bbox(node: dict[str, object]) -> dict[str, float] | None:
+    bbox = node.get("bbox")
+    if not isinstance(bbox, dict):
+        return None
+    try:
+        x = float(bbox["x"])
+        y = float(bbox["y"])
+        width = float(bbox["width"])
+        height = float(bbox["height"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return {"x": x, "y": y, "width": width, "height": height}
+
+
+def _diagram_point(point: object) -> dict[str, float] | None:
+    if not isinstance(point, dict):
+        return None
+    try:
+        return {"x": float(point["x"]), "y": float(point["y"])}
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _nearest_node_id(
+    point: dict[str, float],
+    bbox_nodes: list[tuple[str, dict[str, float]]],
+) -> str | None:
+    best_id: str | None = None
+    best_distance: float | None = None
+    for node_id, bbox in bbox_nodes:
+        distance = _point_bbox_distance_squared(point, bbox)
+        if best_distance is None or distance < best_distance:
+            best_id = node_id
+            best_distance = distance
+    return best_id
+
+
+def _point_bbox_distance_squared(
+    point: dict[str, float],
+    bbox: dict[str, float],
+) -> float:
+    min_x = bbox["x"]
+    max_x = bbox["x"] + bbox["width"]
+    min_y = bbox["y"]
+    max_y = bbox["y"] + bbox["height"]
+    dx = max(min_x - point["x"], 0.0, point["x"] - max_x)
+    dy = max(min_y - point["y"], 0.0, point["y"] - max_y)
+    return dx * dx + dy * dy
+
+
+def _diagram_source_text(diagram: dict[str, object]) -> str:
+    nodes = diagram.get("nodes", [])
+    if not isinstance(nodes, list):
+        return ""
+    lines = [
+        text
+        for text in (
+            str(node.get("text", "")).strip()
+            for node in nodes
+            if isinstance(node, dict)
+        )
+        if text
+    ]
+    edge_lines = _diagram_edge_source_lines(diagram.get("edges", []))
+    if edge_lines:
+        lines.append("relations:")
+        lines.extend(edge_lines)
+    return "\n".join(lines)
+
+
+def _diagram_edge_source_lines(edges: object) -> list[str]:
+    if not isinstance(edges, list):
+        return []
+    lines: list[str] = []
+    for edge in edges:
+        if not isinstance(edge, dict):
+            continue
+        from_id = str(edge.get("from", "")).strip()
+        to_id = str(edge.get("to", "")).strip()
+        if not from_id or not to_id:
+            continue
+        label = str(edge.get("label", "")).strip()
+        line = f"{from_id} -> {to_id}"
+        if label:
+            line = f"{line}: {label}"
+        lines.append(line)
+    return lines
+
+
 def _detect_diagram_bboxes(
     page: object,
     table_bboxes: list[tuple[float, float, float, float]],
 ) -> list[tuple[float, tuple[float, float, float, float]]]:
-    rects: list[tuple[float, float, float, float]] = []
+    shapes: list[tuple[float, float, float, float, str]] = []
     for rect in getattr(page, "rects", []):
-        x0 = float(rect["x0"])
-        top = float(rect["top"])
-        x1 = float(rect["x1"])
-        bottom = float(rect["bottom"])
+        bbox = _pdf_shape_bbox(rect)
+        if bbox is None:
+            continue
+        x0, top, x1, bottom = bbox
         if (x1 - x0) < 5 or (bottom - top) < 5:
             continue
         if any(
@@ -2381,25 +3112,47 @@ def _detect_diagram_bboxes(
             for tx0, ttop, tx1, tbottom in table_bboxes
         ):
             continue
-        rects.append((x0, top, x1, bottom))
+        shapes.append((x0, top, x1, bottom, "rect"))
 
-    if not rects:
+    for kind, items in (
+        ("line", getattr(page, "lines", [])),
+        ("curve", getattr(page, "curves", [])),
+    ):
+        for shape in items:
+            bbox = _pdf_shape_bbox(shape)
+            if bbox is None:
+                continue
+            x0, top, x1, bottom = bbox
+            if max(x1 - x0, bottom - top) < 10:
+                continue
+            if any(
+                x0 < tx1 and x1 > tx0 and top < tbottom and bottom > ttop
+                for tx0, ttop, tx1, tbottom in table_bboxes
+            ):
+                continue
+            shapes.append((x0, top, x1, bottom, kind))
+
+    if not shapes:
         return []
 
-    rects.sort(key=lambda rect: rect[1])
-    clusters: list[list[tuple[float, float, float, float]]] = [[rects[0]]]
-    for rect in rects[1:]:
+    shapes.sort(key=lambda shape: shape[1])
+    clusters: list[list[tuple[float, float, float, float, str]]] = [[shapes[0]]]
+    for shape in shapes[1:]:
         previous_bottom = max(item[3] for item in clusters[-1])
-        if rect[1] - previous_bottom <= 20:
-            clusters[-1].append(rect)
+        if shape[1] - previous_bottom <= 30:
+            clusters[-1].append(shape)
         else:
-            clusters.append([rect])
+            clusters.append([shape])
 
     results: list[tuple[float, tuple[float, float, float, float]]] = []
     page_width = float(getattr(page, "width", 0.0))
     page_height = float(getattr(page, "height", 0.0))
     for cluster in clusters:
-        if len(cluster) < 3:
+        rect_count = sum(1 for item in cluster if item[4] == "rect")
+        connector_count = sum(1 for item in cluster if item[4] != "rect")
+        if rect_count < 2:
+            continue
+        if rect_count < 3 and connector_count == 0:
             continue
         x0 = max(0.0, min(rect[0] for rect in cluster) - 10)
         top = max(0.0, min(rect[1] for rect in cluster) - 10)
@@ -2511,7 +3264,12 @@ def _table_source_cells(
             for child in cell["children"]
             if child.get("type", child.get("kind")) == "table"
         ]
-        combined = "; ".join(part for part in [value, *child_texts] if part)
+        image_texts = [
+            f"image: {child['content']['asset_id']}"
+            for child in cell["children"]
+            if child.get("type", child.get("kind")) == "image"
+        ]
+        combined = "; ".join(part for part in [value, *child_texts, *image_texts] if part)
         if combined:
             result.append(f"{header}: {combined}")
     return result
