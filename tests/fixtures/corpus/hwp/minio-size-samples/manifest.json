@@ -1,0 +1,181 @@
+{
+  "description": "HWP5 CLIC MinIO size-stratified sample fixtures.",
+  "selection": {
+    "source_prefix": "local/clic/raw",
+    "name_pattern": "*.hwp",
+    "format_filter": "OLE2/HWP5 container signature",
+    "bucket_strategy": "fixed byte-size buckets; five evenly spaced samples by sorted size per bucket, replacing non-HWP5 candidates with the nearest same-bucket HWP5 object",
+    "buckets": {
+      "small": {
+        "range": "< 100 KiB"
+      },
+      "medium": {
+        "range": "100 KiB <= size < 500 KiB"
+      },
+      "large": {
+        "range": ">= 500 KiB"
+      }
+    },
+    "rejected_candidates": [
+      {
+        "bucket": "large",
+        "target_ordinal": 1,
+        "bytes": 518531,
+        "key": "20251230-1-0001/「사전심사의 절차 등에 관한 세부사항」 개정(전문).hwp",
+        "reason": "non_ole_hwp5_signature"
+      }
+    ]
+  },
+  "documents": [
+    {
+      "id": "hwp-minio-small-01",
+      "size_bucket": "small",
+      "ordinal": 1,
+      "path": "small/small-01-요양급여의적용기준및방법에관한세부사항고시전문.hwp",
+      "source_uri": "s3://clic/raw/20071228-6-0001/요양급여의적용기준및방법에관한세부사항고시전문.hwp",
+      "mc_path": "local/clic/raw/20071228-6-0001/요양급여의적용기준및방법에관한세부사항고시전문.hwp",
+      "bytes": 8704,
+      "sha256": "ec937eee114298c28c9981b5b6265852dc8660946bc9647aedaa40fe6cd5476e"
+    },
+    {
+      "id": "hwp-minio-small-02",
+      "size_bucket": "small",
+      "ordinal": 2,
+      "path": "small/small-02-고시-제2023-101호-Antivenin-agkistrodon-halys.hwp",
+      "source_uri": "s3://clic/raw/20230601-1-0007/고시 제2023-101호 Antivenin agkistrodon halys.hwp",
+      "mc_path": "local/clic/raw/20230601-1-0007/고시 제2023-101호 Antivenin agkistrodon halys.hwp",
+      "bytes": 21504,
+      "sha256": "27d3c5eb8fc62d6d8d09e73d0021db04591f090c844ab9941cd51cad180ac911"
+    },
+    {
+      "id": "hwp-minio-small-03",
+      "size_bucket": "small",
+      "ordinal": 3,
+      "path": "small/small-03-2020-120호_2020.6.15-__-요양급여의_적용기준_및_방법에_관한_세부사항-_일부개정.hwp",
+      "source_uri": "s3://clic/raw/20200701-1-0001/(2020-120호_2020.6.15)__「요양급여의_적용기준_및_방법에_관한_세부사항」_일부개정.hwp",
+      "mc_path": "local/clic/raw/20200701-1-0001/(2020-120호_2020.6.15)__「요양급여의_적용기준_및_방법에_관한_세부사항」_일부개정.hwp",
+      "bytes": 40448,
+      "sha256": "2a7ced238cdc42d7426e73eda6d466d5d6b3c99c7fb99a38466c3a832baa95e7"
+    },
+    {
+      "id": "hwp-minio-small-04",
+      "size_bucket": "small",
+      "ordinal": 4,
+      "path": "small/small-04-2021-153호-_요양급여의_적용기준_및_방법에_관한_세부사항_일부개정안-6월시행.hwp",
+      "source_uri": "s3://clic/raw/20210601-3-0001/(2021-153호)_요양급여의_적용기준_및_방법에_관한_세부사항_일부개정안(6월시행).hwp",
+      "mc_path": "local/clic/raw/20210601-3-0001/(2021-153호)_요양급여의_적용기준_및_방법에_관한_세부사항_일부개정안(6월시행).hwp",
+      "bytes": 65024,
+      "sha256": "8f3aa0b42b7071c41fa24904c486aa560ddcf984216285f0022d9bcaecccb382"
+    },
+    {
+      "id": "hwp-minio-small-05",
+      "size_bucket": "small",
+      "ordinal": 5,
+      "path": "small/small-05-3.-코로나19-주사실-격리관리료-수가-및-적용기준-안내-변경.hwp",
+      "source_uri": "s3://clic/raw/20220228-2-0001/3. 코로나19 주사실 격리관리료 수가 및 적용기준 안내 (변경).hwp",
+      "mc_path": "local/clic/raw/20220228-2-0001/3. 코로나19 주사실 격리관리료 수가 및 적용기준 안내 (변경).hwp",
+      "bytes": 101376,
+      "sha256": "9b54acf7f137dc9ca9356ea1d4b912ef49af96cfb8b4238fdfb9032109d09ed0"
+    },
+    {
+      "id": "hwp-minio-medium-01",
+      "size_bucket": "medium",
+      "ordinal": 1,
+      "path": "medium/medium-01-36280bb4deaa7f92.hwp",
+      "source_uri": "s3://clic/raw/20210730-1-0004/36280bb4deaa7f92.hwp",
+      "mc_path": "local/clic/raw/20210730-1-0004/36280bb4deaa7f92.hwp",
+      "bytes": 102912,
+      "sha256": "2e02fc8d8bcce569c9878367acad645c7bcc268e35fec8a1a5fe5882dcf70604"
+    },
+    {
+      "id": "hwp-minio-medium-02",
+      "size_bucket": "medium",
+      "ordinal": 2,
+      "path": "medium/medium-02-제2022-283호-_요양급여의_적용기준_및_방법에_관한_세부사항_일부개정.hwp",
+      "source_uri": "s3://clic/raw/20230101-2-0003/(제2022-283호)_요양급여의_적용기준_및_방법에_관한_세부사항_일부개정.hwp",
+      "mc_path": "local/clic/raw/20230101-2-0003/(제2022-283호)_요양급여의_적용기준_및_방법에_관한_세부사항_일부개정.hwp",
+      "bytes": 116736,
+      "sha256": "39be56913d2ec141b71d81048d431029e449f6f7a5074ab8c436e44cd1c11758"
+    },
+    {
+      "id": "hwp-minio-medium-03",
+      "size_bucket": "medium",
+      "ordinal": 3,
+      "path": "medium/medium-03-공고-제2022-316호-조혈모세포이식-실시기관-및-대상자-사전승인에-관한-세부사항-공고-제정-_별지-서식.hwp",
+      "source_uri": "s3://clic/raw/20230101-5-0001/(공고 제2022-316호) 「조혈모세포이식 실시기관 및 대상자 사전승인에 관한 세부사항」 공고(제정)_별지 서식.hwp",
+      "mc_path": "local/clic/raw/20230101-5-0001/(공고 제2022-316호) 「조혈모세포이식 실시기관 및 대상자 사전승인에 관한 세부사항」 공고(제정)_별지 서식.hwp",
+      "bytes": 160256,
+      "sha256": "e422fc7e681e9701628bba7ed50bcf5d25ec915cf3b33b11d4003880fe7e38cd"
+    },
+    {
+      "id": "hwp-minio-medium-04",
+      "size_bucket": "medium",
+      "ordinal": 4,
+      "path": "medium/medium-04-2018-70호-_요양급여의_적용기준_및_방법에_관한_세부사항_일부개정-1.hwp",
+      "source_uri": "s3://clic/raw/20180401-4-0003/(2018-70호)_요양급여의_적용기준_및_방법에_관한_세부사항_일부개정 (1).hwp",
+      "mc_path": "local/clic/raw/20180401-4-0003/(2018-70호)_요양급여의_적용기준_및_방법에_관한_세부사항_일부개정 (1).hwp",
+      "bytes": 273408,
+      "sha256": "f0fa7bc3e21b674e110c27da88ccf59200d0f4d723f30713062ff062405fa2f0"
+    },
+    {
+      "id": "hwp-minio-medium-05",
+      "size_bucket": "medium",
+      "ordinal": 5,
+      "path": "medium/medium-05-사전심사의-절차-등에-관한-세부사항-건강보험심사평가원-공고-제2024-25호.hwp",
+      "source_uri": "s3://clic/raw/20240201-5-0001/「사전심사의 절차 등에 관한 세부사항」(건강보험심사평가원 공고 제2024-25호).hwp",
+      "mc_path": "local/clic/raw/20240201-5-0001/「사전심사의 절차 등에 관한 세부사항」(건강보험심사평가원 공고 제2024-25호).hwp",
+      "bytes": 469504,
+      "sha256": "98ee5a83cb89fed0ef9efd10c3f19aa6dad59a28a92c9cf51147db692065c72e"
+    },
+    {
+      "id": "hwp-minio-large-01",
+      "size_bucket": "large",
+      "ordinal": 1,
+      "path": "large/large-01-Q-A_병.의원용.hwp",
+      "source_uri": "s3://clic/raw/20120704-1-0001/Q＆A_병.의원용.hwp",
+      "mc_path": "local/clic/raw/20120704-1-0001/Q＆A_병.의원용.hwp",
+      "bytes": 558592,
+      "sha256": "7db4dd60a0382429e24e5f20c8bf4da70a9d3ef3d6eff97a153f81f3fd68de07"
+    },
+    {
+      "id": "hwp-minio-large-02",
+      "size_bucket": "large",
+      "ordinal": 2,
+      "path": "large/large-02-2018-135_18.6.29-_-_수면다원검사_질의응답_2차_추가합본.hwp",
+      "source_uri": "s3://clic/raw/20231229-6-0019/(2018-135_18.6.29)_☆_수면다원검사_질의응답_2차_추가합본.hwp",
+      "mc_path": "local/clic/raw/20231229-6-0019/(2018-135_18.6.29)_☆_수면다원검사_질의응답_2차_추가합본.hwp",
+      "bytes": 722432,
+      "sha256": "855e7315e2ca4e4bff1ac7adc2ed6464acab3c1e81c5d3d5fc9a973a391a0692"
+    },
+    {
+      "id": "hwp-minio-large-03",
+      "size_bucket": "large",
+      "ordinal": 3,
+      "path": "large/large-03-제2023-56호-_요양급여의_적용기준_및_방법에_관한_세부사항_일부개정_-최종.hwp",
+      "source_uri": "s3://clic/raw/20230329-3-0043/(제2023-56호)_요양급여의_적용기준_및_방법에_관한_세부사항_일부개정_(최종).hwp",
+      "mc_path": "local/clic/raw/20230329-3-0043/(제2023-56호)_요양급여의_적용기준_및_방법에_관한_세부사항_일부개정_(최종).hwp",
+      "bytes": 741376,
+      "sha256": "a24598002d880200eecbadaf2a6481279c57c429b31e915c7be8925507659c39"
+    },
+    {
+      "id": "hwp-minio-large-04",
+      "size_bucket": "large",
+      "ordinal": 4,
+      "path": "large/large-04-제2023-56호-요양급여의-적용기준-및-방법에-관한-세부사항-일부개정_-최종.hwp",
+      "source_uri": "s3://clic/raw/20230329-18-0001/(제2023-56호) 요양급여의 적용기준 및 방법에 관한 세부사항 일부개정_(최종).hwp",
+      "mc_path": "local/clic/raw/20230329-18-0001/(제2023-56호) 요양급여의 적용기준 및 방법에 관한 세부사항 일부개정_(최종).hwp",
+      "bytes": 782848,
+      "sha256": "48d6acb15a76d95b01ae8e7f399006e0b2a183f202a96539478be668af2f4d90"
+    },
+    {
+      "id": "hwp-minio-large-05",
+      "size_bucket": "large",
+      "ordinal": 5,
+      "path": "large/large-05-자53나_늑골골절_관혈적정복술_질의응답.hwp",
+      "source_uri": "s3://clic/raw/20181224-1-0063/★_자53나_늑골골절_관혈적정복술_질의응답.hwp",
+      "mc_path": "local/clic/raw/20181224-1-0063/★_자53나_늑골골절_관혈적정복술_질의응답.hwp",
+      "bytes": 2664960,
+      "sha256": "f4f3042ec9984372abad05b7af951798552cfb48b9e354d31bebf5a9682259ea"
+    }
+  ]
+}

@@ -44,6 +44,7 @@ _SHAPE_CTRL_TYPES = {
     b"prg$": "group",  # "$grp"
     b"noc$": "container",  # "$con"
     b"lop$": "polygon",  # "$pol"
+    b"cip$": "picture",  # "$pic"
     b"nil$": "line",  # "$lin"
     b"loc$": "connector",  # "$col"
     b"cra$": "arc",  # "$arc"
@@ -940,11 +941,12 @@ def _apply_ocr_fallback(
     document: ParsedDocument,
     ocr_fn: Callable[[bytes, int], str] | None,
 ) -> ParsedDocument:
-    if ocr_fn is None or not _should_ocr_hwp5(document):
+    if ocr_fn is None or not document.assets:
         return document
 
     units = list(document.units)
     warnings = list(document.quality_warnings)
+    native_texts = _native_source_texts(document.units)
     next_index = len(units) + 1
     for image_index, asset in enumerate(document.assets):
         if asset.kind != "image":
@@ -956,6 +958,8 @@ def _apply_ocr_fallback(
             continue
         if not text:
             warnings.append(_hwp5_ocr_warning(asset.id, "empty OCR result"))
+            continue
+        if _ocr_text_duplicates_native_text(text, native_texts):
             continue
         units.append(
             EvidenceUnit(
@@ -985,15 +989,27 @@ def _apply_ocr_fallback(
     )
 
 
-def _should_ocr_hwp5(document: ParsedDocument) -> bool:
-    if not document.assets:
+def _native_source_texts(units: list[EvidenceUnit]) -> list[str]:
+    return [
+        _clean_text(unit.source.text)
+        for unit in units
+        if unit.type != "image" and unit.source.text.strip()
+    ]
+
+
+def _ocr_text_duplicates_native_text(text: str, native_texts: list[str]) -> bool:
+    compact_text = _compact_text_for_ocr_dedupe(text)
+    if not compact_text:
         return False
-    for unit in document.units:
-        if unit.type == "image":
-            continue
-        if unit.source.text.strip():
-            return False
-    return True
+    return any(
+        compact_text == compact_native or compact_text in compact_native
+        for native_text in native_texts
+        if (compact_native := _compact_text_for_ocr_dedupe(native_text))
+    )
+
+
+def _compact_text_for_ocr_dedupe(text: str) -> str:
+    return re.sub(r"\s+", "", text)
 
 
 def _hwp5_ocr_warning(asset_id: str, message: str) -> dict[str, Any]:
@@ -1134,7 +1150,11 @@ def _parse_section(
             else:
                 parsed.blocks.append(line_block)
             parsed.saw_drawing = True
-        elif text or gso_bbox is not None or gso_shape_type is not None:
+        elif (
+            text
+            or gso_bbox is not None
+            or (gso_shape_type is not None and gso_shape_type != "picture")
+        ):
             shape_type = gso_shape_type or ("textbox" if text else "shape")
             text_block = _TextBlock(
                 text,
