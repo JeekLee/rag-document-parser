@@ -13,6 +13,8 @@ from typing import Any
 
 from rag_document_parser import Hwp5Backend
 
+_OLE_COMPOUND_HEADER = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
 
 def main() -> None:
     args = _parse_args()
@@ -96,17 +98,47 @@ def _scan_mc_path(
     mc_command: str,
 ) -> dict[str, Any]:
     raw = _read_mc_path(mc_path, mc_command=mc_command)
+    source_uri = _mc_path_to_s3_uri(mc_path)
+    if not _has_hwp5_container_signature(raw):
+        return _skipped_document_summary(
+            source_uri=source_uri,
+            raw_bytes=len(raw),
+            reason="non_hwp5_signature",
+        )
     started = time.perf_counter()
     parsed = Hwp5Backend().parse(raw, ".hwp")
     elapsed = time.perf_counter() - started
     return _document_summary(
-        source_uri=_mc_path_to_s3_uri(mc_path),
+        source_uri=source_uri,
         raw_bytes=len(raw),
         elapsed_seconds=elapsed,
         units=[unit.to_dict() for unit in parsed.units],
         assets=[asset.__dict__ for asset in parsed.assets],
         warnings=parsed.quality_warnings,
     )
+
+
+def _has_hwp5_container_signature(raw: bytes) -> bool:
+    return raw.startswith(_OLE_COMPOUND_HEADER)
+
+
+def _skipped_document_summary(
+    *,
+    source_uri: str,
+    raw_bytes: int,
+    reason: str,
+) -> dict[str, Any]:
+    summary = _document_summary(
+        source_uri=source_uri,
+        raw_bytes=raw_bytes,
+        elapsed_seconds=0.0,
+        units=[],
+        assets=[],
+        warnings=[{"type": "non_hwp5_skipped"}],
+    )
+    summary["skipped"] = True
+    summary["skip_reason"] = reason
+    return summary
 
 
 def _read_mc_path(mc_path: str, *, mc_command: str) -> bytes:

@@ -274,6 +274,44 @@ def test_read_mc_path_streams_object_bytes_from_stdout(monkeypatch):
     ]
 
 
+def test_hwp5_signature_detection_requires_ole_compound_header():
+    scan_hwp5 = _load_scan_script()
+
+    assert scan_hwp5._has_hwp5_container_signature(
+        b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1rest"
+    )
+    assert not scan_hwp5._has_hwp5_container_signature(b"PK\x03\x04zip")
+    assert not scan_hwp5._has_hwp5_container_signature(b"<html></html>")
+
+
+def test_scan_mc_path_skips_non_hwp5_signature_without_parsing(monkeypatch):
+    scan_hwp5 = _load_scan_script()
+
+    class FailingBackend:
+        def parse(self, data, suffix):
+            raise AssertionError("parser should not be called")
+
+    monkeypatch.setattr(
+        scan_hwp5,
+        "_read_mc_path",
+        lambda mc_path, *, mc_command: b"PK\x03\x04not-hwp5",
+    )
+    monkeypatch.setattr(scan_hwp5, "Hwp5Backend", FailingBackend)
+
+    document = scan_hwp5._scan_mc_path(
+        "local/clic/raw/not-really-hwp5.hwp",
+        mc_command="docker exec clic-minio mc",
+    )
+
+    assert document["source_uri"] == "s3://clic/raw/not-really-hwp5.hwp"
+    assert document["skipped"] is True
+    assert document["skip_reason"] == "non_hwp5_signature"
+    assert document["warning_types"] == ["non_hwp5_skipped"]
+    assert document["unit_counts"] == {}
+    assert document["tables"]["count"] == 0
+    assert document["diagrams"]["count"] == 0
+
+
 def _table_unit(
     unit_id: str,
     table_id: str,
