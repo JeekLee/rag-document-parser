@@ -414,6 +414,165 @@ def test_render_structured_table_fills_column_gaps_from_cell_ids():
     assert "<td>left</td><td>&nbsp;</td><td>&nbsp;</td><td>right</td>" in html
 
 
+def test_render_structured_table_does_not_fill_cells_covered_by_rowspan():
+    from rag_document_parser.renderer.evidence_unit_render import render_evidence_html
+
+    html = render_evidence_html(
+        {
+            "kind": "table",
+            "format": "structured_table",
+            "content": {
+                "caption": None,
+                "columns": [
+                    {"id": "c1", "text": "처방명"},
+                    {"id": "c2", "text": "한방"},
+                    {"id": "c3", "text": "양방"},
+                    {"id": "c4", "text": "분류"},
+                    {"id": "c5", "text": "적응증"},
+                ],
+                "header_rows": [],
+                "rows": [
+                    {
+                        "index": 1,
+                        "cells": [
+                            {
+                                "column_id": "c1",
+                                "text": "1. 가미소요산",
+                                "rowspan": 3,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                            {
+                                "column_id": "c2",
+                                "text": "수 혈",
+                                "rowspan": 1,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                            {
+                                "column_id": "c3",
+                                "text": "상세불명",
+                                "rowspan": 1,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                            {
+                                "column_id": "c4",
+                                "text": "E13.2",
+                                "rowspan": 1,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                            {
+                                "column_id": "c5",
+                                "text": "월경통",
+                                "rowspan": 3,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                        ],
+                    },
+                    {
+                        "index": 2,
+                        "cells": [
+                            {
+                                "column_id": "c2",
+                                "text": "산후기울증",
+                                "rowspan": 1,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                            {
+                                "column_id": "c3",
+                                "text": "산욕기 장애",
+                                "rowspan": 1,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                            {
+                                "column_id": "c4",
+                                "text": "I05.0",
+                                "rowspan": 1,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                        ],
+                    },
+                    {
+                        "index": 3,
+                        "cells": [
+                            {
+                                "column_id": "c2",
+                                "text": "심 화 항 염",
+                                "rowspan": 1,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                            {
+                                "column_id": "c3",
+                                "text": "뇌허혈",
+                                "rowspan": 1,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                            {
+                                "column_id": "c4",
+                                "text": "C21.1",
+                                "rowspan": 1,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                        ],
+                    },
+                ],
+            },
+        }
+    )
+
+    assert (
+        "<tr>"
+        '<td rowspan="3">1. 가미소요산</td>'
+        "<td>수 혈</td><td>상세불명</td><td>E13.2</td>"
+        '<td rowspan="3">월경통</td>'
+        "</tr>"
+        "<tr><td>산후기울증</td><td>산욕기 장애</td><td>I05.0</td></tr>"
+        "<tr><td>심 화 항 염</td><td>뇌허혈</td><td>C21.1</td></tr>"
+    ) in html
+    assert "<tr><td>&nbsp;</td><td>산후기울증</td>" not in html
+
+
+def test_render_structured_table_preserves_multiline_cell_text():
+    from rag_document_parser.renderer.evidence_unit_render import render_evidence_html
+
+    html = render_evidence_html(
+        {
+            "kind": "table",
+            "format": "structured_table",
+            "content": {
+                "caption": None,
+                "columns": [{"id": "c1", "text": "항목"}],
+                "header_rows": [],
+                "rows": [
+                    {
+                        "index": 1,
+                        "cells": [
+                            {
+                                "column_id": "c1",
+                                "text": "첫 줄\n둘째 줄",
+                                "rowspan": 1,
+                                "colspan": 1,
+                                "children": [],
+                            }
+                        ],
+                    }
+                ],
+            },
+        }
+    )
+
+    assert "<td>첫 줄<br>둘째 줄</td>" in html
+
+
 def test_render_rag_chunks_html_shows_final_evidence_and_chunk_fields():
     from rag_document_parser.renderer.evidence_unit_render import render_rag_chunks_html
 
@@ -1003,7 +1162,11 @@ def test_render_label_only_diagram_as_original_like_flowchart():
     assert 'class="diagram-flowchart-step">①급여대상여부확인신청</div>' in html
     assert 'class="diagram-flowchart-box">수급권자</div>' in html
     assert 'class="diagram-flowchart-arrow">→</span>' in html
-    assert "⑥공제금 지급 ③과다본인부담금<br>공제예정 통보" in html
+    assert 'class="diagram-flowchart-step">⑤차기 지급진료비에서 공제</div>' in html
+    assert 'class="diagram-flowchart-step">②미반환시 신고</div>' in html
+    assert 'class="diagram-flowchart-step">⑥공제금 지급</div>' in html
+    assert 'class="diagram-flowchart-step">③과다본인부담금<br>공제예정 통보</div>' in html
+    assert "⑥공제금 지급 ③과다본인부담금" not in html
     assert "⑦처리결과<br>통보" in html
     assert 'class="diagram-flowchart-note">' in html
 

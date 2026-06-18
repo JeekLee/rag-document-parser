@@ -6,6 +6,7 @@ from html import escape
 from typing import Any
 
 _DIAGRAM_STEP_RE = re.compile(r"^(?:[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]|\d+[.)])")
+_DIAGRAM_STEP_TOKEN_RE = re.compile(r"(?:[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]|\d+[.)])")
 
 
 def render_evidence_units_html(
@@ -311,17 +312,14 @@ def _render_structured_table(
     ]
     if header_rows:
         html.append("<thead>")
-        for row in header_rows:
-            html.append("<tr>")
-            html.append(
-                _render_table_row_cells(
-                    row.get("cells", []),
-                    "th",
-                    assets_by_id,
-                    column_count=len(columns),
-                )
+        html.append(
+            _render_table_rows(
+                header_rows,
+                "th",
+                assets_by_id,
+                column_count=len(columns),
             )
-            html.append("</tr>")
+        )
         html.append("</thead>")
     elif columns:
         html.append("<thead><tr>")
@@ -330,19 +328,14 @@ def _render_structured_table(
             html.append(f"<th>{text}</th>")
         html.append("</tr></thead>")
     html.append("<tbody>")
-    for row in rows:
-        html.append("<tr>")
-        html.append(
-            _render_table_row_cells(
-                row.get("cells", []),
-                "td",
-                assets_by_id,
-                column_count=len(columns),
-            )
+    html.append(
+        _render_table_rows(
+            rows,
+            "td",
+            assets_by_id,
+            column_count=len(columns),
         )
-        if not row.get("cells") and columns:
-            html.append(f'<td colspan="{len(columns)}">&nbsp;</td>')
-        html.append("</tr>")
+    )
     if not rows and columns:
         html.append(f'<tr><td colspan="{len(columns)}">&nbsp;</td></tr>')
     html.append("</tbody></table>")
@@ -792,7 +785,7 @@ def _group_diagram_section_items(items: list[str]) -> list[dict[str, Any]]:
         if _is_diagram_step(text):
             if actors:
                 flush_route()
-            pending_steps.append(text)
+            pending_steps.extend(_split_diagram_step_labels(text))
             continue
         if _looks_like_diagram_actor(text):
             actors.append(text)
@@ -848,6 +841,23 @@ def _is_diagram_step(text: str) -> bool:
     return bool(_DIAGRAM_STEP_RE.match(text.strip()))
 
 
+def _split_diagram_step_labels(text: str) -> list[str]:
+    stripped = text.strip()
+    if not stripped:
+        return []
+    matches = list(_DIAGRAM_STEP_TOKEN_RE.finditer(stripped))
+    if not matches or matches[0].start() != 0:
+        return [stripped]
+    labels: list[str] = []
+    for index, match in enumerate(matches):
+        start = match.start()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(stripped)
+        label = stripped[start:end].strip()
+        if label:
+            labels.append(label)
+    return labels or [stripped]
+
+
 def _looks_like_diagram_actor(text: str) -> bool:
     stripped = text.strip()
     if _is_diagram_step(stripped) or _is_diagram_note(stripped):
@@ -868,15 +878,53 @@ def _escape_multiline(text: str) -> str:
     return "<br>".join(escape(part) or "&nbsp;" for part in text.splitlines())
 
 
+def _render_table_rows(
+    rows: list[dict[str, Any]],
+    tag: str,
+    assets_by_id: dict[str, dict[str, Any]],
+    *,
+    column_count: int,
+) -> str:
+    html = []
+    active_rowspans: dict[int, int] = {}
+    for row in rows:
+        cells = row.get("cells", [])
+        row_html, active_rowspans = _render_table_row_cells(
+            cells,
+            tag,
+            assets_by_id,
+            column_count=column_count,
+            active_rowspans=active_rowspans,
+        )
+        html.append(f"<tr>{row_html}</tr>")
+    return "".join(html)
+
+
 def _render_table_row_cells(
     cells: Any,
     tag: str,
     assets_by_id: dict[str, dict[str, Any]],
     *,
     column_count: int,
-) -> str:
+    active_rowspans: dict[int, int] | None = None,
+) -> tuple[str, dict[int, int]]:
+    active_rowspans = active_rowspans or {}
+    next_rowspans = {
+        column: remaining - 1
+        for column, remaining in active_rowspans.items()
+        if remaining > 1
+    }
     if not isinstance(cells, list):
-        return ""
+        return "", next_rowspans
+    if not cells and column_count:
+        return (
+            _render_empty_table_row_cells(
+                tag,
+                column_count=column_count,
+                active_rowspans=active_rowspans,
+            ),
+            next_rowspans,
+        )
     html = []
     current_column = 1
     sorted_cells = sorted(
@@ -886,13 +934,45 @@ def _render_table_row_cells(
     for cell in sorted_cells:
         column_number = _column_id_number(str(cell.get("column_id", "c1")))
         while current_column < column_number <= column_count:
-            html.append(f"<{tag}>&nbsp;</{tag}>")
+            if current_column not in active_rowspans:
+                html.append(f"<{tag}>&nbsp;</{tag}>")
             current_column += 1
         html.append(_render_table_cell(cell, tag, assets_by_id))
+        rowspan = _positive_int(cell.get("rowspan"))
+        colspan = _positive_int(cell.get("colspan"))
+        if rowspan > 1:
+            for column in range(column_number, column_number + colspan):
+                next_rowspans[column] = max(
+                    next_rowspans.get(column, 0),
+                    rowspan - 1,
+                )
         current_column = max(
             current_column,
-            column_number + _positive_int(cell.get("colspan")),
+            column_number + colspan,
         )
+    return "".join(html), next_rowspans
+
+
+def _render_empty_table_row_cells(
+    tag: str,
+    *,
+    column_count: int,
+    active_rowspans: dict[int, int],
+) -> str:
+    html = []
+    column = 1
+    while column <= column_count:
+        if column in active_rowspans:
+            column += 1
+            continue
+        start = column
+        while column <= column_count and column not in active_rowspans:
+            column += 1
+        width = column - start
+        if width == 1:
+            html.append(f"<{tag}>&nbsp;</{tag}>")
+        elif width > 1:
+            html.append(f'<{tag} colspan="{width}">&nbsp;</{tag}>')
     return "".join(html)
 
 
@@ -910,7 +990,8 @@ def _render_table_cell(
         attrs.append(f'colspan="{colspan}"')
     attrs_text = (" " + " ".join(attrs)) if attrs else ""
     children = _render_children(cell.get("children", []), assets_by_id)
-    text = escape(str(cell.get("text", "")))
+    raw_text = str(cell.get("text", ""))
+    text = _escape_multiline(raw_text) if raw_text else ""
     if not text and not children:
         text = "&nbsp;"
     return f"<{tag}{attrs_text}>{text}{children}</{tag}>"
