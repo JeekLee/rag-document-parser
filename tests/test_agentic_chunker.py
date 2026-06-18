@@ -187,7 +187,8 @@ def test_agentic_chunker_merges_adjacent_chunks_across_window_boundary():
     assert len(chunks) == 1
     chunk = chunks[0]
     assert chunk.id == "chunk-1"
-    assert chunk.type == "text"
+    assert [item.type for item in chunk.evidence.items] == ["text", "text", "text", "text"]
+    assert chunk.metadata["common"]["unit_types"] == ["text"]
     assert chunk.summary == "네 설명을 하나로 제공한다."
     assert chunk.keywords == ["설명"]
     assert chunk.questions == ["네 설명은 무엇인가요?"]
@@ -552,12 +553,12 @@ def test_agentic_chunker_materializes_cross_kind_chunk_from_plan():
 
     assert len(chunks) == 1
     chunk = chunks[0]
-    assert chunk.type == "mixed"
     assert chunk.summary == "기준 설명과 표를 함께 제공한다."
     assert chunk.keywords == ["기준", "표"]
     assert chunk.questions == ["기준 설명과 표에는 무엇이 있나요?"]
     assert chunk.metadata["source_unit_ids"] == ["b1", "b2"]
     assert chunk.metadata["context_unit_ids"] == []
+    assert chunk.metadata["common"]["unit_types"] == ["text", "table"]
     assert [item.type for item in chunk.evidence.items] == ["text", "table"]
     assert chunk.evidence.items[0].content == "기준 설명"
     assert chunk.evidence.items[1].content["rows"][1]["index"] == 2

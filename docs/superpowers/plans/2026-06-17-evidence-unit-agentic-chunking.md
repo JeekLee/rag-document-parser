@@ -810,12 +810,12 @@ def test_agentic_chunker_materializes_cross_kind_chunk_from_plan():
 
     assert len(chunks) == 1
     chunk = chunks[0]
-    assert chunk.type == "mixed"
     assert chunk.summary == "기준 설명과 표를 함께 제공한다."
     assert chunk.keywords == ["기준", "표"]
     assert chunk.questions == ["기준 설명과 표에는 무엇이 있나요?"]
     assert chunk.metadata["source_unit_ids"] == ["b1", "b2"]
     assert chunk.metadata["context_unit_ids"] == []
+    assert chunk.metadata["common"]["unit_types"] == ["text", "table"]
     assert [item.type for item in chunk.evidence.items] == ["text", "table"]
     assert chunk.evidence.items[0].content == "기준 설명"
     assert chunk.evidence.items[1].content["rows"][1]["index"] == 2
@@ -1106,11 +1106,9 @@ def _chunk_from_items(
     summary = plan.get("summary") if isinstance(plan.get("summary"), str) else _fallback_summary(units)
     keywords = _strings(plan.get("keywords")) or _fallback_keywords(units)
     questions = _strings(plan.get("questions")) or _fallback_questions(title or summary)
-    chunk_type = _chunk_type(evidence_items)
     return RagChunk(
         id=f"chunk-{index}",
-        type=chunk_type,
-        source=SourceEvidence(kind=chunk_type, text="\n\n".join(source_parts)),
+        source=SourceEvidence(kind="chunk", text="\n\n".join(source_parts)),
         evidence=Evidence(items=evidence_items),
         summary=summary,
         keywords=keywords,
@@ -1128,7 +1126,7 @@ def _chunk_from_items(
     )
 ```
 
-Add `_strings`, `_context_unit_ids`, `_unique`, `_chunk_type`, `_fallback_summary`, `_fallback_keywords`, `_fallback_questions`, `_fallback_chunks`, and `_reindex_chunk`:
+Add `_strings`, `_context_unit_ids`, `_unique`, `_fallback_summary`, `_fallback_keywords`, `_fallback_questions`, `_fallback_chunks`, and `_reindex_chunk`:
 
 ```python
 def _strings(value: Any) -> list[str]:
@@ -1155,11 +1153,6 @@ def _unique(values: list[str]) -> list[str]:
         if value not in result:
             result.append(value)
     return result
-
-
-def _chunk_type(items: list[EvidenceItem]) -> str:
-    types = _unique([item.type for item in items])
-    return types[0] if len(types) == 1 else "mixed"
 
 
 def _fallback_summary(units: list[EvidenceUnit]) -> str:
@@ -1195,8 +1188,7 @@ def _fallback_chunks(units: list[EvidenceUnit], reason: str) -> list[RagChunk]:
         chunks.append(
             RagChunk(
                 id=f"chunk-{index}",
-                type=unit.type,
-                source=SourceEvidence(kind=unit.type, text=unit.source.text),
+                source=SourceEvidence(kind="chunk", text=unit.source.text),
                 evidence=Evidence(items=[item]),
                 summary=_fallback_summary([unit]),
                 keywords=_fallback_keywords([unit]),
@@ -1215,7 +1207,6 @@ def _fallback_chunks(units: list[EvidenceUnit], reason: str) -> list[RagChunk]:
 def _reindex_chunk(index: int, chunk: RagChunk) -> RagChunk:
     return RagChunk(
         id=f"chunk-{index}",
-        type=chunk.type,
         source=chunk.source,
         evidence=chunk.evidence,
         summary=chunk.summary,
