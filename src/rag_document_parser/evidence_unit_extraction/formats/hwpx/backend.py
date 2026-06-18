@@ -326,8 +326,6 @@ def _structured_table(
 
     rows: list[dict[str, object]] = []
     for raw_cells in data_raw_rows:
-        if _row_is_blank(raw_cells):
-            continue
         rows.append(
             {
                 "index": len(rows) + 1,
