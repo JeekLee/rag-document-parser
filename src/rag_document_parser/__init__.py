@@ -5,7 +5,7 @@ from .extract.backend import DocumentBackend, ParsedDocument
 from .extract.formats.hwp5 import Hwp5Backend
 from .extract.formats.hwpx import HwpxBackend
 from .extract.formats.markdown import MarkdownBackend
-from .extract.formats.pdf import PdfBackend
+from .extract.formats.pdf import PdfBackend, PdfOcrConfig
 from .models import (
     DocumentAsset,
     Evidence,
@@ -30,6 +30,7 @@ __all__ = [
     "MarkdownBackend",
     "PendingAsset",
     "PdfBackend",
+    "PdfOcrConfig",
     "ParseResult",
     "ParsedDocument",
     "RagChunk",

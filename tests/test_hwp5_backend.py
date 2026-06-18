@@ -85,6 +85,66 @@ def test_hwp5_backend_keeps_source_and_evidence_payloads_separate():
     assert table_unit.source.text != table_unit.evidence.content
 
 
+def test_hwp5_table_source_disambiguates_duplicate_header_labels():
+    from rag_document_parser.extract.formats.hwp5 import backend as hwp5_backend
+
+    def cell(
+        column_id: str,
+        text: str,
+        *,
+        rowspan: int = 1,
+        colspan: int = 1,
+    ) -> dict[str, object]:
+        return {
+            "column_id": column_id,
+            "text": text,
+            "rowspan": rowspan,
+            "colspan": colspan,
+            "children": [],
+        }
+
+    table = {
+        "columns": [
+            {"id": "c1", "text": "구분"},
+            {"id": "c2", "text": "구분"},
+            {"id": "c3", "text": "EDI코드"},
+        ],
+        "header_rows": [
+            {
+                "index": 1,
+                "cells": [
+                    cell("c1", "구분", colspan=2),
+                    cell("c3", "EDI코드"),
+                ],
+            }
+        ],
+        "rows": [
+            {
+                "index": 1,
+                "cells": [
+                    cell("c1", "기본 초음파", rowspan=2),
+                    cell("c2", "단순초음파(Ⅰ)"),
+                    cell("c3", "EB401"),
+                ],
+            },
+            {
+                "index": 2,
+                "cells": [
+                    cell("c2", "단순초음파(Ⅱ)"),
+                    cell("c3", "EB402"),
+                ],
+            },
+        ],
+    }
+
+    assert hwp5_backend._table_source_text(table) == (
+        "table: 3 columns\n"
+        "header 1: cols 1-2: 구분; col 3: EDI코드\n"
+        "row 1: 구분 [1]: 기본 초음파; 구분 [2]: 단순초음파(Ⅰ); EDI코드: EB401\n"
+        "row 2: 구분 [2]: 단순초음파(Ⅱ); EDI코드: EB402"
+    )
+
+
 def test_hwp5_backend_reports_missing_olefile_dependency(monkeypatch):
     from rag_document_parser.extract.formats.hwp5.backend import Hwp5Backend
 

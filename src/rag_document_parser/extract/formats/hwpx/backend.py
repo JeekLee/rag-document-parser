@@ -8,6 +8,11 @@ from xml.etree import ElementTree as ET
 
 from ....models import Evidence, EvidenceUnit, PendingAsset, SourceEvidence
 from ...backend import ParsedDocument
+from ...table_source import (
+    build_column_source_labels as _build_column_source_labels,
+    common_semantic_header_prefix as _common_semantic_header_prefix,
+    is_semantic_column_label as _is_semantic_column_label,
+)
 
 _HP = "http://www.hancom.co.kr/hwpml/2011/paragraph"
 _OPF = "http://www.idpf.org/2007/opf/"
@@ -285,7 +290,8 @@ def _header_cell_contributes_to_column(
     start = int(cell["col_addr"])
     end = start + int(cell["colspan"])
     return column_index == start or (
-        start < column_index < end and row_index < last_header_row
+        start < column_index < end
+        and (row_index < last_header_row or last_header_row == 0)
     )
 
 
@@ -325,6 +331,23 @@ def _row_refines_previous_header(
     ]
     if not groups:
         return False
+    group_ranges = [
+        (
+            int(group["col_addr"]),
+            int(group["col_addr"]) + int(group["colspan"]),
+        )
+        for group in groups
+    ]
+    for cell in row:
+        if not str(cell["text"]).strip():
+            continue
+        cell_start = int(cell["col_addr"])
+        cell_end = cell_start + int(cell["colspan"])
+        if not any(
+            group_start <= cell_start and cell_end <= group_end
+            for group_start, group_end in group_ranges
+        ):
+            return False
     for group in groups:
         group_start = int(group["col_addr"])
         group_end = group_start + int(group["colspan"])
@@ -487,10 +510,7 @@ def _cell_addr(cell: ET.Element, name: str, default: int) -> int:
 def _table_source_text(table: dict[str, object]) -> str:
     columns = table["columns"]
     rows = table["rows"]
-    column_text = {
-        str(column["id"]): _column_source_label(column)
-        for column in columns
-    }
+    column_text = _build_column_source_labels(columns, _column_source_label, rows)
     lines: list[str] = []
     if columns:
         lines.append(f"table: {len(columns)} columns")
@@ -567,24 +587,6 @@ def _cell_source_label(
         if colspan == 1 and _is_semantic_column_label(labels[0]):
             return labels[0]
     return _cell_coordinate_label(column_id, colspan)
-
-
-def _is_semantic_column_label(label: str) -> bool:
-    return bool(label) and not label.startswith("col ")
-
-
-def _common_semantic_header_prefix(labels: list[str]) -> str | None:
-    if not labels or not all(_is_semantic_column_label(label) for label in labels):
-        return None
-    split_labels = [label.split(" / ") for label in labels]
-    prefix: list[str] = []
-    for parts in zip(*split_labels):
-        if len(set(parts)) != 1:
-            break
-        prefix.append(parts[0])
-    if not prefix:
-        return None
-    return " / ".join(prefix)
 
 
 def _cell_coordinate_label(column_id: str, colspan: int) -> str:

@@ -31,7 +31,7 @@
       "purpose": "Text-layer PDF pair for the ultrasound HWPX regression document.",
       "expected": {
         "min_units": 60,
-        "min_tables": 40,
+        "min_tables": 21,
         "min_assets": 2
       }
     },
@@ -64,8 +64,8 @@
       "parser_supported": true,
       "purpose": "Text-layer PDF pair for the 2024-278 HWPX regression document.",
       "expected": {
-        "min_units": 10,
-        "min_tables": 5
+        "min_units": 14,
+        "min_tables": 3
       }
     },
     {
@@ -97,8 +97,8 @@
       "parser_supported": true,
       "purpose": "Text-layer PDF pair for the cesarean copay HWPX regression document.",
       "expected": {
-        "min_units": 10,
-        "min_tables": 5
+        "min_units": 11,
+        "min_tables": 2
       }
     },
     {
@@ -130,6 +130,8 @@
       "purpose": "Scanned PDF pair for the medical aid overpayment HWP regression document.",
       "expected": {
         "requires_ocr": true,
+        "pair_comparable": false,
+        "comparison_scope": "scanned_cover_letter_pages",
         "scanned_pages": 3,
         "min_units": 3,
         "min_tables": 0

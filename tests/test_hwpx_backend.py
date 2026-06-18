@@ -499,3 +499,89 @@ def test_hwpx_table_treats_colspan_only_second_row_as_header():
         "row 1: 검사 / 일반: 복부; 검사 / 정밀: 심장; "
         "결과 / 판정: 급여; 결과 / 근거: 고시"
     )
+
+
+def test_hwpx_table_does_not_promote_grouped_code_rows_to_headers():
+    from rag_document_parser import HwpxBackend
+
+    table = _table(
+        [
+            _text_cell("구분", colspan=2, row_addr=0, col_addr=0),
+            _text_cell("EDI코드", row_addr=0, col_addr=2),
+        ],
+        [
+            _text_cell("기본 초음파", rowspan=2, row_addr=1, col_addr=0),
+            _text_cell("단순초음파(Ⅰ)", row_addr=1, col_addr=1),
+            _text_cell("EB401", row_addr=1, col_addr=2),
+        ],
+        [
+            _text_cell("단순초음파(Ⅱ)", row_addr=2, col_addr=1),
+            _text_cell("EB402", row_addr=2, col_addr=2),
+        ],
+        [
+            _text_cell("진단 초음파", rowspan=2, row_addr=3, col_addr=0),
+            _text_cell("간·담낭·담도·비장·췌장(일반)", row_addr=3, col_addr=1),
+            _text_cell("EB441", row_addr=3, col_addr=2),
+        ],
+        [
+            _text_cell("간·담낭·담도·비장·췌장(정밀)", row_addr=4, col_addr=1),
+            _text_cell("EB442", row_addr=4, col_addr=2),
+        ],
+    )
+    xml = (
+        f'<hp:sec xmlns:hp="{HP}">'
+        f"<hp:p><hp:run>{table}</hp:run></hp:p>"
+        "</hp:sec>"
+    )
+
+    parsed = HwpxBackend().parse(_make_hwpx(xml), ".hwpx")
+
+    content = parsed.units[0].evidence.content
+    assert [column["text"] for column in content["columns"]] == [
+        "구분",
+        "구분",
+        "EDI코드",
+    ]
+    assert len(content["header_rows"]) == 1
+    assert [
+        (cell["column_id"], cell["text"], cell["rowspan"], cell["colspan"])
+        for cell in content["header_rows"][0]["cells"]
+    ] == [
+        ("c1", "구분", 1, 2),
+        ("c3", "EDI코드", 1, 1),
+    ]
+    assert [
+        [
+            (cell["column_id"], cell["text"], cell["rowspan"], cell["colspan"])
+            for cell in row["cells"]
+        ]
+        for row in content["rows"]
+    ] == [
+        [
+            ("c1", "기본 초음파", 2, 1),
+            ("c2", "단순초음파(Ⅰ)", 1, 1),
+            ("c3", "EB401", 1, 1),
+        ],
+        [
+            ("c2", "단순초음파(Ⅱ)", 1, 1),
+            ("c3", "EB402", 1, 1),
+        ],
+        [
+            ("c1", "진단 초음파", 2, 1),
+            ("c2", "간·담낭·담도·비장·췌장(일반)", 1, 1),
+            ("c3", "EB441", 1, 1),
+        ],
+        [
+            ("c2", "간·담낭·담도·비장·췌장(정밀)", 1, 1),
+            ("c3", "EB442", 1, 1),
+        ],
+    ]
+    assert parsed.units[0].source.text == (
+        "table: 3 columns\n"
+        "header 1: cols 1-2: 구분; col 3: EDI코드\n"
+        "row 1: 구분 [1]: 기본 초음파; 구분 [2]: 단순초음파(Ⅰ); EDI코드: EB401\n"
+        "row 2: 구분 [2]: 단순초음파(Ⅱ); EDI코드: EB402\n"
+        "row 3: 구분 [1]: 진단 초음파; 구분 [2]: 간·담낭·담도·비장·췌장(일반); "
+        "EDI코드: EB441\n"
+        "row 4: 구분 [2]: 간·담낭·담도·비장·췌장(정밀); EDI코드: EB442"
+    )
