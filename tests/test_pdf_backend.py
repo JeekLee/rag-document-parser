@@ -526,6 +526,59 @@ def test_pdf_backend_uses_semantic_source_label_for_mixed_colspan_headers():
     assert label == "개정 / 비고"
 
 
+def test_pdf_backend_disambiguates_duplicate_source_labels():
+    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
+
+    table = {
+        "columns": [
+            {"id": "c1", "text": "구분"},
+            {"id": "c2", "text": "구분"},
+            {"id": "c3", "text": "EDI코드"},
+        ],
+        "header_rows": [
+            {
+                "index": 1,
+                "cells": [
+                    pdf_backend._simple_cell("c1", "구분", colspan=2),
+                    pdf_backend._simple_cell("c3", "EDI코드"),
+                ],
+            }
+        ],
+        "rows": [
+            {
+                "index": 1,
+                "cells": [
+                    pdf_backend._simple_cell("c1", "기본 초음파", rowspan=2),
+                    pdf_backend._simple_cell("c2", "단순초음파(Ⅰ)"),
+                    pdf_backend._simple_cell("c3", "EB401"),
+                ],
+            },
+            {
+                "index": 2,
+                "cells": [
+                    pdf_backend._simple_cell("c2", "단순초음파(Ⅱ)"),
+                    pdf_backend._simple_cell("c3", "EB402"),
+                ],
+            },
+            {
+                "index": 3,
+                "cells": [
+                    pdf_backend._simple_cell("c1", "통합 구분", colspan=2),
+                    pdf_backend._simple_cell("c3", "EB499"),
+                ],
+            },
+        ],
+    }
+
+    assert pdf_backend._table_source_text(table) == (
+        "table: 3 columns\n"
+        "header 1: cols 1-2: 구분; col 3: EDI코드\n"
+        "row 1: 구분 [1]: 기본 초음파; 구분 [2]: 단순초음파(Ⅰ); EDI코드: EB401\n"
+        "row 2: 구분 [2]: 단순초음파(Ⅱ); EDI코드: EB402\n"
+        "row 3: 구분: 통합 구분; EDI코드: EB499"
+    )
+
+
 def test_pdf_backend_combines_single_group_header_rows(monkeypatch):
     from rag_document_parser.extract.formats.pdf import PdfBackend
 

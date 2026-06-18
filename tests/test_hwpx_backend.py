@@ -576,3 +576,12 @@ def test_hwpx_table_does_not_promote_grouped_code_rows_to_headers():
             ("c3", "EB442", 1, 1),
         ],
     ]
+    assert parsed.units[0].source.text == (
+        "table: 3 columns\n"
+        "header 1: cols 1-2: 구분; col 3: EDI코드\n"
+        "row 1: 구분 [1]: 기본 초음파; 구분 [2]: 단순초음파(Ⅰ); EDI코드: EB401\n"
+        "row 2: 구분 [2]: 단순초음파(Ⅱ); EDI코드: EB402\n"
+        "row 3: 구분 [1]: 진단 초음파; 구분 [2]: 간·담낭·담도·비장·췌장(일반); "
+        "EDI코드: EB441\n"
+        "row 4: 구분 [2]: 간·담낭·담도·비장·췌장(정밀); EDI코드: EB442"
+    )
