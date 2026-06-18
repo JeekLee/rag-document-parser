@@ -73,3 +73,4 @@ def test_legacy_import_paths_are_removed():
     assert importlib.util.find_spec("rag_document_parser.llm") is None
     assert importlib.util.find_spec("rag_document_parser.parser") is None
     assert importlib.util.find_spec("rag_document_parser.enrichment") is None
+    assert importlib.util.find_spec("rag_document_parser.input") is None

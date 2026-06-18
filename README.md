@@ -99,10 +99,9 @@ for chunk in chunks:
 The package is organized around the document pipeline:
 
 ```text
-input -> evidence_unit_extraction EvidenceUnit -> agentic chunk -> RagChunk
+source -> evidence_unit_extraction EvidenceUnit -> agentic chunk -> RagChunk
 ```
 
-- `input/`: raw input normalization and suffix normalization.
 - `evidence_unit_extraction/`: EvidenceUnit extraction, asset upload/resolve,
   backend registry, and shared evidence payload schema helpers.
 - `evidence_unit_extraction/formats/<format>/backend.py`: format-specific
