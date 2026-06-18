@@ -1493,6 +1493,16 @@ def _decode_stream(raw: bytes, compressed: bool) -> bytes:
         return zlib.decompress(raw)
 
 
+def _decode_bin_data_stream(raw: bytes, compressed: bool) -> bytes:
+    if not compressed:
+        return raw
+    try:
+        return _decode_stream(raw, compressed=True)
+    except zlib.error:
+        # Some HWP5 files mix deflated BinData streams with raw image bytes.
+        return raw
+
+
 def _read_flags(ole: object) -> int:
     data = ole.openstream("FileHeader").read()
     if len(data) < 40:
@@ -1551,7 +1561,7 @@ def _load_bin_data(ole: object, compressed: bool) -> dict[int, tuple[bytes, str]
         ext = match.group(2).lower()
         try:
             raw = ole.openstream(f"BinData/{name}").read()
-            result[stream_id] = (_decode_stream(raw, compressed), ext)
+            result[stream_id] = (_decode_bin_data_stream(raw, compressed), ext)
         except Exception:
             continue
     return result

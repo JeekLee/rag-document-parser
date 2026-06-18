@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import struct
+import zlib
 from pathlib import Path
 
 import pytest
@@ -669,3 +670,62 @@ def test_hwp5_picture_shape_becomes_image_asset_ref():
     assert document.assets[0].data == PNG_BYTES
     assert document.assets[0].mime == "image/png"
     assert document.assets[0].ext == "png"
+
+
+def test_hwp5_load_bin_data_keeps_raw_image_when_file_is_compressed():
+    from rag_document_parser.extract.formats.hwp5.backend import _load_bin_data
+
+    class FakeStream:
+        def __init__(self, data: bytes) -> None:
+            self._data = data
+
+        def read(self) -> bytes:
+            return self._data
+
+    class FakeOle:
+        streams = {
+            "BinData/BIN0001.png": PNG_BYTES,
+        }
+
+        def listdir(self, streams: bool = False, storages: bool = False):
+            if not streams:
+                return []
+            return [["BinData", "BIN0001.png"]]
+
+        def openstream(self, name: str) -> FakeStream:
+            return FakeStream(self.streams[name])
+
+    assert _load_bin_data(FakeOle(), compressed=True) == {
+        1: (PNG_BYTES, "png"),
+    }
+
+
+def test_hwp5_load_bin_data_still_inflates_compressed_image_stream():
+    from rag_document_parser.extract.formats.hwp5.backend import _load_bin_data
+
+    compressor = zlib.compressobj(wbits=-15)
+    compressed_png = compressor.compress(PNG_BYTES) + compressor.flush()
+
+    class FakeStream:
+        def __init__(self, data: bytes) -> None:
+            self._data = data
+
+        def read(self) -> bytes:
+            return self._data
+
+    class FakeOle:
+        streams = {
+            "BinData/BIN0001.png": compressed_png,
+        }
+
+        def listdir(self, streams: bool = False, storages: bool = False):
+            if not streams:
+                return []
+            return [["BinData", "BIN0001.png"]]
+
+        def openstream(self, name: str) -> FakeStream:
+            return FakeStream(self.streams[name])
+
+    assert _load_bin_data(FakeOle(), compressed=True) == {
+        1: (PNG_BYTES, "png"),
+    }
