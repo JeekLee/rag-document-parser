@@ -332,3 +332,45 @@ def test_pdf_ultrasound_promotes_revision_history_text_to_table():
         "경부 초음파 관련 Q&A",
         "39",
     ]
+    upper_abdomen = next(
+        unit
+        for unit in parsed.units
+        if unit.type == "table" and "1 기존 90번" in unit.source.text
+    )
+    code_table = upper_abdomen.evidence.content["rows"][0]["cells"][2]["children"][0][
+        "content"
+    ]
+    assert [
+        (cell["column_id"], cell["text"], cell["rowspan"], cell["colspan"])
+        for cell in code_table["header_rows"][1]["cells"]
+    ] == [
+        ("c1", "기본 초음파", 2, 1),
+        ("c2", "단순초음파(Ⅰ)", 1, 1),
+        ("c3", "EB401", 1, 1),
+    ]
+    assert [
+        [
+            (cell["column_id"], cell["text"], cell["rowspan"], cell["colspan"])
+            for cell in row["cells"]
+        ]
+        for row in code_table["rows"]
+    ] == [
+        [
+            ("c1", "진단 초음파", 2, 1),
+            ("c2", "간·담낭·담도·비장·췌장(일반)", 1, 1),
+            ("c3", "EB441", 1, 1),
+        ],
+        [
+            ("c2", "간·담낭·담도·비장·췌장(정밀)", 1, 1),
+            ("c3", "EB442", 1, 1),
+        ],
+        [
+            ("c1", "제한적 초음파", 2, 1),
+            ("c2", "간·담낭·담도·비장·췌장(일반)", 1, 1),
+            ("c3", "EB441001", 1, 1),
+        ],
+        [
+            ("c2", "간·담낭·담도·비장·췌장(정밀)", 1, 1),
+            ("c3", "EB442001", 1, 1),
+        ],
+    ]

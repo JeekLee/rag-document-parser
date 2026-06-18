@@ -66,6 +66,21 @@ class _FakePdf:
         return False
 
 
+def _cell_span_summary(rows):
+    return [
+        [
+            (
+                cell["column_id"],
+                cell["text"],
+                cell["rowspan"],
+                cell["colspan"],
+            )
+            for cell in row["cells"]
+        ]
+        for row in rows
+    ]
+
+
 def test_pdf_backend_extracts_evidence_units_from_text_tables_images_and_ocr(
     monkeypatch,
 ):
@@ -857,15 +872,20 @@ def test_pdf_backend_promotes_ultrasound_code_matrix_rows():
         "구분 / 단순초음파(Ⅰ) / 단순초음파(Ⅱ)",
         "EDI코드 / EB401 / EB402",
     ]
-    assert [[cell["text"] for cell in row["cells"]] for row in table["rows"]] == [
-        ["진단 초음파", "유방·액와부-일반", "EB421"],
-        ["", "유방·액와부-정밀", "EB423"],
-        ["", "자동유방초음파", "EB424"],
-        ["", "흉벽, 흉막, 늑골 등", "EB422"],
-        ["제한적 초음파", "유방·액와부-일반", "EB421001"],
-        ["", "유방·액와부-정밀", "EB423001"],
-        ["", "자동유방초음파", "EB424001"],
-        ["", "흉벽, 흉막, 늑골 등", "EB422001"],
+    assert _cell_span_summary(table["header_rows"]) == [
+        [("c1", "구분", 1, 2), ("c3", "EDI코드", 1, 1)],
+        [("c1", "기본 초음파", 2, 1), ("c2", "단순초음파(Ⅰ)", 1, 1), ("c3", "EB401", 1, 1)],
+        [("c2", "단순초음파(Ⅱ)", 1, 1), ("c3", "EB402", 1, 1)],
+    ]
+    assert _cell_span_summary(table["rows"]) == [
+        [("c1", "진단 초음파", 4, 1), ("c2", "유방·액와부-일반", 1, 1), ("c3", "EB421", 1, 1)],
+        [("c2", "유방·액와부-정밀", 1, 1), ("c3", "EB423", 1, 1)],
+        [("c2", "자동유방초음파", 1, 1), ("c3", "EB424", 1, 1)],
+        [("c2", "흉벽, 흉막, 늑골 등", 1, 1), ("c3", "EB422", 1, 1)],
+        [("c1", "제한적 초음파", 4, 1), ("c2", "유방·액와부-일반", 1, 1), ("c3", "EB421001", 1, 1)],
+        [("c2", "유방·액와부-정밀", 1, 1), ("c3", "EB423001", 1, 1)],
+        [("c2", "자동유방초음파", 1, 1), ("c3", "EB424001", 1, 1)],
+        [("c2", "흉벽, 흉막, 늑골 등", 1, 1), ("c3", "EB422001", 1, 1)],
     ]
 
 
@@ -923,11 +943,11 @@ def test_pdf_backend_promotes_ultrasound_code_matrix_rows_with_leading_group():
 
     pdf_backend._promote_ultrasound_code_matrix(table)
 
-    assert [[cell["text"] for cell in row["cells"]] for row in table["rows"]] == [
-        ["진단 초음파", "간·담낭·담도·비장·췌장(일반)", "EB441"],
-        ["", "간·담낭·담도·비장·췌장(정밀)", "EB442"],
-        ["제한적 초음파", "간·담낭·담도·비장·췌장(일반)", "EB441001"],
-        ["", "간·담낭·담도·비장·췌장(정밀)", "EB442001"],
+    assert _cell_span_summary(table["rows"]) == [
+        [("c1", "진단 초음파", 2, 1), ("c2", "간·담낭·담도·비장·췌장(일반)", 1, 1), ("c3", "EB441", 1, 1)],
+        [("c2", "간·담낭·담도·비장·췌장(정밀)", 1, 1), ("c3", "EB442", 1, 1)],
+        [("c1", "제한적 초음파", 2, 1), ("c2", "간·담낭·담도·비장·췌장(일반)", 1, 1), ("c3", "EB441001", 1, 1)],
+        [("c2", "간·담낭·담도·비장·췌장(정밀)", 1, 1), ("c3", "EB442001", 1, 1)],
     ]
 
 
@@ -988,17 +1008,17 @@ def test_pdf_backend_promotes_ultrasound_code_matrix_rows_with_known_heart_label
 
     pdf_backend._promote_ultrasound_code_matrix(table)
 
-    assert [[cell["text"] for cell in row["cells"]] for row in table["rows"]] == [
-        ["진단 초음파", "선천성 심질환 경흉부", "EB430"],
-        ["", "경흉부-단순", "EB431"],
-        ["", "경흉부-일반", "EB432"],
-        ["", "경흉부-전문", "EB433"],
-        ["", "부하-약물부하", "EB434"],
-        ["", "부하-운동부하", "EB435"],
-        ["", "태아정밀", "EB436"],
-        ["특수 초음파", "선천성 심질환 경식도", "EB610"],
-        ["", "경식도", "EB611"],
-        ["", "심장내", "EB612"],
+    assert _cell_span_summary(table["rows"]) == [
+        [("c1", "진단 초음파", 7, 1), ("c2", "선천성 심질환 경흉부", 1, 1), ("c3", "EB430", 1, 1)],
+        [("c2", "경흉부-단순", 1, 1), ("c3", "EB431", 1, 1)],
+        [("c2", "경흉부-일반", 1, 1), ("c3", "EB432", 1, 1)],
+        [("c2", "경흉부-전문", 1, 1), ("c3", "EB433", 1, 1)],
+        [("c2", "부하-약물부하", 1, 1), ("c3", "EB434", 1, 1)],
+        [("c2", "부하-운동부하", 1, 1), ("c3", "EB435", 1, 1)],
+        [("c2", "태아정밀", 1, 1), ("c3", "EB436", 1, 1)],
+        [("c1", "특수 초음파", 3, 1), ("c2", "선천성 심질환 경식도", 1, 1), ("c3", "EB610", 1, 1)],
+        [("c2", "경식도", 1, 1), ("c3", "EB611", 1, 1)],
+        [("c2", "심장내", 1, 1), ("c3", "EB612", 1, 1)],
     ]
 
 

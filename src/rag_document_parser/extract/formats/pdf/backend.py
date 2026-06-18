@@ -833,12 +833,18 @@ def _revision_history_row(line: str) -> dict[str, object] | None:
     }
 
 
-def _simple_cell(column_id: str, text: str) -> dict[str, object]:
+def _simple_cell(
+    column_id: str,
+    text: str,
+    *,
+    rowspan: int = 1,
+    colspan: int = 1,
+) -> dict[str, object]:
     return {
         "column_id": column_id,
         "text": text,
-        "rowspan": 1,
-        "colspan": 1,
+        "rowspan": rowspan,
+        "colspan": colspan,
         "children": [],
     }
 
@@ -1198,7 +1204,7 @@ def _promote_ultrasound_code_matrix(table: dict[str, object]) -> None:
         {
             "index": 2,
             "cells": [
-                _simple_cell("c1", "기본 초음파"),
+                _simple_cell("c1", "기본 초음파", rowspan=2),
                 _simple_cell("c2", "단순초음파(Ⅰ)"),
                 _simple_cell("c3", "EB401"),
             ],
@@ -1211,7 +1217,42 @@ def _promote_ultrasound_code_matrix(table: dict[str, object]) -> None:
             ],
         },
     ]
-    table["rows"] = promoted_rows
+    table["rows"] = _collapse_leading_empty_rowspan_cells(promoted_rows, "c1")
+
+
+def _collapse_leading_empty_rowspan_cells(
+    rows: list[dict[str, object]],
+    column_id: str,
+) -> list[dict[str, object]]:
+    active: dict[str, object] | None = None
+    for row in rows:
+        cells = row.get("cells")
+        if not isinstance(cells, list):
+            active = None
+            continue
+        target_index = next(
+            (
+                index
+                for index, cell in enumerate(cells)
+                if isinstance(cell, dict) and cell.get("column_id") == column_id
+            ),
+            None,
+        )
+        if target_index is None:
+            active = None
+            continue
+        cell = cells[target_index]
+        if not isinstance(cell, dict):
+            active = None
+            continue
+        if str(cell.get("text", "")).strip():
+            active = cell
+            continue
+        if active is None:
+            continue
+        active["rowspan"] = int(active.get("rowspan", 1)) + 1
+        del cells[target_index]
+    return rows
 
 
 def _row_cell_texts(row: object) -> list[str]:
