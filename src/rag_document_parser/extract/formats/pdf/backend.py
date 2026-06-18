@@ -1161,7 +1161,7 @@ def _promote_ultrasound_code_matrix(table: dict[str, object]) -> None:
         return
 
     promoted_rows: list[dict[str, object]] = []
-    for cells in row_cells[1:]:
+    for cells in row_cells:
         if len(cells) != 2:
             return
         promoted = _ultrasound_code_rows(cells[0], cells[1])
@@ -1183,9 +1183,9 @@ def _promote_ultrasound_code_matrix(table: dict[str, object]) -> None:
         return
 
     table["columns"] = [
-        {"id": "c1", "text": "구분 / 기본 초음파"},
-        {"id": "c2", "text": "구분 / 단순초음파(Ⅰ) / 단순초음파(Ⅱ)"},
-        {"id": "c3", "text": "EDI코드 / EB401 / EB402"},
+        {"id": "c1", "text": "구분"},
+        {"id": "c2", "text": "구분"},
+        {"id": "c3", "text": "EDI코드"},
     ]
     table["header_rows"] = [
         {
@@ -1199,21 +1199,6 @@ def _promote_ultrasound_code_matrix(table: dict[str, object]) -> None:
                     "children": [],
                 },
                 _simple_cell("c3", "EDI코드"),
-            ],
-        },
-        {
-            "index": 2,
-            "cells": [
-                _simple_cell("c1", "기본 초음파", rowspan=2),
-                _simple_cell("c2", "단순초음파(Ⅰ)"),
-                _simple_cell("c3", "EB401"),
-            ],
-        },
-        {
-            "index": 3,
-            "cells": [
-                _simple_cell("c2", "단순초음파(Ⅱ)"),
-                _simple_cell("c3", "EB402"),
             ],
         },
     ]
@@ -1294,7 +1279,7 @@ def _ultrasound_code_rows(
 
 def _ultrasound_group_word(text: str) -> str:
     padded = f" {text} "
-    for word in ("진단", "제한적", "특수"):
+    for word in ("기본", "진단", "제한적", "특수"):
         if f" {word} " in padded:
             return word
     return ""

@@ -868,16 +868,16 @@ def test_pdf_backend_promotes_ultrasound_code_matrix_rows():
     pdf_backend._promote_ultrasound_code_matrix(table)
 
     assert [column["text"] for column in table["columns"]] == [
-        "구분 / 기본 초음파",
-        "구분 / 단순초음파(Ⅰ) / 단순초음파(Ⅱ)",
-        "EDI코드 / EB401 / EB402",
+        "구분",
+        "구분",
+        "EDI코드",
     ]
     assert _cell_span_summary(table["header_rows"]) == [
         [("c1", "구분", 1, 2), ("c3", "EDI코드", 1, 1)],
-        [("c1", "기본 초음파", 2, 1), ("c2", "단순초음파(Ⅰ)", 1, 1), ("c3", "EB401", 1, 1)],
-        [("c2", "단순초음파(Ⅱ)", 1, 1), ("c3", "EB402", 1, 1)],
     ]
     assert _cell_span_summary(table["rows"]) == [
+        [("c1", "기본 초음파", 2, 1), ("c2", "단순초음파(Ⅰ)", 1, 1), ("c3", "EB401", 1, 1)],
+        [("c2", "단순초음파(Ⅱ)", 1, 1), ("c3", "EB402", 1, 1)],
         [("c1", "진단 초음파", 4, 1), ("c2", "유방·액와부-일반", 1, 1), ("c3", "EB421", 1, 1)],
         [("c2", "유방·액와부-정밀", 1, 1), ("c3", "EB423", 1, 1)],
         [("c2", "자동유방초음파", 1, 1), ("c3", "EB424", 1, 1)],
@@ -944,6 +944,8 @@ def test_pdf_backend_promotes_ultrasound_code_matrix_rows_with_leading_group():
     pdf_backend._promote_ultrasound_code_matrix(table)
 
     assert _cell_span_summary(table["rows"]) == [
+        [("c1", "기본 초음파", 2, 1), ("c2", "단순초음파(Ⅰ)", 1, 1), ("c3", "EB401", 1, 1)],
+        [("c2", "단순초음파(Ⅱ)", 1, 1), ("c3", "EB402", 1, 1)],
         [("c1", "진단 초음파", 2, 1), ("c2", "간·담낭·담도·비장·췌장(일반)", 1, 1), ("c3", "EB441", 1, 1)],
         [("c2", "간·담낭·담도·비장·췌장(정밀)", 1, 1), ("c3", "EB442", 1, 1)],
         [("c1", "제한적 초음파", 2, 1), ("c2", "간·담낭·담도·비장·췌장(일반)", 1, 1), ("c3", "EB441001", 1, 1)],
@@ -1009,6 +1011,8 @@ def test_pdf_backend_promotes_ultrasound_code_matrix_rows_with_known_heart_label
     pdf_backend._promote_ultrasound_code_matrix(table)
 
     assert _cell_span_summary(table["rows"]) == [
+        [("c1", "기본 초음파", 2, 1), ("c2", "단순초음파(Ⅰ)", 1, 1), ("c3", "EB401", 1, 1)],
+        [("c2", "단순초음파(Ⅱ)", 1, 1), ("c3", "EB402", 1, 1)],
         [("c1", "진단 초음파", 7, 1), ("c2", "선천성 심질환 경흉부", 1, 1), ("c3", "EB430", 1, 1)],
         [("c2", "경흉부-단순", 1, 1), ("c3", "EB431", 1, 1)],
         [("c2", "경흉부-일반", 1, 1), ("c3", "EB432", 1, 1)],

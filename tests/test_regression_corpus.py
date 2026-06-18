@@ -133,6 +133,23 @@ def test_supported_hwpx_corpus_preserves_grouped_header_context():
         "본인부담률 개정(5%→0%) 관련 / 개정(안)",
     ]
 
+    ultrasound_path = CORPUS_DIR / str(documents["hwpx-ultrasound-qa"]["path"])
+    ultrasound = HwpxBackend().parse(ultrasound_path.read_bytes(), ".hwpx")
+    upper_abdomen = next(
+        unit
+        for unit in ultrasound.units
+        if unit.type == "table" and "1 기존 90번" in unit.source.text
+    )
+    code_table = upper_abdomen.evidence.content["rows"][0]["cells"][2]["children"][0][
+        "content"
+    ]
+    assert [column["text"] for column in code_table["columns"]] == [
+        "구분",
+        "구분",
+        "EDI코드",
+    ]
+    assert len(code_table["header_rows"]) == 1
+
 
 def test_supported_hwp5_and_pdf_corpus_extracts_evidence_units():
     from rag_document_parser import Hwp5Backend, PdfBackend
@@ -340,9 +357,22 @@ def test_pdf_ultrasound_promotes_revision_history_text_to_table():
     code_table = upper_abdomen.evidence.content["rows"][0]["cells"][2]["children"][0][
         "content"
     ]
+    assert [column["text"] for column in code_table["columns"]] == [
+        "구분",
+        "구분",
+        "EDI코드",
+    ]
     assert [
         (cell["column_id"], cell["text"], cell["rowspan"], cell["colspan"])
-        for cell in code_table["header_rows"][1]["cells"]
+        for cell in code_table["header_rows"][0]["cells"]
+    ] == [
+        ("c1", "구분", 1, 2),
+        ("c3", "EDI코드", 1, 1),
+    ]
+    assert len(code_table["header_rows"]) == 1
+    assert [
+        (cell["column_id"], cell["text"], cell["rowspan"], cell["colspan"])
+        for cell in code_table["rows"][0]["cells"]
     ] == [
         ("c1", "기본 초음파", 2, 1),
         ("c2", "단순초음파(Ⅰ)", 1, 1),
@@ -355,6 +385,15 @@ def test_pdf_ultrasound_promotes_revision_history_text_to_table():
         ]
         for row in code_table["rows"]
     ] == [
+        [
+            ("c1", "기본 초음파", 2, 1),
+            ("c2", "단순초음파(Ⅰ)", 1, 1),
+            ("c3", "EB401", 1, 1),
+        ],
+        [
+            ("c2", "단순초음파(Ⅱ)", 1, 1),
+            ("c3", "EB402", 1, 1),
+        ],
         [
             ("c1", "진단 초음파", 2, 1),
             ("c2", "간·담낭·담도·비장·췌장(일반)", 1, 1),

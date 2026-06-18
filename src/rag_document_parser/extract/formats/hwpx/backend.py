@@ -285,7 +285,8 @@ def _header_cell_contributes_to_column(
     start = int(cell["col_addr"])
     end = start + int(cell["colspan"])
     return column_index == start or (
-        start < column_index < end and row_index < last_header_row
+        start < column_index < end
+        and (row_index < last_header_row or last_header_row == 0)
     )
 
 
@@ -325,6 +326,23 @@ def _row_refines_previous_header(
     ]
     if not groups:
         return False
+    group_ranges = [
+        (
+            int(group["col_addr"]),
+            int(group["col_addr"]) + int(group["colspan"]),
+        )
+        for group in groups
+    ]
+    for cell in row:
+        if not str(cell["text"]).strip():
+            continue
+        cell_start = int(cell["col_addr"])
+        cell_end = cell_start + int(cell["colspan"])
+        if not any(
+            group_start <= cell_start and cell_end <= group_end
+            for group_start, group_end in group_ranges
+        ):
+            return False
     for group in groups:
         group_start = int(group["col_addr"])
         group_end = group_start + int(group["colspan"])
