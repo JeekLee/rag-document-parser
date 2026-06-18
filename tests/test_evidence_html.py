@@ -574,7 +574,7 @@ def test_render_structured_table_preserves_multiline_cell_text():
 
 
 def test_render_rag_chunks_html_shows_final_evidence_and_chunk_fields():
-    from rag_document_parser.renderer.evidence_unit_render import render_rag_chunks_html
+    from rag_document_parser.renderer.rag_chunk_render import render_rag_chunks_html
 
     chunks = [
         {
@@ -621,7 +621,22 @@ def test_render_rag_chunks_html_shows_final_evidence_and_chunk_fields():
             "questions": ["본인부담률은 어떻게 바뀌나요?"],
             "metadata": {
                 "source_unit_ids": ["b1", "b2"],
+                "source_units": [
+                    {"id": "b1", "type": "text", "format": "plain"},
+                    {"id": "b2", "type": "table", "format": "structured_table"},
+                ],
                 "context_unit_ids": ["b0"],
+                "operations": [
+                    {"unit_id": "b1", "action": "include"},
+                    {"unit_id": "b2", "action": "include"},
+                ],
+                "_boundary_merges": [
+                    {
+                        "left_source_unit_ids": ["b1"],
+                        "right_source_unit_ids": ["b2"],
+                        "reason": "same section",
+                    }
+                ],
                 "_warnings": [
                     {
                         "type": "agentic_chunk_exceeds_max_units",
@@ -644,6 +659,10 @@ def test_render_rag_chunks_html_shows_final_evidence_and_chunk_fields():
     assert "본인부담률은 어떻게 바뀌나요?" in html
     assert "source units: b1, b2" in html
     assert "context units: b0" in html
+    assert "operations" in html
+    assert "boundary merges" in html
+    assert "same section" in html
+    assert "structured_table" in html
     assert "source text" in html
     assert "evidence item 1" in html
     assert "item source units: b1" in html
@@ -657,7 +676,7 @@ def test_render_rag_chunks_html_shows_final_evidence_and_chunk_fields():
 
 def test_render_rag_chunks_html_accepts_model_objects_and_escapes_diagnostics():
     from rag_document_parser import Evidence, EvidenceItem, RagChunk, SourceEvidence
-    from rag_document_parser.renderer.evidence_unit_render import render_rag_chunks_html
+    from rag_document_parser.renderer.rag_chunk_render import render_rag_chunks_html
 
     chunk = RagChunk(
         id="chunk-2",

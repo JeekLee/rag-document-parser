@@ -139,6 +139,202 @@ def test_agentic_chunker_records_context_units_without_duplicate_evidence():
     assert chunks[1].evidence.items[0].source_unit_ids == ["b2"]
 
 
+def test_agentic_chunker_merges_adjacent_chunks_across_window_boundary():
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    units = [
+        _text_unit("b1", "첫 번째 설명"),
+        _text_unit("b2", "두 번째 설명"),
+        _text_unit("b3", "세 번째 설명"),
+        _text_unit("b4", "네 번째 설명"),
+    ]
+    boundary_calls = []
+
+    def plan_fn(window, cfg, max_units):
+        unit_ids = [unit.id for unit in window]
+        return [
+            {
+                "unit_ids": unit_ids,
+                "operations": [
+                    {"unit_id": unit_id, "action": "include"}
+                    for unit_id in unit_ids
+                ],
+                "summary": f"{unit_ids[0]}부터 {unit_ids[-1]}까지",
+                "keywords": [unit_ids[0]],
+                "questions": [f"{unit_ids[0]}부터 {unit_ids[-1]}까지 무엇인가요?"],
+            }
+        ]
+
+    def boundary_merge_fn(left, right, cfg, max_units):
+        boundary_calls.append((left.metadata["source_unit_ids"], right.metadata["source_unit_ids"]))
+        return {
+            "action": "merge",
+            "reason": "같은 의미 단위가 window 경계에서 이어진다.",
+            "summary": "네 설명을 하나로 제공한다.",
+            "keywords": ["설명"],
+            "questions": ["네 설명은 무엇인가요?"],
+        }
+
+    chunks = EvidenceUnitAgenticChunker(
+        llm=None,
+        plan_fn=plan_fn,
+        boundary_merge_fn=boundary_merge_fn,
+        window_size=2,
+        max_units_per_chunk=10,
+    ).chunk(units)
+
+    assert boundary_calls == [(["b1", "b2"], ["b3", "b4"])]
+    assert len(chunks) == 1
+    chunk = chunks[0]
+    assert chunk.id == "chunk-1"
+    assert chunk.type == "text"
+    assert chunk.summary == "네 설명을 하나로 제공한다."
+    assert chunk.keywords == ["설명"]
+    assert chunk.questions == ["네 설명은 무엇인가요?"]
+    assert chunk.metadata["source_unit_ids"] == ["b1", "b2", "b3", "b4"]
+    assert chunk.metadata["context_unit_ids"] == []
+    assert chunk.metadata["_boundary_merges"] == [
+        {
+            "left_source_unit_ids": ["b1", "b2"],
+            "right_source_unit_ids": ["b3", "b4"],
+            "reason": "같은 의미 단위가 window 경계에서 이어진다.",
+        }
+    ]
+    assert [item.source_unit_ids for item in chunk.evidence.items] == [["b1"], ["b2"], ["b3"], ["b4"]]
+    assert "첫 번째 설명" in chunk.source.text
+    assert "네 번째 설명" in chunk.source.text
+
+
+def test_agentic_chunker_keeps_window_boundary_chunks_when_planner_says_keep():
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    units = [
+        _text_unit("b1", "첫 번째 설명"),
+        _text_unit("b2", "두 번째 설명"),
+        _text_unit("b3", "세 번째 설명"),
+        _text_unit("b4", "네 번째 설명"),
+    ]
+
+    def plan_fn(window, cfg, max_units):
+        unit_ids = [unit.id for unit in window]
+        return [
+            {
+                "unit_ids": unit_ids,
+                "operations": [
+                    {"unit_id": unit_id, "action": "include"}
+                    for unit_id in unit_ids
+                ],
+                "summary": f"{unit_ids[0]} window",
+            }
+        ]
+
+    def boundary_merge_fn(left, right, cfg, max_units):
+        return {"action": "keep", "reason": "서로 다른 의미 단위다."}
+
+    chunks = EvidenceUnitAgenticChunker(
+        llm=None,
+        plan_fn=plan_fn,
+        boundary_merge_fn=boundary_merge_fn,
+        window_size=2,
+    ).chunk(units)
+
+    assert [chunk.metadata["source_unit_ids"] for chunk in chunks] == [["b1", "b2"], ["b3", "b4"]]
+    assert "_boundary_merges" not in chunks[0].metadata
+    assert "_boundary_merges" not in chunks[1].metadata
+
+
+def test_agentic_chunker_keeps_boundary_chunks_when_boundary_planner_fails():
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    units = [
+        _text_unit("b1", "첫 번째 설명"),
+        _text_unit("b2", "두 번째 설명"),
+        _text_unit("b3", "세 번째 설명"),
+        _text_unit("b4", "네 번째 설명"),
+    ]
+
+    def plan_fn(window, cfg, max_units):
+        unit_ids = [unit.id for unit in window]
+        return [
+            {
+                "unit_ids": unit_ids,
+                "operations": [
+                    {"unit_id": unit_id, "action": "include"}
+                    for unit_id in unit_ids
+                ],
+                "summary": f"{unit_ids[0]} window",
+            }
+        ]
+
+    def boundary_merge_fn(left, right, cfg, max_units):
+        raise RuntimeError("boundary planner down")
+
+    chunks = EvidenceUnitAgenticChunker(
+        llm=None,
+        plan_fn=plan_fn,
+        boundary_merge_fn=boundary_merge_fn,
+        window_size=2,
+    ).chunk(units)
+
+    assert [chunk.metadata["source_unit_ids"] for chunk in chunks] == [["b1", "b2"], ["b3", "b4"]]
+    assert chunks[0].metadata["_warnings"] == [
+        {
+            "type": "agentic_boundary_merge_failed",
+            "reason": "boundary planner down",
+            "right_source_unit_ids": ["b3", "b4"],
+        }
+    ]
+    assert "_boundary_merges" not in chunks[0].metadata
+
+
+def test_agentic_chunker_uses_llm_boundary_prompt_between_windows(monkeypatch):
+    from rag_document_parser import LlmConfig
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    units = [
+        _text_unit("b1", "첫 번째 설명"),
+        _text_unit("b2", "두 번째 설명"),
+        _text_unit("b3", "세 번째 설명"),
+        _text_unit("b4", "네 번째 설명"),
+    ]
+    calls = []
+
+    def plan_fn(window, cfg, max_units):
+        unit_ids = [unit.id for unit in window]
+        return [
+            {
+                "unit_ids": unit_ids,
+                "operations": [
+                    {"unit_id": unit_id, "action": "include"}
+                    for unit_id in unit_ids
+                ],
+                "summary": f"{unit_ids[0]} window",
+            }
+        ]
+
+    def fake_chat_json(prompt, cfg):
+        calls.append((prompt, cfg))
+        return {"action": "keep", "reason": "서로 다른 주제다."}
+
+    monkeypatch.setattr("rag_document_parser.chunk.agentic.chat_json", fake_chat_json)
+    cfg = LlmConfig(url="http://llm.test/v1", api_key="key", model="model")
+
+    chunks = EvidenceUnitAgenticChunker(
+        llm=cfg,
+        plan_fn=plan_fn,
+        window_size=2,
+    ).chunk(units)
+
+    assert [chunk.metadata["source_unit_ids"] for chunk in chunks] == [["b1", "b2"], ["b3", "b4"]]
+    assert len(calls) == 1
+    assert calls[0][1] is cfg
+    assert "window boundary merge planner" in calls[0][0]
+    assert '"left_chunk"' in calls[0][0]
+    assert '"right_chunk"' in calls[0][0]
+    assert '"source_unit_ids": ["b1", "b2"]' in calls[0][0]
+    assert '"source_unit_ids": ["b3", "b4"]' in calls[0][0]
+
+
 def test_agentic_chunker_uses_rich_korean_llm_prompt_contract(monkeypatch):
     from rag_document_parser import LlmConfig
     from rag_document_parser.chunk import EvidenceUnitAgenticChunker
