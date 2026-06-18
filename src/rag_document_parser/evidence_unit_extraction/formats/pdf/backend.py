@@ -161,6 +161,18 @@ class PdfBackend:
                     page_idx,
                     warnings,
                 )
+                _merge_cell_children(
+                    cell_image_children,
+                    _table_cell_diagram_children(
+                        data,
+                        page,
+                        page_idx,
+                        tables,
+                        _resolve_nested_tables(tables),
+                        assets,
+                        warnings,
+                    ),
+                )
 
                 page_segments[page_idx].extend(
                     _page_segments_ordered(
@@ -343,6 +355,177 @@ def _image_segments_and_cell_children(
             )
         )
     return image_segments, cell_children
+
+
+def _merge_cell_children(
+    target: dict[int, dict[tuple[int, int], list[dict[str, object]]]],
+    source: dict[int, dict[tuple[int, int], list[dict[str, object]]]],
+) -> None:
+    for table_idx, cell_map in source.items():
+        target_cell_map = target.setdefault(table_idx, {})
+        for cell_ref, children in cell_map.items():
+            target_cell_map.setdefault(cell_ref, []).extend(children)
+
+
+def _table_cell_diagram_children(
+    data: bytes,
+    page: object,
+    page_idx: int,
+    tables: list[object],
+    nested: _NestedResolution,
+    assets: list[PendingAsset],
+    warnings: list[dict[str, Any]],
+) -> dict[int, dict[tuple[int, int], list[dict[str, object]]]]:
+    cell_children: dict[int, dict[tuple[int, int], list[dict[str, object]]]] = {}
+    for table_idx, table in enumerate(tables):
+        nested_children = nested.children.get(table_idx, {})
+        for row_idx, row in enumerate(getattr(table, "rows", [])):
+            for col_idx, cell_bbox in enumerate(getattr(row, "cells", []) or []):
+                if cell_bbox is None:
+                    continue
+                nested_table_bboxes = [
+                    tables[child_idx].bbox
+                    for child_idx in nested_children.get((row_idx, col_idx), [])
+                ]
+                for _top, bbox in _detect_diagram_bboxes(
+                    page,
+                    nested_table_bboxes,
+                    container_bbox=cell_bbox,
+                ):
+                    child = _table_cell_diagram_child(
+                        data,
+                        page,
+                        page_idx,
+                        bbox,
+                        assets,
+                        warnings,
+                    )
+                    if child is not None:
+                        cell_children.setdefault(table_idx, {}).setdefault(
+                            (row_idx, col_idx),
+                            [],
+                        ).append(child)
+    return cell_children
+
+
+def _table_cell_diagram_child(
+    data: bytes,
+    page: object,
+    page_idx: int,
+    bbox: tuple[float, float, float, float],
+    assets: list[PendingAsset],
+    warnings: list[dict[str, Any]],
+) -> dict[str, object] | None:
+    structured = _structured_diagram_from_pdf(page, bbox)
+    source_text = _diagram_source_text(structured)
+    if source_text and _should_skip_pdf_diagram(structured):
+        return None
+
+    asset_id: str | None = None
+    try:
+        asset_id = _append_pdf_image_asset(
+            assets,
+            _PdfImage(
+                data=_render_page_to_png(data, page_idx, bbox),
+                mime="image/png",
+                ext="png",
+                is_diagram=True,
+                metadata={
+                    "source": "table_cell_diagram_fallback",
+                    "bbox": bbox,
+                    "is_diagram": True,
+                },
+            ),
+            page_idx,
+        )
+    except ImportError as exc:
+        warnings.append(
+            {
+                "type": "pdf_table_cell_diagram_render_missing_dependency",
+                "severity": "medium",
+                "page": page_idx + 1,
+                "message": str(exc),
+            }
+        )
+    except Exception as exc:
+        warnings.append(
+            {
+                "type": "pdf_table_cell_diagram_render_failed",
+                "severity": "medium",
+                "page": page_idx + 1,
+                "message": str(exc),
+            }
+        )
+
+    if source_text:
+        structured["confidence"] = "medium"
+        if asset_id is not None:
+            structured["asset_id"] = asset_id
+        warnings.append(
+            {
+                "type": "pdf_table_cell_diagram_inferred",
+                "severity": "low",
+                "page": page_idx + 1,
+                "message": (
+                    "PDF vector diagram was assigned to a table cell by "
+                    "bounding-box containment."
+                ),
+            }
+        )
+        return {
+            "type": "diagram",
+            "format": "structured_diagram",
+            "content": structured,
+            "metadata": {
+                "source": "pdf_table_cell_diagram",
+                "bbox": bbox,
+                "confidence": "medium",
+            },
+        }
+
+    if asset_id is None:
+        warnings.append(
+            {
+                "type": "pdf_table_cell_diagram_structuring_failed",
+                "severity": "medium",
+                "page": page_idx + 1,
+                "message": (
+                    "PDF table cell diagram structure could not be inferred "
+                    "and no fallback image was available."
+                ),
+            }
+        )
+        return None
+
+    warnings.append(
+        {
+            "type": "pdf_table_cell_diagram_structuring_failed",
+            "severity": "medium",
+            "page": page_idx + 1,
+            "message": (
+                "PDF table cell diagram was preserved as a fallback image "
+                "because vector structure could not be inferred."
+            ),
+        }
+    )
+    return {
+        "type": "diagram",
+        "format": "structured_diagram",
+        "content": {
+            "caption": None,
+            "nodes": [],
+            "edges": [],
+            "connectors": [],
+            "mermaid": None,
+            "asset_id": asset_id,
+            "confidence": "low",
+        },
+        "metadata": {
+            "source": "pdf_table_cell_diagram",
+            "bbox": bbox,
+            "confidence": "low",
+        },
+    }
 
 
 def _metadata_bbox(metadata: dict[str, Any]) -> tuple[float, float, float, float] | None:
@@ -589,7 +772,7 @@ def _segments_to_units(page_segments: list[list[_Segment]]) -> list[EvidenceUnit
         for segment in sorted(segments, key=lambda item: item.top):
             if segment.kind == "text":
                 text = str(segment.payload).strip()
-                if not text:
+                if not text or _is_pdf_artifact_text(text):
                     continue
                 pdf_metadata = {"page": segment.page}
                 pdf_metadata.update(segment.metadata)
@@ -737,7 +920,11 @@ def _merge_continuation_tables(page_segments: list[list[_Segment]]) -> list[list
         for segment in sorted(segments, key=lambda item: item.top):
             if segment.kind != "table":
                 merged_pages[page_idx].append(segment)
-                if segment.kind in {"text", "image", "diagram"}:
+                is_artifact_text = (
+                    segment.kind == "text"
+                    and _is_pdf_artifact_text(str(segment.payload).strip())
+                )
+                if segment.kind in {"text", "image", "diagram"} and not is_artifact_text:
                     page_has_content_before_table = True
                     previous_table = None
                 continue
@@ -1188,6 +1375,7 @@ def _structured_table_from_pdf_table(
     raw_rows = _table_rows(table)
     if not raw_rows:
         return None
+    raw_rows = _trim_empty_trailing_columns(raw_rows)
     column_count = max((len(row) for row in raw_rows), default=0)
     if column_count == 0:
         return _structured_table_content(columns=[], rows=[])
@@ -1247,11 +1435,59 @@ def _structured_table_from_pdf_table(
         header_rows=header_rows if header_rows else None,
     )
     _repair_table_of_contents(result, page)
+    _merge_blank_header_rowspans(result)
     _merge_wrapped_table_rows(result)
     _promote_code_table_leaf_headers(result)
     _promote_ultrasound_code_matrix(result)
     _expand_parallel_code_action_rows(result)
     return result
+
+
+def _merge_blank_header_rowspans(table: dict[str, object]) -> None:
+    header_rows = table.get("header_rows")
+    if not isinstance(header_rows, list) or len(header_rows) < 2:
+        return
+
+    previous_cells_by_column: dict[str, dict[str, object]] = {}
+    for header_row in header_rows:
+        cells = header_row.get("cells") if isinstance(header_row, dict) else None
+        if not isinstance(cells, list):
+            previous_cells_by_column = {}
+            continue
+
+        next_cells: list[dict[str, object]] = []
+        current_cells_by_column: dict[str, dict[str, object]] = {}
+        for cell in cells:
+            if not isinstance(cell, dict):
+                continue
+            column_id = str(cell.get("column_id", ""))
+            previous = previous_cells_by_column.get(column_id)
+            if _is_blank_header_slot(cell) and _can_absorb_blank_header_slot(previous):
+                previous["rowspan"] = int(previous.get("rowspan", 1) or 1) + 1
+                continue
+            next_cells.append(cell)
+            if column_id:
+                current_cells_by_column[column_id] = cell
+
+        header_row["cells"] = next_cells
+        previous_cells_by_column = current_cells_by_column
+
+
+def _is_blank_header_slot(cell: dict[str, object]) -> bool:
+    return (
+        not str(cell.get("text", "")).strip()
+        and int(cell.get("rowspan", 1) or 1) == 1
+        and int(cell.get("colspan", 1) or 1) == 1
+    )
+
+
+def _can_absorb_blank_header_slot(cell: dict[str, object] | None) -> bool:
+    return (
+        isinstance(cell, dict)
+        and bool(str(cell.get("text", "")).strip())
+        and int(cell.get("rowspan", 1) or 1) == 1
+        and int(cell.get("colspan", 1) or 1) == 1
+    )
 
 
 def _merge_wrapped_table_rows(table: dict[str, object]) -> None:
@@ -2107,12 +2343,51 @@ def _can_merge_nested_table_child(
         return False
     previous_columns = previous_content.get("columns")
     current_columns = current_content.get("columns")
+    if (
+        _table_column_signature(previous_content)
+        != _table_column_signature(current_content)
+        and not _looks_like_nested_table_data_continuation(
+            previous_content,
+            current_content,
+        )
+    ):
+        return False
     return (
         isinstance(previous_columns, list)
         and isinstance(current_columns, list)
         and len(previous_columns) == len(current_columns)
         and len(previous_columns) > 1
     )
+
+
+def _looks_like_nested_table_data_continuation(
+    previous: dict[str, object],
+    current: dict[str, object],
+) -> bool:
+    previous_columns = previous.get("columns")
+    current_columns = current.get("columns")
+    if not isinstance(previous_columns, list) or not isinstance(current_columns, list):
+        return False
+    if len(previous_columns) != len(current_columns) or len(previous_columns) <= 1:
+        return False
+    labels = [
+        str(column.get("text", "")).strip()
+        for column in current_columns
+        if isinstance(column, dict)
+    ]
+    if len(labels) != len(current_columns):
+        return False
+    data_like = sum(_looks_like_pdf_table_data_value(label) for label in labels)
+    return data_like >= max(2, len(labels) // 2)
+
+
+def _looks_like_pdf_table_data_value(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped or _CJK.search(stripped):
+        return False
+    if len(stripped) > 40:
+        return False
+    return bool(re.search(r"\d", stripped))
 
 
 def _append_nested_child_rows(
@@ -2194,6 +2469,21 @@ def _table_rows(table: object) -> list[list[str]]:
             continue
         result.append([_clean_cell(cell) for cell in row])
     return result
+
+
+def _trim_empty_trailing_columns(rows: list[list[str]]) -> list[list[str]]:
+    trimmed = [list(row) for row in rows]
+    while True:
+        column_count = max((len(row) for row in trimmed), default=0)
+        if column_count <= 1:
+            return trimmed
+        last_index = column_count - 1
+        if any(last_index < len(row) and str(row[last_index]).strip() for row in trimmed):
+            return trimmed
+        trimmed = [
+            row[:last_index] if last_index < len(row) else list(row)
+            for row in trimmed
+        ]
 
 
 def _row_cells(table: object, row_index: int) -> list[tuple[float, float, float, float] | None]:
@@ -2303,6 +2593,10 @@ def _crop_text(page: object, x0: float, top: float, x1: float, bottom: float) ->
 def _clean_text(text: str | None) -> str:
     stripped = _strip_page_numbers(text or "")
     return "\n".join(line.strip() for line in stripped.splitlines() if line.strip()).strip()
+
+
+def _is_pdf_artifact_text(text: str) -> bool:
+    return bool(re.fullmatch(r"INSID[A-Za-z0-9_:.-]+", text.strip()))
 
 
 def _strip_page_numbers(text: str) -> str:
@@ -2461,7 +2755,7 @@ def _ocr_text_segments(
     warnings: list[dict[str, Any]] = []
     part_index = 0
     for kind, payload in _ocr_text_parts(text):
-        if kind == "table":
+        if kind in {"table", "table_pipe", "table_text"}:
             table = payload
             segments.append(
                 _Segment(
@@ -2473,6 +2767,7 @@ def _ocr_text_segments(
                     metadata={"ocr": True, "confidence": "medium"},
                 )
             )
+            table_type = "text table" if kind == "table_text" else "pipe table"
             warnings.append(
                 {
                     "type": "pdf_ocr_table_inferred",
@@ -2480,7 +2775,7 @@ def _ocr_text_segments(
                     "page": page_number,
                     "message": (
                         "OCR text was converted to structured_table from a "
-                        "detected pipe table."
+                        f"detected {table_type}."
                     ),
                 }
             )
@@ -2523,7 +2818,24 @@ def _ocr_text_parts(text: str) -> list[tuple[str, object]]:
                 index += 1
             table = _structured_table_from_pipe_lines(table_lines)
             if table is not None:
-                parts.append(("table", table))
+                parts.append(("table_pipe", table))
+                continue
+            paragraph.extend(table_lines)
+            continue
+        if _looks_like_aligned_table_start(lines, index):
+            flush_paragraph()
+            table_lines = [lines[index]]
+            column_count = len(_split_aligned_table_row(lines[index]))
+            index += 1
+            while index < len(lines):
+                row = _split_aligned_table_row(lines[index])
+                if len(row) != column_count:
+                    break
+                table_lines.append(lines[index])
+                index += 1
+            table = _structured_table_from_aligned_lines(table_lines)
+            if table is not None:
+                parts.append(("table_text", table))
                 continue
             paragraph.extend(table_lines)
             continue
@@ -2574,6 +2886,51 @@ def _structured_table_from_pipe_lines(lines: list[str]) -> dict[str, object] | N
             cells.append(_simple_cell(str(column["id"]), value))
         structured_rows.append(table_row(len(structured_rows) + 1, cells))
     return _structured_table_content(columns=columns, rows=structured_rows)
+
+
+def _looks_like_aligned_table_start(lines: list[str], index: int) -> bool:
+    if index + 1 >= len(lines):
+        return False
+    header = _split_aligned_table_row(lines[index])
+    first_row = _split_aligned_table_row(lines[index + 1])
+    return (
+        len(header) >= 2
+        and len(header) == len(first_row)
+        and all(cell.strip() for cell in header)
+        and all(cell.strip() for cell in first_row)
+    )
+
+
+def _structured_table_from_aligned_lines(lines: list[str]) -> dict[str, object] | None:
+    if len(lines) < 2:
+        return None
+    headers = _split_aligned_table_row(lines[0])
+    rows = [_split_aligned_table_row(line) for line in lines[1:]]
+    if not headers or not rows or any(len(row) != len(headers) for row in rows):
+        return None
+    columns = [
+        table_column(f"c{index}", header)
+        for index, header in enumerate(headers, start=1)
+    ]
+    structured_rows: list[dict[str, object]] = []
+    for row in rows:
+        cells = [
+            _simple_cell(str(column["id"]), row[index])
+            for index, column in enumerate(columns)
+        ]
+        structured_rows.append(table_row(len(structured_rows) + 1, cells))
+    return _structured_table_content(columns=columns, rows=structured_rows)
+
+
+def _split_aligned_table_row(line: str) -> list[str]:
+    stripped = line.strip()
+    if not re.search(r"\t| {2,}", stripped):
+        return []
+    return [
+        cell.strip()
+        for cell in re.split(r"\t+| {2,}", stripped)
+        if cell.strip()
+    ]
 
 
 def _split_pipe_row(line: str) -> list[str]:
@@ -3095,6 +3452,8 @@ def _diagram_edge_source_lines(edges: object) -> list[str]:
 def _detect_diagram_bboxes(
     page: object,
     table_bboxes: list[tuple[float, float, float, float]],
+    *,
+    container_bbox: tuple[float, float, float, float] | None = None,
 ) -> list[tuple[float, tuple[float, float, float, float]]]:
     shapes: list[tuple[float, float, float, float, str]] = []
     for rect in getattr(page, "rects", []):
@@ -3103,6 +3462,8 @@ def _detect_diagram_bboxes(
             continue
         x0, top, x1, bottom = bbox
         if (x1 - x0) < 5 or (bottom - top) < 5:
+            continue
+        if container_bbox is not None and not _bbox_in_cell(bbox, container_bbox, tol=2.0):
             continue
         if any(
             x0 < tx1 and x1 > tx0 and top < tbottom and bottom > ttop
@@ -3121,6 +3482,12 @@ def _detect_diagram_bboxes(
                 continue
             x0, top, x1, bottom = bbox
             if max(x1 - x0, bottom - top) < 10:
+                continue
+            if container_bbox is not None and not _bbox_in_cell(
+                bbox,
+                container_bbox,
+                tol=2.0,
+            ):
                 continue
             if any(
                 x0 < tx1 and x1 > tx0 and top < tbottom and bottom > ttop
@@ -3142,8 +3509,13 @@ def _detect_diagram_bboxes(
             clusters.append([shape])
 
     results: list[tuple[float, tuple[float, float, float, float]]] = []
-    page_width = float(getattr(page, "width", 0.0))
-    page_height = float(getattr(page, "height", 0.0))
+    if container_bbox is None:
+        left = 0.0
+        top_bound = 0.0
+        right = float(getattr(page, "width", 0.0))
+        bottom_bound = float(getattr(page, "height", 0.0))
+    else:
+        left, top_bound, right, bottom_bound = container_bbox
     for cluster in clusters:
         rect_count = sum(1 for item in cluster if item[4] == "rect")
         connector_count = sum(1 for item in cluster if item[4] != "rect")
@@ -3151,10 +3523,10 @@ def _detect_diagram_bboxes(
             continue
         if rect_count < 3 and connector_count == 0:
             continue
-        x0 = max(0.0, min(rect[0] for rect in cluster) - 10)
-        top = max(0.0, min(rect[1] for rect in cluster) - 10)
-        x1 = min(page_width, max(rect[2] for rect in cluster) + 10)
-        bottom = min(page_height, max(rect[3] for rect in cluster) + 10)
+        x0 = max(left, min(rect[0] for rect in cluster) - 10)
+        top = max(top_bound, min(rect[1] for rect in cluster) - 10)
+        x1 = min(right, max(rect[2] for rect in cluster) + 10)
+        bottom = min(bottom_bound, max(rect[3] for rect in cluster) + 10)
         area = max(0.0, x1 - x0) * max(0.0, bottom - top)
         text = _crop_text(page, x0, top, x1, bottom)
         if area > 0 and len(text) / area > 0.1:
@@ -3266,10 +3638,36 @@ def _table_source_cells(
             for child in cell["children"]
             if child.get("type", child.get("kind")) == "image"
         ]
-        combined = "; ".join(part for part in [value, *child_texts, *image_texts] if part)
+        diagram_texts = [
+            "diagram: " + _inline_diagram_source(child["content"])
+            for child in cell["children"]
+            if child.get("type", child.get("kind")) == "diagram"
+        ]
+        combined = "; ".join(
+            part for part in [value, *child_texts, *image_texts, *diagram_texts] if part
+        )
         if combined:
             result.append(f"{header}: {combined}")
     return result
+
+
+def _inline_diagram_source(diagram: object) -> str:
+    if not isinstance(diagram, dict):
+        return ""
+    nodes = diagram.get("nodes")
+    labels = [
+        text
+        for text in (
+            str(node.get("text", "")).strip()
+            for node in nodes
+            if isinstance(node, dict)
+        )
+        if text
+    ] if isinstance(nodes, list) else []
+    if labels:
+        return " / ".join(labels)
+    asset_id = str(diagram.get("asset_id", "")).strip()
+    return f"image: {asset_id}" if asset_id else ""
 
 
 def _cell_source_label(

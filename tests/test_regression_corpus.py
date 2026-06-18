@@ -19,7 +19,7 @@ def _manifest_documents() -> list[dict[str, object]]:
 def test_regression_corpus_files_are_pinned_by_hash_and_size():
     documents = _manifest_documents()
 
-    assert len(documents) == 9
+    assert len(documents) == 10
     assert {str(document["id"]) for document in documents} == {
         "hwpx-ultrasound-qa",
         "pdf-ultrasound-qa",
@@ -30,6 +30,7 @@ def test_regression_corpus_files_are_pinned_by_hash_and_size():
         "hwpx-medical-fee-criteria-2022-139",
         "hwp-medical-aid-overpayment-deduction",
         "pdf-medical-aid-overpayment-deduction",
+        "pdf-infection-prevention-management-fee-qa",
     }
     for document in documents:
         path = CORPUS_DIR / str(document["path"])
@@ -499,4 +500,210 @@ def test_pdf_ultrasound_promotes_revision_history_text_to_table():
             ("c2", "간·담낭·담도·비장·췌장(정밀)", 1, 1),
             ("c3", "EB442001", 1, 1),
         ],
+    ]
+
+
+def test_pdf_corpus_does_not_duplicate_nested_tables_as_diagrams():
+    from rag_document_parser import PdfBackend
+
+    documents = {document["id"]: document for document in _manifest_documents()}
+    document = documents["pdf-infection-prevention-management-fee-qa"]
+    parsed = PdfBackend().parse(
+        (CORPUS_DIR / str(document["path"])).read_bytes(),
+        ".pdf",
+    )
+
+    expected = document["expected"]
+    assert len(parsed.units) >= expected["min_units"]
+    assert (
+        sum(1 for unit in parsed.units if unit.type == "table")
+        >= expected["min_tables"]
+    )
+    assert len(parsed.assets) >= expected["min_assets"]
+    assert not any(
+        unit.type == "text" and str(unit.content).startswith("INSID")
+        for unit in parsed.units
+    )
+
+    nested_table_children = []
+    diagram_children = []
+    for unit in parsed.units:
+        if unit.type != "table":
+            continue
+        for row in unit.content["rows"]:
+            for cell in row["cells"]:
+                for child in cell.get("children", []):
+                    if child.get("type") == "table":
+                        nested_table_children.append((unit, cell, child))
+                    if child.get("type") == "diagram":
+                        diagram_children.append((unit, cell, child))
+
+    assert nested_table_children
+    nested_table_text_parts = []
+    for _, _, child in nested_table_children:
+        content = child["content"]
+        nested_table_text_parts.extend(
+            str(column["text"])
+            for column in content.get("columns", [])
+        )
+        for row in content.get("rows", []):
+            nested_table_text_parts.extend(
+                str(cell["text"])
+                for cell in row.get("cells", [])
+            )
+    nested_table_text = " ".join(nested_table_text_parts)
+    assert "최초운영일" in nested_table_text
+    assert "최초분기 적용기준일" in nested_table_text
+    assert "차기분기 적용기준일" in nested_table_text
+
+    first_qa_table = next(
+        unit
+        for unit in parsed.units
+        if unit.type == "table"
+        and any(
+            "감염관리 의사와 감염관리 전담간호사" in str(cell["text"])
+            for row in unit.content["rows"]
+            for cell in row["cells"]
+        )
+    )
+    answer_cell = first_qa_table.content["rows"][0]["cells"][2]
+    answer_tables = [
+        child for child in answer_cell["children"] if child.get("type") == "table"
+    ]
+    assert len(answer_tables) == 3
+    assert [
+        [column["text"] for column in child["content"]["columns"]]
+        for child in answer_tables
+    ] == [
+        [
+            "최초운영일이 속한 최초분기 등급",
+            "최초운영분기의 차기분기 등급",
+        ],
+        [
+            "최초운영일",
+            "최초운영분기",
+            "최초분기 적용기준일 / 인력",
+            "최초분기 적용기준일 / 병상수",
+        ],
+        [
+            "최초운영일",
+            "차기적용분기",
+            "차기분기 적용기준일 / 인력",
+            "차기분기 적용기준일 / 병상수",
+        ],
+    ]
+    for child in answer_tables[1:]:
+        header_rows = child["content"]["header_rows"]
+        assert [
+            (cell["column_id"], cell["text"], cell["rowspan"], cell["colspan"])
+            for cell in header_rows[0]["cells"]
+        ] == [
+            ("c1", child["content"]["columns"][0]["text"], 2, 1),
+            ("c2", child["content"]["columns"][1]["text"], 2, 1),
+            ("c3", child["content"]["columns"][2]["text"].split(" / ")[0], 1, 2),
+        ]
+        assert [
+            (cell["column_id"], cell["text"], cell["rowspan"], cell["colspan"])
+            for cell in header_rows[1]["cells"]
+        ] == [
+            ("c3", "인력", 1, 1),
+            ("c4", "병상수", 1, 1),
+        ]
+    assert all(
+        len(row["cells"]) == len(child["content"]["columns"])
+        for child in answer_tables
+        for row in child["content"]["rows"]
+    )
+
+    assert diagram_children == []
+    assert not any(
+        asset.metadata.get("source") == "table_cell_diagram_fallback"
+        for asset in parsed.assets
+    )
+    assert not any(
+        warning["type"] == "pdf_table_cell_diagram_inferred"
+        for warning in parsed.quality_warnings
+    )
+    assert not any(
+        "diagram: 최초운영일" in unit.source.text
+        for unit in parsed.units
+        if unit.type == "table"
+    )
+
+
+def test_pdf_corpus_merges_continued_table_rows_across_artifact_text():
+    from rag_document_parser import PdfBackend
+
+    documents = {document["id"]: document for document in _manifest_documents()}
+    document = documents["pdf-infection-prevention-management-fee-qa"]
+    parsed = PdfBackend().parse(
+        (CORPUS_DIR / str(document["path"])).read_bytes(),
+        ".pdf",
+    )
+
+    qa_tables = [
+        unit
+        for unit in parsed.units
+        if unit.type == "table"
+        and [column["text"] for column in unit.content["columns"]]
+        == ["연번", "질의", "답변"]
+    ]
+    assert len(qa_tables) == 2
+    assert not any(
+        row["cells"][0]["text"] == ""
+        and row["cells"][1]["text"] == ""
+        and row["cells"][2]["text"] == "의미함"
+        for table in qa_tables
+        for row in table.content["rows"]
+    )
+
+    row_five = next(
+        row
+        for table in qa_tables
+        for row in table.content["rows"]
+        if row["cells"][0]["text"] == "5"
+        and "감염관리지침" in row["cells"][1]["text"]
+    )
+    assert row_five["cells"][2]["text"].endswith("활동을\n의미함")
+
+
+def test_pdf_real_scanned_fixture_restores_aligned_ocr_table():
+    from rag_document_parser import PdfBackend
+
+    def _ocr_text(_png: bytes, page_idx: int) -> str:
+        if page_idx == 0:
+            return (
+                "구분    금액    비고\n"
+                "외래    1000    당일\n"
+                "입원    2000    익일"
+            )
+        return f"본문 {page_idx}"
+
+    parsed = PdfBackend(
+        max_ocr_workers=1,
+        ocr_fn=_ocr_text,
+    ).parse(
+        (CORPUS_DIR / "pdf/medical-aid-overpayment-deduction.pdf").read_bytes(),
+        ".pdf",
+    )
+
+    assert [unit.type for unit in parsed.units] == ["table", "text", "text"]
+    table = next(unit for unit in parsed.units if unit.type == "table")
+    assert [column["text"] for column in table.content["columns"]] == [
+        "구분",
+        "금액",
+        "비고",
+    ]
+    assert [
+        [cell["text"] for cell in row["cells"]]
+        for row in table.content["rows"]
+    ] == [["외래", "1000", "당일"], ["입원", "2000", "익일"]]
+    assert table.metadata["pdf"]["ocr"] is True
+    assert parsed.quality_warnings == [
+        {
+            "type": "pdf_ocr_table_inferred",
+            "severity": "low",
+            "page": 1,
+            "message": "OCR text was converted to structured_table from a detected text table.",
+        }
     ]

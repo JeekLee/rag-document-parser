@@ -311,17 +311,14 @@ def _render_structured_table(
     ]
     if header_rows:
         html.append("<thead>")
-        for row in header_rows:
-            html.append("<tr>")
-            html.append(
-                _render_table_row_cells(
-                    row.get("cells", []),
-                    "th",
-                    assets_by_id,
-                    column_count=len(columns),
-                )
+        html.append(
+            _render_table_rows(
+                header_rows,
+                "th",
+                assets_by_id,
+                column_count=len(columns),
             )
-            html.append("</tr>")
+        )
         html.append("</thead>")
     elif columns:
         html.append("<thead><tr>")
@@ -330,19 +327,14 @@ def _render_structured_table(
             html.append(f"<th>{text}</th>")
         html.append("</tr></thead>")
     html.append("<tbody>")
-    for row in rows:
-        html.append("<tr>")
-        html.append(
-            _render_table_row_cells(
-                row.get("cells", []),
-                "td",
-                assets_by_id,
-                column_count=len(columns),
-            )
+    html.append(
+        _render_table_rows(
+            rows,
+            "td",
+            assets_by_id,
+            column_count=len(columns),
         )
-        if not row.get("cells") and columns:
-            html.append(f'<td colspan="{len(columns)}">&nbsp;</td>')
-        html.append("</tr>")
+    )
     if not rows and columns:
         html.append(f'<tr><td colspan="{len(columns)}">&nbsp;</td></tr>')
     html.append("</tbody></table>")
@@ -874,10 +866,82 @@ def _render_table_row_cells(
     assets_by_id: dict[str, dict[str, Any]],
     *,
     column_count: int,
+    occupied_columns: set[int] | None = None,
 ) -> str:
-    if not isinstance(cells, list):
-        return ""
+    positioned = _position_table_row_cells(
+        cells,
+        column_count=column_count,
+        occupied_columns=occupied_columns or set(),
+    )
+    return "".join(
+        f"<{tag}>&nbsp;</{tag}>"
+        if cell is None
+        else _render_table_cell(cell, tag, assets_by_id)
+        for cell, _column_number in positioned
+    )
+
+
+def _render_table_rows(
+    rows: list[dict[str, Any]],
+    tag: str,
+    assets_by_id: dict[str, dict[str, Any]],
+    *,
+    column_count: int,
+) -> str:
     html = []
+    active_rowspans: dict[int, int] = {}
+    for row in rows:
+        cells = row.get("cells", []) if isinstance(row, dict) else []
+        occupied = {
+            column_number
+            for column_number, remaining in active_rowspans.items()
+            if remaining > 0
+        }
+        positioned = _position_table_row_cells(
+            cells,
+            column_count=column_count,
+            occupied_columns=occupied,
+        )
+        html.append("<tr>")
+        html.extend(
+            f"<{tag}>&nbsp;</{tag}>"
+            if cell is None
+            else _render_table_cell(cell, tag, assets_by_id)
+            for cell, _column_number in positioned
+        )
+        if not positioned and column_count:
+            html.append(f'<{tag} colspan="{column_count}">&nbsp;</{tag}>')
+        html.append("</tr>")
+
+        for column_number in list(active_rowspans):
+            active_rowspans[column_number] -= 1
+            if active_rowspans[column_number] <= 0:
+                del active_rowspans[column_number]
+
+        for cell, column_number in positioned:
+            if cell is None:
+                continue
+            rowspan = _positive_int(cell.get("rowspan"))
+            colspan = _positive_int(cell.get("colspan"))
+            if rowspan <= 1:
+                continue
+            for offset in range(colspan):
+                active_rowspans[column_number + offset] = max(
+                    active_rowspans.get(column_number + offset, 0),
+                    rowspan - 1,
+                )
+    return "".join(html)
+
+
+def _position_table_row_cells(
+    cells: Any,
+    *,
+    column_count: int,
+    occupied_columns: set[int],
+) -> list[tuple[dict[str, Any] | None, int]]:
+    if not isinstance(cells, list):
+        return []
+    positioned: list[tuple[dict[str, Any] | None, int]] = []
     current_column = 1
     sorted_cells = sorted(
         (cell for cell in cells if isinstance(cell, dict)),
@@ -885,15 +949,22 @@ def _render_table_row_cells(
     )
     for cell in sorted_cells:
         column_number = _column_id_number(str(cell.get("column_id", "c1")))
-        while current_column < column_number <= column_count:
-            html.append(f"<{tag}>&nbsp;</{tag}>")
+        while current_column in occupied_columns:
             current_column += 1
-        html.append(_render_table_cell(cell, tag, assets_by_id))
+        while current_column < column_number <= column_count:
+            if current_column not in occupied_columns:
+                positioned.append((None, current_column))
+            current_column += 1
+            while current_column in occupied_columns:
+                current_column += 1
+        if current_column > column_number:
+            column_number = current_column
+        positioned.append((cell, column_number))
         current_column = max(
             current_column,
             column_number + _positive_int(cell.get("colspan")),
         )
-    return "".join(html)
+    return positioned
 
 
 def _render_table_cell(

@@ -370,6 +370,81 @@ def test_render_structured_table_uses_header_rows_with_spans():
     assert '<th rowspan="2" colspan="2">관련 근거</th>' in html
 
 
+def test_render_structured_table_does_not_fill_rowspanned_columns():
+    from rag_document_parser.renderer.evidence_unit_render import render_evidence_html
+
+    html = render_evidence_html(
+        {
+            "kind": "table",
+            "format": "structured_table",
+            "content": {
+                "caption": None,
+                "columns": [
+                    {"id": "c1", "text": "최초운영일"},
+                    {"id": "c2", "text": "최초운영분기"},
+                    {"id": "c3", "text": "최초분기 적용기준일 / 인력"},
+                    {"id": "c4", "text": "최초분기 적용기준일 / 병상수"},
+                ],
+                "header_rows": [
+                    {
+                        "index": 1,
+                        "cells": [
+                            {
+                                "column_id": "c1",
+                                "text": "최초운영일",
+                                "rowspan": 2,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                            {
+                                "column_id": "c2",
+                                "text": "최초운영분기",
+                                "rowspan": 2,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                            {
+                                "column_id": "c3",
+                                "text": "최초분기 적용기준일",
+                                "rowspan": 1,
+                                "colspan": 2,
+                                "children": [],
+                            },
+                        ],
+                    },
+                    {
+                        "index": 2,
+                        "cells": [
+                            {
+                                "column_id": "c3",
+                                "text": "인력",
+                                "rowspan": 1,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                            {
+                                "column_id": "c4",
+                                "text": "병상수",
+                                "rowspan": 1,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                        ],
+                    },
+                ],
+                "rows": [],
+            },
+        }
+    )
+
+    assert (
+        '<tr><th rowspan="2">최초운영일</th><th rowspan="2">최초운영분기</th>'
+        '<th colspan="2">최초분기 적용기준일</th></tr>'
+        "<tr><th>인력</th><th>병상수</th></tr>"
+    ) in html
+    assert "<tr><th>&nbsp;</th><th>&nbsp;</th><th>인력</th>" not in html
+
+
 def test_render_structured_table_fills_column_gaps_from_cell_ids():
     from rag_document_parser.renderer.evidence_unit_render import render_evidence_html
 
