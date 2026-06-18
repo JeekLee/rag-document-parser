@@ -8,85 +8,79 @@ def test_render_evidence_units_as_html_without_llm_enrichment():
         {
             "id": "b1",
             "type": "table",
+            "format": "structured_table",
             "source": {"kind": "table", "text": "columns: 구분 | 세부"},
-            "evidence": {
-                "kind": "table",
-                "format": "structured_table",
-                "content": {
-                    "caption": None,
-                    "columns": [
-                        {"id": "c1", "text": "구분"},
-                        {"id": "c2", "text": "세부"},
-                    ],
-                    "rows": [
-                        {
-                            "index": 1,
-                            "cells": [
-                                {
-                                    "column_id": "c1",
-                                    "text": "본인부담",
-                                    "rowspan": 1,
-                                    "colspan": 1,
-                                    "children": [],
-                                },
-                                {
-                                    "column_id": "c2",
-                                    "text": "",
-                                    "rowspan": 1,
-                                    "colspan": 1,
-                                    "children": [
-                                        {
-                                            "kind": "table",
-                                            "format": "structured_table",
-                                            "content": {
-                                                "caption": None,
-                                                "columns": [
-                                                    {"id": "c1", "text": "항목"},
-                                                    {"id": "c2", "text": "금액"},
-                                                ],
-                                                "rows": [
-                                                    {
-                                                        "index": 1,
-                                                        "cells": [
-                                                            {
-                                                                "column_id": "c1",
-                                                                "text": "외래",
-                                                                "rowspan": 1,
-                                                                "colspan": 1,
-                                                                "children": [],
-                                                            },
-                                                            {
-                                                                "column_id": "c2",
-                                                                "text": "1000",
-                                                                "rowspan": 1,
-                                                                "colspan": 1,
-                                                                "children": [],
-                                                            },
-                                                        ],
-                                                    }
-                                                ],
-                                            },
-                                        }
-                                    ],
-                                },
-                            ],
-                        }
-                    ],
-                },
+            "content": {
+                "caption": None,
+                "columns": [
+                    {"id": "c1", "text": "구분"},
+                    {"id": "c2", "text": "세부"},
+                ],
+                "rows": [
+                    {
+                        "index": 1,
+                        "cells": [
+                            {
+                                "column_id": "c1",
+                                "text": "본인부담",
+                                "rowspan": 1,
+                                "colspan": 1,
+                                "children": [],
+                            },
+                            {
+                                "column_id": "c2",
+                                "text": "",
+                                "rowspan": 1,
+                                "colspan": 1,
+                                "children": [
+                                    {
+                                        "type": "table",
+                                        "format": "structured_table",
+                                        "content": {
+                                            "caption": None,
+                                            "columns": [
+                                                {"id": "c1", "text": "항목"},
+                                                {"id": "c2", "text": "금액"},
+                                            ],
+                                            "rows": [
+                                                {
+                                                    "index": 1,
+                                                    "cells": [
+                                                        {
+                                                            "column_id": "c1",
+                                                            "text": "외래",
+                                                            "rowspan": 1,
+                                                            "colspan": 1,
+                                                            "children": [],
+                                                        },
+                                                        {
+                                                            "column_id": "c2",
+                                                            "text": "1000",
+                                                            "rowspan": 1,
+                                                            "colspan": 1,
+                                                            "children": [],
+                                                        },
+                                                    ],
+                                                }
+                                            ],
+                                        },
+                                    }
+                                ],
+                            },
+                        ],
+                    }
+                ],
             },
             "metadata": {},
         },
         {
             "id": "b2",
             "type": "image",
+            "format": "asset_ref",
             "source": {"kind": "image", "text": "image: img-0001"},
-            "evidence": {
-                "kind": "image",
-                "format": "asset_ref",
-                "content": {
-                    "asset_id": "img-0001",
-                    "caption": "첨부 이미지",
-                },
+            "content": {
+                "asset_id": "img-0001",
+                "caption": "첨부 이미지",
             },
             "metadata": {},
         },
@@ -116,13 +110,123 @@ def test_render_evidence_units_as_html_without_llm_enrichment():
     assert "첨부 이미지" in html
 
 
-def test_render_evidence_image_uses_public_url_while_showing_source_uri():
+def test_render_composite_chunk_evidence_items():
+    from rag_document_parser.evidence_html import render_evidence_html
+
+    html = render_evidence_html(
+        {
+            "items": [
+                {
+                    "type": "text",
+                    "format": "plain",
+                    "content": "청크 설명",
+                    "source_unit_ids": ["b1"],
+                    "metadata": {},
+                },
+                {
+                    "type": "table",
+                    "format": "structured_table",
+                    "content": {
+                        "caption": None,
+                        "columns": [{"id": "c1", "text": "항목"}],
+                        "rows": [
+                            {
+                                "index": 1,
+                                "cells": [
+                                    {
+                                        "column_id": "c1",
+                                        "text": "급여",
+                                        "rowspan": 1,
+                                        "colspan": 1,
+                                        "children": [],
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                    "source_unit_ids": ["b2"],
+                    "metadata": {},
+                },
+            ]
+        }
+    )
+
+    assert "청크 설명" in html
+    assert "급여" in html
+    assert html.count("<table") == 1
+
+
+def test_render_evidence_unit_prefers_direct_content_over_legacy_evidence():
+    from rag_document_parser.evidence_html import render_evidence_units_html
+
+    html = render_evidence_units_html(
+        [
+            {
+                "id": "b1",
+                "type": "text",
+                "format": "plain",
+                "source": {"kind": "text", "text": "direct source"},
+                "content": "direct content",
+                "evidence": {
+                    "kind": "text",
+                    "format": "plain",
+                    "content": "legacy content",
+                },
+                "metadata": {},
+            }
+        ],
+        title="direct precedence",
+    )
+
+    assert "direct content" in html
+    assert "legacy content" not in html
+
+
+def test_render_legacy_evidence_when_unit_only_has_top_level_type():
+    from rag_document_parser.evidence_html import render_evidence_units_html
+
+    html = render_evidence_units_html(
+        [
+            {
+                "id": "b1",
+                "type": "image",
+                "source": {"kind": "image", "text": "image: img-0001"},
+                "evidence": {
+                    "kind": "image",
+                    "format": "asset_ref",
+                    "content": {
+                        "asset_id": "img-0001",
+                        "caption": "legacy image",
+                    },
+                },
+                "metadata": {},
+            }
+        ],
+        title="legacy fallback",
+        assets=[
+            {
+                "id": "img-0001",
+                "uri": "s3://bucket/doc/img.png",
+                "public_url": "http://example.test/img.png",
+                "mime": "image/png",
+                "ext": "png",
+                "sha256": "abc",
+                "bytes": 3,
+            }
+        ],
+    )
+
+    assert "legacy image" in html
+    assert 'src="http://example.test/img.png"' in html
+    assert "None" not in html
+
+
+def test_render_evidence_image_uses_public_url_for_rendering_and_link_text():
     from rag_document_parser.evidence_html import render_evidence_units_html
 
     units = [
         {
             "id": "b1",
-            "type": "image",
             "source": {"kind": "image", "text": "image: img-0001"},
             "evidence": {
                 "kind": "image",
@@ -156,7 +260,8 @@ def test_render_evidence_image_uses_public_url_while_showing_source_uri():
         'src="http://203.0.113.10:10190/rag-assets/doc/assets/img-0001.png"'
         in html
     )
-    assert "s3://rag-assets/doc/assets/img-0001.png" in html
+    assert ">http://203.0.113.10:10190/rag-assets/doc/assets/img-0001.png</a>" in html
+    assert "s3://rag-assets/doc/assets/img-0001.png" not in html
 
 
 def test_render_structured_table_uses_header_rows_with_spans():
@@ -305,6 +410,125 @@ def test_render_structured_table_fills_column_gaps_from_cell_ids():
     )
 
     assert "<td>left</td><td>&nbsp;</td><td>&nbsp;</td><td>right</td>" in html
+
+
+def test_render_rag_chunks_html_shows_final_evidence_and_chunk_fields():
+    from rag_document_parser.evidence_html import render_rag_chunks_html
+
+    chunks = [
+        {
+            "id": "chunk-1",
+            "type": "mixed",
+            "source": {"kind": "mixed", "text": "source text"},
+            "evidence": {
+                "items": [
+                    {
+                        "type": "text",
+                        "format": "plain",
+                        "content": "청크 설명",
+                        "source_unit_ids": ["b1"],
+                        "metadata": {},
+                    },
+                    {
+                        "type": "table",
+                        "format": "structured_table",
+                        "content": {
+                            "caption": None,
+                            "columns": [{"id": "c1", "text": "항목"}],
+                            "rows": [
+                                {
+                                    "index": 1,
+                                    "cells": [
+                                        {
+                                            "column_id": "c1",
+                                            "text": "급여",
+                                            "rowspan": 1,
+                                            "colspan": 1,
+                                            "children": [],
+                                        }
+                                    ],
+                                }
+                            ],
+                        },
+                        "source_unit_ids": ["b2"],
+                        "metadata": {},
+                    },
+                ]
+            },
+            "summary": "제왕절개 본인부담률 안내",
+            "keywords": ["제왕절개", "본인부담"],
+            "questions": ["본인부담률은 어떻게 바뀌나요?"],
+            "metadata": {
+                "source_unit_ids": ["b1", "b2"],
+                "context_unit_ids": ["b0"],
+                "_warnings": [
+                    {
+                        "type": "agentic_chunk_exceeds_max_units",
+                        "source_unit_count": 9,
+                        "max_units_per_chunk": 8,
+                    }
+                ],
+            },
+        }
+    ]
+
+    html = render_rag_chunks_html(chunks, title="Agentic chunks")
+
+    assert "<!doctype html>" in html
+    assert "Agentic chunks" in html
+    assert "chunk-1" in html
+    assert "mixed" in html
+    assert "제왕절개 본인부담률 안내" in html
+    assert "제왕절개" in html
+    assert "본인부담률은 어떻게 바뀌나요?" in html
+    assert "source units: b1, b2" in html
+    assert "context units: b0" in html
+    assert "source text" in html
+    assert "evidence item 1" in html
+    assert "item source units: b1" in html
+    assert "evidence item 2" in html
+    assert "item source units: b2" in html
+    assert "청크 설명" in html
+    assert "급여" in html
+    assert html.count("<table") == 1
+    assert "agentic_chunk_exceeds_max_units" in html
+
+
+def test_render_rag_chunks_html_accepts_model_objects_and_escapes_diagnostics():
+    from rag_document_parser import Evidence, EvidenceItem, RagChunk, SourceEvidence
+    from rag_document_parser.evidence_html import render_rag_chunks_html
+
+    chunk = RagChunk(
+        id="chunk-2",
+        type="text",
+        source=SourceEvidence(kind="text", text="raw <source>"),
+        evidence=Evidence(
+            items=[
+                EvidenceItem(
+                    type="text",
+                    format="plain",
+                    content="safe <content>",
+                    source_unit_ids=["b3"],
+                    metadata={},
+                )
+            ]
+        ),
+        summary="escaped summary",
+        metadata={
+            "source_unit_ids": ["b3"],
+            "_fallback_reason": "bad <script>alert(1)</script>",
+            "_rejected_plan": [{"unit_ids": ["b9"]}],
+        },
+    )
+
+    html = render_rag_chunks_html([chunk])
+
+    assert "chunk-2" in html
+    assert "safe &lt;content&gt;" in html
+    assert "raw &lt;source&gt;" in html
+    assert "bad &lt;script&gt;alert(1)&lt;/script&gt;" in html
+    assert "&quot;unit_ids&quot;" in html
+    assert "<script>" not in html
 
 
 def test_render_structured_diagram_shows_nodes_edges_and_mermaid():

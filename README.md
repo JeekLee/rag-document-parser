@@ -10,7 +10,12 @@ grounding, and user-facing evidence display.
 ```python
 import os
 
-from rag_document_parser import RagDocumentParser, S3Config
+from rag_document_parser import (
+    EvidenceUnitAgenticChunker,
+    LlmConfig,
+    RagDocumentParser,
+    S3Config,
+)
 
 parser = RagDocumentParser(
     object_storage=S3Config(
@@ -25,19 +30,42 @@ parser = RagDocumentParser(
 result = parser.parse(raw_bytes, suffix=".md")
 
 for unit in result.units:
-    send_to_chunker(unit.source, unit.evidence, unit.metadata)
-    store_evidence(unit.evidence)
+    store_extracted_unit(unit.id, unit.source, unit.type, unit.format, unit.content, unit.metadata)
 
 for asset in result.assets:
     register_asset(asset.uri)
+
+chunker = EvidenceUnitAgenticChunker(
+    llm=LlmConfig(
+        url=os.environ["LLM_URL"],
+        api_key=os.environ["LLM_API_KEY"],
+        model=os.environ["LLM_MODEL"],
+    ),
+)
+
+chunks = chunker.chunk(result.units)
+
+for chunk in chunks:
+    index_chunk(
+        source=chunk.source.text,
+        evidence=chunk.evidence.to_dict(),
+        summary=chunk.summary,
+        keywords=chunk.keywords,
+        questions=chunk.questions,
+    )
 ```
 
 ## Current scope
 
 - Defines the public RAG result model:
-  - `ParseResult`
-  - `EvidenceUnit`
-  - `Evidence`
+  - `ParseResult`: parser output containing extracted units and uploaded assets.
+  - `EvidenceUnit`: extraction-stage id, source, content, type, format, and
+    metadata.
+  - `EvidenceItem`: one evidence payload item inside composite chunk evidence.
+  - `Evidence`: composite chunk evidence made from one or more `EvidenceItem`
+    values for a `RagChunk`.
+  - `RagChunk`: final chunk with source text, composite evidence, summary,
+    keywords, questions, and metadata.
   - `PendingAsset`
   - `DocumentAsset`
   - `SourceInfo`
@@ -71,7 +99,7 @@ for asset in result.assets:
 The package is organized around the document pipeline:
 
 ```text
-input -> extract EvidenceUnit -> chunk -> enrichment -> ChunkList
+input -> extract EvidenceUnit -> agentic chunk -> RagChunk
 ```
 
 - `input/`: raw input normalization and suffix normalization.
@@ -79,7 +107,7 @@ input -> extract EvidenceUnit -> chunk -> enrichment -> ChunkList
 - `extract/formats/<format>/backend.py`: format-specific extraction entrypoints
   for Markdown, HWPX, HWP5, and PDF.
 - `pipeline/`: orchestration for the public parser API.
-- `chunk/`: chunker protocol and future agentic chunking adapter.
+- `chunk/`: chunker protocol and `EvidenceUnitAgenticChunker`.
 - `enrichment/`: LLM client and future chunk enrichment logic.
 
 Legacy import modules such as `rag_document_parser.parser`,
@@ -100,10 +128,34 @@ uv sync --extra pdf-ocr
 Korean language data, and Poppler must still be installed on the host if
 pytesseract/pdf2image OCR fallback is used.
 
+For scanned PDFs, `PdfBackend` can also call an OpenAI-compatible vision model
+before the local OCR fallback:
+
+```python
+import os
+
+from rag_document_parser import PdfBackend, PdfOcrConfig
+
+backend = PdfBackend(
+    ocr_llm=PdfOcrConfig(
+        url=os.environ.get("RDP_PDF_OCR_BASE_URL", "http://localhost:10080/v1"),
+        api_key=os.environ["RDP_PDF_OCR_API_KEY"],
+        model=os.environ.get("RDP_PDF_OCR_MODEL", "qwen3-vl-30b-a3b"),
+        timeout=240.0,
+    ),
+)
+
+result = backend.parse(raw_pdf_bytes, suffix=".pdf")
+```
+
+When both `ocr_fn` and `ocr_llm` are configured, `ocr_fn` takes precedence. If
+the vision OCR request fails or returns empty text, the backend falls back to
+the local pytesseract/pdf2image path.
+
 ## Next scope
 
-- Add the agentic chunking adapter that consumes `EvidenceUnit` objects and
-  performs LLM-based summary, keyword, and question generation on final chunks.
+- Tune and evaluate production chunking prompts against broader document
+  fixtures and retrieval-quality metrics.
 - Improve complex table fidelity beyond the current HWPX/HWP5/PDF baseline,
   especially header inference and PDF table fragmentation.
 - Add optional source locators later only if product UX needs page/region jumps.

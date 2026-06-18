@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from html import escape
 from typing import Any
@@ -36,15 +37,45 @@ def render_evidence_units_html(
     return "\n".join(parts)
 
 
+def render_rag_chunks_html(
+    chunks: list[Any],
+    *,
+    title: str = "RAG chunks",
+    assets: list[dict[str, Any]] | None = None,
+) -> str:
+    assets_by_id = _assets_by_id(assets)
+    parts = [
+        "<!doctype html>",
+        '<html lang="ko">',
+        "<head>",
+        '<meta charset="utf-8">',
+        '<meta name="viewport" content="width=device-width, initial-scale=1">',
+        f"<title>{escape(title)}</title>",
+        "<style>",
+        _CSS,
+        "</style>",
+        "</head>",
+        "<body>",
+        "<main>",
+        f"<h1>{escape(title)}</h1>",
+    ]
+    for chunk in chunks:
+        chunk_dict = _as_dict(chunk)
+        if chunk_dict is not None:
+            parts.append(_render_rag_chunk(chunk_dict, assets_by_id))
+    parts.extend(["</main>", "</body>", "</html>"])
+    return "\n".join(parts)
+
+
 def render_evidence_html(
     evidence: dict[str, Any],
     assets_by_id: dict[str, dict[str, Any]] | None = None,
 ) -> str:
     if assets_by_id is None:
         assets_by_id = {}
-    kind = evidence.get("kind")
-    fmt = evidence.get("format")
-    content = evidence.get("content")
+    kind, fmt, content = _evidence_shape(evidence)
+    if kind == "composite" and isinstance(content, list):
+        return _render_evidence_items(content, assets_by_id)
     if kind == "table" and fmt == "structured_table" and isinstance(content, dict):
         return _render_structured_table(content, assets_by_id)
     if kind == "diagram" and fmt == "structured_diagram" and isinstance(content, dict):
@@ -56,11 +87,75 @@ def render_evidence_html(
     return f"<pre>{escape(str(content))}</pre>"
 
 
+def _as_dict(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        return value
+
+    to_dict = getattr(value, "to_dict", None)
+    if not callable(to_dict):
+        return None
+
+    payload = to_dict()
+    if isinstance(payload, dict):
+        return payload
+    return None
+
+
+def _evidence_shape(evidence: dict[str, Any]) -> tuple[str, str | None, object]:
+    if "items" in evidence and isinstance(evidence["items"], list):
+        return "composite", None, evidence["items"]
+    kind = evidence.get("type", evidence.get("kind", "text"))
+    fmt = evidence.get("format")
+    content = evidence.get("content")
+    return str(kind), str(fmt) if isinstance(fmt, str) else None, content
+
+
+def _render_evidence_items(
+    items: list[Any],
+    assets_by_id: dict[str, dict[str, Any]],
+) -> str:
+    parts = ['<div class="evidence-items">']
+    for index, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            continue
+        labels = [f"evidence item {index}"]
+        item_type = item.get("type", item.get("kind"))
+        item_format = item.get("format")
+        if isinstance(item_type, str) and item_type:
+            labels.append(item_type)
+        if isinstance(item_format, str) and item_format:
+            labels.append(item_format)
+
+        source_unit_ids = _string_list(item.get("source_unit_ids"))
+        parts.append('<section class="evidence-item">')
+        parts.append('<header class="evidence-item-header">')
+        parts.append(" / ".join(escape(label) for label in labels))
+        parts.append("</header>")
+        if source_unit_ids:
+            parts.append(
+                '<div class="chunk-meta">'
+                f"<span>item source units: {escape(', '.join(source_unit_ids))}</span>"
+                "</div>"
+            )
+        parts.append(render_evidence_html(item, assets_by_id=assets_by_id))
+        parts.append("</section>")
+    parts.append("</div>")
+    return "".join(parts)
+
+
 def _render_evidence_unit(
     unit: dict[str, Any],
     assets_by_id: dict[str, dict[str, Any]],
 ) -> str:
-    evidence = unit.get("evidence", {})
+    evidence = {
+        "type": unit.get("type", "text"),
+        "format": unit.get("format"),
+        "content": unit.get("content"),
+    }
+    legacy_evidence = unit.get("evidence")
+    has_direct_shape = "content" in unit
+    if not has_direct_shape and isinstance(legacy_evidence, dict):
+        evidence = legacy_evidence
     source = unit.get("source", {})
     source_text = source.get("text", "") if isinstance(source, dict) else ""
     return (
@@ -70,9 +165,132 @@ def _render_evidence_unit(
         f"<span>{escape(str(unit.get('type', '')))}</span>"
         "</header>"
         f'<pre class="source-text">{escape(str(source_text))}</pre>'
-        f"{render_evidence_html(evidence, assets_by_id) if isinstance(evidence, dict) else ''}"
+        f"{render_evidence_html(evidence, assets_by_id)}"
         "</section>"
     )
+
+
+def _render_rag_chunk(
+    chunk: dict[str, Any],
+    assets_by_id: dict[str, dict[str, Any]],
+) -> str:
+    source = chunk.get("source", {})
+    source_text = source.get("text", "") if isinstance(source, dict) else ""
+    metadata = chunk.get("metadata", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    evidence = chunk.get("evidence", {})
+    if isinstance(evidence, dict):
+        evidence_html = render_evidence_html(evidence, assets_by_id)
+    else:
+        evidence_html = f"<pre>{escape(str(evidence))}</pre>"
+
+    parts = [
+        '<section class="chunk rag-chunk">',
+        '<header class="chunk-header">',
+        f"<code>{escape(str(chunk.get('id', '')))}</code>",
+        f"<span>{escape(str(chunk.get('type', '')))}</span>",
+        "</header>",
+    ]
+    summary = chunk.get("summary")
+    if isinstance(summary, str) and summary:
+        parts.append(f'<p class="summary">{escape(summary)}</p>')
+
+    parts.append(_render_chunk_lists(chunk))
+    parts.append(_render_chunk_metadata(metadata))
+    parts.append(_render_chunk_diagnostics(metadata))
+    parts.append(f'<pre class="source-text">{escape(str(source_text))}</pre>')
+    parts.append(evidence_html)
+    parts.append("</section>")
+    return "".join(parts)
+
+
+def _render_chunk_lists(chunk: dict[str, Any]) -> str:
+    keywords = _string_list(chunk.get("keywords"))
+    questions = _string_list(chunk.get("questions"))
+    if not keywords and not questions:
+        return ""
+
+    parts = ['<div class="chunk-fields">']
+    if keywords:
+        parts.append("<div><strong>keywords</strong>")
+        parts.append(_render_tag_list(keywords))
+        parts.append("</div>")
+    if questions:
+        parts.append("<div><strong>questions</strong>")
+        parts.append("<ul>")
+        for question in questions:
+            parts.append(f"<li>{escape(question)}</li>")
+        parts.append("</ul></div>")
+    parts.append("</div>")
+    return "".join(parts)
+
+
+def _render_chunk_metadata(metadata: dict[str, Any]) -> str:
+    labels = []
+    source_unit_ids = _string_list(metadata.get("source_unit_ids"))
+    context_unit_ids = _string_list(metadata.get("context_unit_ids"))
+    if source_unit_ids:
+        labels.append(f"source units: {', '.join(source_unit_ids)}")
+    if context_unit_ids:
+        labels.append(f"context units: {', '.join(context_unit_ids)}")
+    if not labels:
+        return ""
+
+    return (
+        '<div class="chunk-meta">'
+        + "".join(f"<span>{escape(label)}</span>" for label in labels)
+        + "</div>"
+    )
+
+
+def _render_chunk_diagnostics(metadata: dict[str, Any]) -> str:
+    parts = []
+    fallback_reason = metadata.get("_fallback_reason")
+    if isinstance(fallback_reason, str) and fallback_reason:
+        parts.append(
+            '<div class="diagnostic diagnostic-error">'
+            f"<strong>fallback</strong>: {escape(fallback_reason)}"
+            "</div>"
+        )
+
+    warnings = metadata.get("_warnings")
+    if warnings:
+        parts.append(_render_debug_details("warnings", warnings))
+
+    rejected_plan = metadata.get("_rejected_plan")
+    if rejected_plan is not None:
+        parts.append(_render_debug_details("rejected plan", rejected_plan))
+
+    return "".join(parts)
+
+
+def _render_debug_details(label: str, value: Any) -> str:
+    return (
+        '<details class="diagnostic">'
+        f"<summary>{escape(label)}</summary>"
+        f"<pre>{_json_debug(value)}</pre>"
+        "</details>"
+    )
+
+
+def _json_debug(value: Any) -> str:
+    return escape(json.dumps(value, ensure_ascii=False, indent=2, default=str))
+
+
+def _render_tag_list(values: list[str]) -> str:
+    return (
+        '<ul class="tag-list">'
+        + "".join(f"<li>{escape(value)}</li>" for value in values)
+        + "</ul>"
+    )
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str) and item]
 
 
 def _render_structured_table(
@@ -700,14 +918,14 @@ def _render_asset_ref(
             "<figure>"
             f'<img src="{escape(render_url)}" alt="{escape(caption)}" />'
             f"<figcaption>{escape(caption)}</figcaption>"
-            f'<a href="{escape(render_url)}">{escape(uri or render_url)}</a>'
+            f'<a href="{escape(render_url)}">{escape(render_url)}</a>'
             f'<p class="asset-meta">{escape(meta)}</p>'
             "</figure>"
         )
     return (
         '<div class="asset-ref">'
         f"<strong>{escape(caption)}</strong>"
-        f'<a href="{escape(render_url)}">{escape(uri or render_url)}</a>'
+        f'<a href="{escape(render_url)}">{escape(render_url)}</a>'
         f'<p class="asset-meta">{escape(meta)}</p>'
         "</div>"
     )
@@ -798,6 +1016,74 @@ h1 {
 .summary {
   margin: 0 0 12px;
   color: #4d4d4d;
+}
+.chunk-fields {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+.chunk-fields strong {
+  display: block;
+  margin-bottom: 4px;
+  color: #333;
+}
+.tag-list,
+.chunk-fields ul {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.tag-list li,
+.chunk-fields li {
+  border: 1px solid #d8d8d2;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: #fafafa;
+}
+.chunk-meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 0 12px;
+  color: #444;
+}
+.chunk-meta span {
+  border: 1px solid #d8d8d2;
+  border-radius: 4px;
+  padding: 2px 6px;
+  background: #f7f7f5;
+}
+.evidence-items {
+  display: grid;
+  gap: 12px;
+}
+.evidence-item {
+  border: 1px solid #e0e0da;
+  border-radius: 4px;
+  padding: 10px;
+}
+.evidence-item-header {
+  margin: 0 0 8px;
+  color: #333;
+  font-weight: 600;
+}
+.diagnostic {
+  margin: 0 0 12px;
+  padding: 8px;
+  border: 1px solid #e0d2a8;
+  border-radius: 4px;
+  background: #fff8e5;
+}
+.diagnostic-error {
+  border-color: #e2b8b8;
+  background: #fff0f0;
+}
+.diagnostic pre {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
 }
 .source-text {
   margin: 0 0 12px;

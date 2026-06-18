@@ -48,9 +48,9 @@ def test_hwp5_backend_parses_real_fixture_text_and_tables():
     assert len(tables) >= 2
     first_table = tables[0]
     assert first_table.source.kind == "table"
-    assert first_table.evidence.kind == "table"
-    assert first_table.evidence.format == "structured_table"
-    assert first_table.evidence.content["columns"] == [
+    assert first_table.type == "table"
+    assert first_table.format == "structured_table"
+    assert first_table.content["columns"] == [
         {"id": "c1", "text": "수급권자"},
         {"id": "c2", "text": "주민번호"},
         {"id": "c3", "text": "진료일자"},
@@ -76,14 +76,74 @@ def test_hwp5_backend_keeps_source_and_evidence_payloads_separate():
 
     text_unit = next(unit for unit in parsed.units if unit.type == "text")
     assert text_unit.source.kind == "text"
-    assert text_unit.evidence.kind == "text"
-    assert text_unit.evidence.format == "plain"
-    assert text_unit.source.text == text_unit.evidence.content
+    assert text_unit.type == "text"
+    assert text_unit.format == "plain"
+    assert text_unit.source.text == text_unit.content
 
     table_unit = next(unit for unit in parsed.units if unit.type == "table")
     assert isinstance(table_unit.source.text, str)
-    assert isinstance(table_unit.evidence.content, dict)
-    assert table_unit.source.text != table_unit.evidence.content
+    assert isinstance(table_unit.content, dict)
+    assert table_unit.source.text != table_unit.content
+
+
+def test_hwp5_table_source_disambiguates_duplicate_header_labels():
+    from rag_document_parser.extract.formats.hwp5 import backend as hwp5_backend
+
+    def cell(
+        column_id: str,
+        text: str,
+        *,
+        rowspan: int = 1,
+        colspan: int = 1,
+    ) -> dict[str, object]:
+        return {
+            "column_id": column_id,
+            "text": text,
+            "rowspan": rowspan,
+            "colspan": colspan,
+            "children": [],
+        }
+
+    table = {
+        "columns": [
+            {"id": "c1", "text": "구분"},
+            {"id": "c2", "text": "구분"},
+            {"id": "c3", "text": "EDI코드"},
+        ],
+        "header_rows": [
+            {
+                "index": 1,
+                "cells": [
+                    cell("c1", "구분", colspan=2),
+                    cell("c3", "EDI코드"),
+                ],
+            }
+        ],
+        "rows": [
+            {
+                "index": 1,
+                "cells": [
+                    cell("c1", "기본 초음파", rowspan=2),
+                    cell("c2", "단순초음파(Ⅰ)"),
+                    cell("c3", "EB401"),
+                ],
+            },
+            {
+                "index": 2,
+                "cells": [
+                    cell("c2", "단순초음파(Ⅱ)"),
+                    cell("c3", "EB402"),
+                ],
+            },
+        ],
+    }
+
+    assert hwp5_backend._table_source_text(table) == (
+        "table: 3 columns\n"
+        "header 1: cols 1-2: 구분; col 3: EDI코드\n"
+        "row 1: 구분 [1]: 기본 초음파; 구분 [2]: 단순초음파(Ⅰ); EDI코드: EB401\n"
+        "row 2: 구분 [1]: 기본 초음파; 구분 [2]: 단순초음파(Ⅱ); EDI코드: EB402"
+    )
 
 
 def test_hwp5_backend_reports_missing_olefile_dependency(monkeypatch):
@@ -202,10 +262,10 @@ def test_hwp5_nested_table_is_structured_child_not_flattened_text():
     parsed = _parse_section(records)
     document = parsed.to_document()
     table = document.units[0]
-    detail_cell = table.evidence.content["rows"][0]["cells"][1]
+    detail_cell = table.content["rows"][0]["cells"][1]
 
     assert detail_cell["text"] == "상세"
-    assert detail_cell["children"][0]["kind"] == "table"
+    assert detail_cell["children"][0]["type"] == "table"
     assert detail_cell["children"][0]["format"] == "structured_table"
     assert detail_cell["children"][0]["content"]["columns"] == [
         {"id": "c1", "text": "항목"},
@@ -232,12 +292,12 @@ def test_hwp5_table_preserves_column_addresses_with_blank_gaps():
 
     table = _parse_section(records).to_document().units[0]
 
-    assert table.evidence.content["columns"] == [
+    assert table.content["columns"] == [
         {"id": "c1", "text": "A"},
         {"id": "c2", "text": ""},
         {"id": "c3", "text": "C"},
     ]
-    assert [cell["text"] for cell in table.evidence.content["rows"][0]["cells"]] == [
+    assert [cell["text"] for cell in table.content["rows"][0]["cells"]] == [
         "x",
         "",
         "z",
@@ -266,7 +326,7 @@ def test_hwp5_table_uses_table_body_dimensions_to_keep_blank_form_rows():
     records += _make_record(0x42, 0, b"")
 
     table = _parse_section(records).to_document().units[0]
-    content = table.evidence.content
+    content = table.content
 
     assert [column["text"] for column in content["columns"]] == [
         "수급권자",
@@ -306,7 +366,7 @@ def test_hwp5_table_preserves_cell_spans_like_hwpx_tables():
     records += _make_record(0x42, 0, b"")
 
     table = _parse_section(records).to_document().units[0]
-    content = table.evidence.content
+    content = table.content
 
     assert len(content["columns"]) == 6
     assert [column["text"] for column in content["columns"]] == [
@@ -354,7 +414,7 @@ def test_hwp5_table_source_repeats_rowspan_context_on_continuation_rows():
     records += _make_record(0x42, 0, b"")
 
     table = _parse_section(records).to_document().units[0]
-    content = table.evidence.content
+    content = table.content
 
     assert [
         (cell["column_id"], cell["text"])
@@ -397,7 +457,7 @@ def test_hwp5_table_header_detection_crosses_blank_spacer_row():
     records += _make_record(0x42, 0, b"")
 
     table = _parse_section(records).to_document().units[0]
-    content = table.evidence.content
+    content = table.content
 
     assert len(content["header_rows"]) == 3
     assert len(content["rows"]) == 1
@@ -477,7 +537,7 @@ def test_hwp5_table_ignores_list_headers_outside_declared_dimensions():
     records += _make_record(0x42, 0, b"")
 
     table = _parse_section(records).to_document().units[0]
-    content = table.evidence.content
+    content = table.content
 
     assert len(content["columns"]) == 5
     assert [column["text"] for column in content["columns"]] == [
@@ -516,7 +576,7 @@ def test_hwp5_large_sparse_table_omits_blank_cells_from_evidence():
     records += _make_record(0x42, 0, b"")
 
     table = _parse_section(records).to_document().units[0]
-    content = table.evidence.content
+    content = table.content
 
     assert len(content["columns"]) == 25
     assert content["compact"] == {"omitted_blank_cells": 46}
@@ -539,14 +599,14 @@ def test_hwp5_real_fixture_keeps_form_table_blank_rows():
     parsed = Hwp5Backend().parse(FIXTURE.read_bytes(), ".hwp")
     tables = [unit for unit in parsed.units if unit.type == "table"]
 
-    assert len(tables[0].evidence.content["rows"]) == 1
-    assert [cell["text"] for cell in tables[0].evidence.content["rows"][0]["cells"]] == [
+    assert len(tables[0].content["rows"]) == 1
+    assert [cell["text"] for cell in tables[0].content["rows"][0]["cells"]] == [
         "",
         "",
         "",
         "",
     ]
-    assert len(tables[1].evidence.content["rows"]) == 3
+    assert len(tables[1].content["rows"]) == 3
 
 
 def test_hwp5_groups_drawing_labels_with_interleaved_short_text():
@@ -574,8 +634,8 @@ def test_hwp5_groups_drawing_labels_with_interleaved_short_text():
     diagram = document.units[0]
     assert diagram.type == "diagram"
     assert diagram.source.kind == "diagram"
-    assert diagram.evidence.kind == "diagram"
-    assert diagram.evidence.format == "structured_diagram"
+    assert diagram.type == "diagram"
+    assert diagram.format == "structured_diagram"
     assert diagram.metadata["common"]["display_format"] == "structured_diagram"
     assert diagram.source.text == (
         "업무처리 흐름도\n"
@@ -586,7 +646,7 @@ def test_hwp5_groups_drawing_labels_with_interleaved_short_text():
         "②통보\n"
         "의료급여기관"
     )
-    assert [node["text"] for node in diagram.evidence.content["nodes"]] == [
+    assert [node["text"] for node in diagram.content["nodes"]] == [
         "업무처리 흐름도",
         "< 확인절차 >",
         "①신청",
@@ -595,8 +655,8 @@ def test_hwp5_groups_drawing_labels_with_interleaved_short_text():
         "②통보",
         "의료급여기관",
     ]
-    assert diagram.evidence.content["edges"] == []
-    assert diagram.evidence.content["mermaid"] is None
+    assert diagram.content["edges"] == []
+    assert diagram.content["mermaid"] is None
     assert document.units[1].source.text == "< 붙임 1 >"
 
 
@@ -611,7 +671,7 @@ def test_hwp5_diagram_nodes_keep_gso_bounding_boxes():
     records += _make_record(0x43, 1, _u16("심사평가원"))
 
     document = _parse_section(records).to_document()
-    nodes = document.units[0].evidence.content["nodes"]
+    nodes = document.units[0].content["nodes"]
 
     assert nodes[0]["bbox"] is None
     assert nodes[1]["bbox"] == {
@@ -655,7 +715,7 @@ def test_hwp5_diagram_keeps_line_connectors_with_bounding_boxes():
     records += _make_record(0x43, 1, _u16("심사평가원"))
 
     document = _parse_section(records).to_document()
-    content = document.units[0].evidence.content
+    content = document.units[0].content
 
     assert len(content["connectors"]) == 1
     connector = content["connectors"][0]
@@ -691,7 +751,7 @@ def test_hwp5_diagram_infers_edges_from_connector_endpoints():
     records += _make_record(0x43, 1, _u16("심사평가원"))
 
     document = _parse_section(records).to_document()
-    content = document.units[0].evidence.content
+    content = document.units[0].content
 
     assert content["edges"] == [
         {
@@ -724,7 +784,7 @@ def test_hwp5_diagram_labels_inferred_edges_from_step_text():
     records += _make_record(0x43, 1, _u16("심사평가원"))
 
     document = _parse_section(records).to_document()
-    edge = document.units[0].evidence.content["edges"][0]
+    edge = document.units[0].content["edges"][0]
 
     assert edge["from"] == "n2"
     assert edge["to"] == "n3"
@@ -753,8 +813,8 @@ def test_hwp5_real_fixture_groups_flowchart_labels():
     assert len(drawing_units) == 1
     diagram = drawing_units[0]
     assert diagram.type == "diagram"
-    assert diagram.evidence.format == "structured_diagram"
-    content = diagram.evidence.content
+    assert diagram.format == "structured_diagram"
+    content = diagram.content
     assert len(content["edges"]) == 11
     assert content["edges"][0]["label"] == "①급여대상여부확인신청"
     assert any(edge["type"] == "arrow" for edge in content["edges"])
@@ -784,7 +844,8 @@ def test_hwp5_picture_shape_becomes_image_asset_ref():
     document = parsed.to_document()
 
     assert [unit.type for unit in document.units] == ["image"]
-    assert document.units[0].evidence.content == {
+    assert document.units[0].format == "asset_ref"
+    assert document.units[0].content == {
         "asset_id": "img-0001",
         "caption": None,
     }

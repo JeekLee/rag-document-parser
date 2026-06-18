@@ -6,8 +6,13 @@ import zipfile
 from dataclasses import dataclass
 from xml.etree import ElementTree as ET
 
-from ....models import Evidence, EvidenceUnit, PendingAsset, SourceEvidence
+from ....models import EvidenceUnit, PendingAsset, SourceEvidence
 from ...backend import ParsedDocument
+from ...table_source import (
+    build_column_source_labels as _build_column_source_labels,
+    common_semantic_header_prefix as _common_semantic_header_prefix,
+    is_semantic_column_label as _is_semantic_column_label,
+)
 
 _HP = "http://www.hancom.co.kr/hwpml/2011/paragraph"
 _OPF = "http://www.idpf.org/2007/opf/"
@@ -41,12 +46,9 @@ class HwpxBackend:
                                 EvidenceUnit(
                                     id=f"b{block_index}",
                                     type="text",
+                                    format="plain",
                                     source=SourceEvidence(kind="text", text=text_box),
-                                    evidence=Evidence(
-                                        kind="text",
-                                        format="plain",
-                                        content=text_box,
-                                    ),
+                                    content=text_box,
                                     metadata={
                                         "common": {
                                             "chunk_kind": "text",
@@ -64,15 +66,12 @@ class HwpxBackend:
                             EvidenceUnit(
                                 id=f"b{block_index}",
                                 type="table",
+                                format="structured_table",
                                 source=SourceEvidence(
                                     kind="table",
                                     text=_table_source_text(structured),
                                 ),
-                                evidence=Evidence(
-                                    kind="table",
-                                    format="structured_table",
-                                    content=structured,
-                                ),
+                                content=structured,
                                 metadata={
                                     "common": {
                                         "chunk_kind": "table",
@@ -104,15 +103,12 @@ class HwpxBackend:
                             EvidenceUnit(
                                 id=f"b{block_index}",
                                 type="image",
+                                format="asset_ref",
                                 source=SourceEvidence(
                                     kind="image",
                                     text=f"image: {asset_id}",
                                 ),
-                                evidence=Evidence(
-                                    kind="image",
-                                    format="asset_ref",
-                                    content={"asset_id": asset_id, "caption": None},
-                                ),
+                                content={"asset_id": asset_id, "caption": None},
                                 metadata={
                                     "common": {
                                         "chunk_kind": "image",
@@ -133,8 +129,9 @@ class HwpxBackend:
                         EvidenceUnit(
                             id=f"b{block_index}",
                             type="text",
+                            format="plain",
                             source=SourceEvidence(kind="text", text=text),
-                            evidence=Evidence(kind="text", format="plain", content=text),
+                            content=text,
                             metadata={
                                 "common": {
                                     "chunk_kind": "text",
@@ -285,7 +282,8 @@ def _header_cell_contributes_to_column(
     start = int(cell["col_addr"])
     end = start + int(cell["colspan"])
     return column_index == start or (
-        start < column_index < end and row_index < last_header_row
+        start < column_index < end
+        and (row_index < last_header_row or last_header_row == 0)
     )
 
 
@@ -325,6 +323,23 @@ def _row_refines_previous_header(
     ]
     if not groups:
         return False
+    group_ranges = [
+        (
+            int(group["col_addr"]),
+            int(group["col_addr"]) + int(group["colspan"]),
+        )
+        for group in groups
+    ]
+    for cell in row:
+        if not str(cell["text"]).strip():
+            continue
+        cell_start = int(cell["col_addr"])
+        cell_end = cell_start + int(cell["colspan"])
+        if not any(
+            group_start <= cell_start and cell_end <= group_end
+            for group_start, group_end in group_ranges
+        ):
+            return False
     for group in groups:
         group_start = int(group["col_addr"])
         group_end = group_start + int(group["colspan"])
@@ -430,7 +445,7 @@ def _table_cell(
             if nested is not None:
                 children.append(
                     {
-                        "kind": "table",
+                        "type": "table",
                         "format": "structured_table",
                         "content": _structured_table(nested, z, bin_data_map, assets),
                     }
@@ -444,7 +459,7 @@ def _table_cell(
                 assets.append(asset)
                 children.append(
                     {
-                        "kind": "image",
+                        "type": "image",
                         "format": "asset_ref",
                         "content": {"asset_id": asset_id, "caption": None},
                     }
@@ -487,10 +502,7 @@ def _cell_addr(cell: ET.Element, name: str, default: int) -> int:
 def _table_source_text(table: dict[str, object]) -> str:
     columns = table["columns"]
     rows = table["rows"]
-    column_text = {
-        str(column["id"]): _column_source_label(column)
-        for column in columns
-    }
+    column_text = _build_column_source_labels(columns, _column_source_label, rows)
     lines: list[str] = []
     if columns:
         lines.append(f"table: {len(columns)} columns")
@@ -535,7 +547,7 @@ def _table_source_cells(
         child_texts = [
             "nested table: " + _inline_table_source(child["content"])
             for child in cell["children"]
-            if child.get("kind") == "table"
+            if child.get("type", child.get("kind")) == "table"
         ]
         combined = "; ".join(part for part in [value, *child_texts] if part)
         if combined:
@@ -567,24 +579,6 @@ def _cell_source_label(
         if colspan == 1 and _is_semantic_column_label(labels[0]):
             return labels[0]
     return _cell_coordinate_label(column_id, colspan)
-
-
-def _is_semantic_column_label(label: str) -> bool:
-    return bool(label) and not label.startswith("col ")
-
-
-def _common_semantic_header_prefix(labels: list[str]) -> str | None:
-    if not labels or not all(_is_semantic_column_label(label) for label in labels):
-        return None
-    split_labels = [label.split(" / ") for label in labels]
-    prefix: list[str] = []
-    for parts in zip(*split_labels):
-        if len(set(parts)) != 1:
-            break
-        prefix.append(parts[0])
-    if not prefix:
-        return None
-    return " / ".join(prefix)
 
 
 def _cell_coordinate_label(column_id: str, colspan: int) -> str:
