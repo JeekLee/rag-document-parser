@@ -34,6 +34,9 @@ _PICTURE_BIN_DATA_ID_OFFSET = 71
 _DIAGRAM_STEP_LABEL_RE = re.compile(
     r"^(?:[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]|\d+[.)])"
 )
+_DIAGRAM_STEP_TOKEN_RE = re.compile(
+    r"(?:[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]|\d+[.)])"
+)
 _SHAPE_CTRL_TYPES = {
     b"cer$": "rectangle",  # "$rec"
     b"lle$": "ellipse",  # "$ell"
@@ -703,7 +706,7 @@ def _diagram_connector_labels(nodes: list[dict[str, object]]) -> list[str]:
         if not text:
             continue
         if _is_diagram_step_label(text):
-            labels.append(text)
+            labels.extend(_split_diagram_step_labels(text))
             continue
         if (
             labels
@@ -716,6 +719,23 @@ def _diagram_connector_labels(nodes: list[dict[str, object]]) -> list[str]:
 
 def _is_diagram_step_label(text: str) -> bool:
     return bool(_DIAGRAM_STEP_LABEL_RE.match(text.strip()))
+
+
+def _split_diagram_step_labels(text: str) -> list[str]:
+    stripped = text.strip()
+    if not stripped:
+        return []
+    matches = list(_DIAGRAM_STEP_TOKEN_RE.finditer(stripped))
+    if not matches or matches[0].start() != 0:
+        return [stripped]
+    labels: list[str] = []
+    for index, match in enumerate(matches):
+        start = match.start()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(stripped)
+        label = stripped[start:end].strip()
+        if label:
+            labels.append(label)
+    return labels or [stripped]
 
 
 def _is_diagram_section_heading(text: str) -> bool:
@@ -997,7 +1017,7 @@ def _parse_section(
             return
         ctx.current_row.append(
             _Cell(
-                text=_clean_text(" ".join(ctx.current_cell_parts)),
+                text=_clean_text("\n".join(ctx.current_cell_parts)),
                 children=list(ctx.current_cell_children),
                 row_addr=ctx.row_addr,
                 col_addr=ctx.col_addr,
@@ -1821,7 +1841,7 @@ def _table_source_cells(
             column_text,
             use_header_labels=use_header_labels,
         )
-        value = str(cell["text"])
+        value = _inline_cell_text(str(cell["text"]))
         child_texts = [
             "nested table: " + _inline_table_source(child["content"])
             for child in cell["children"]
@@ -1910,6 +1930,10 @@ def _inline_table_source(table: dict[str, object]) -> str:
 def _inline_diagram_source(diagram: dict[str, object]) -> str:
     source = _diagram_source_text(diagram)
     return source.replace("\n", " / ")
+
+
+def _inline_cell_text(text: str) -> str:
+    return " / ".join(part.strip() for part in text.splitlines() if part.strip())
 
 
 def _para_text_from_payload(payload: bytes) -> str:

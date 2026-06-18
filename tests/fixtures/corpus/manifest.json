@@ -120,6 +120,24 @@
       }
     },
     {
+      "id": "hwp-benefit-criteria-2009-214-annex",
+      "pair_id": "benefit-criteria-2009-214-annex",
+      "format": "hwp",
+      "path": "hwp/benefit-criteria-2009-214-annex.hwp",
+      "source_uri": "s3://clic/raw/20091130-1-0004/별첨(고시제2009-214호).hwp",
+      "original_name": "별첨(고시제2009-214호).hwp",
+      "bytes": 67072,
+      "sha256": "5b33587c3d7ed8981eee3d87b12f62509143a46b594bd394cb6077962ed45f6e",
+      "parser_supported": true,
+      "purpose": "Standalone HWP5 corpus document with a large span-heavy criteria table.",
+      "expected": {
+        "standalone_regression": true,
+        "min_units": 2,
+        "min_tables": 1,
+        "span_heavy_table": true
+      }
+    },
+    {
       "id": "hwp-medical-aid-overpayment-deduction",
       "pair_id": "medical-aid-overpayment-deduction",
       "format": "hwp",

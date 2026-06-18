@@ -346,6 +346,30 @@ def test_hwp5_table_preserves_column_addresses_with_blank_gaps():
     assert "row 1: A: x; C: z" in table.source.text
 
 
+def test_hwp5_table_preserves_paragraph_breaks_inside_cells():
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
+
+    records = b""
+    records += _table_ctrl(0)
+    records += _make_record(0x4D, 1, _table_body_payload(2, 2))
+    records += _make_record(0x48, 1, _list_header_payload(0, 0))
+    records += _make_record(0x43, 2, _u16("항목"))
+    records += _make_record(0x48, 1, _list_header_payload(0, 1))
+    records += _make_record(0x43, 2, _u16("내용"))
+    records += _make_record(0x48, 1, _list_header_payload(1, 0))
+    records += _make_record(0x43, 2, _u16("첫 줄"))
+    records += _make_record(0x43, 2, _u16("둘째 줄"))
+    records += _make_record(0x48, 1, _list_header_payload(1, 1))
+    records += _make_record(0x43, 2, _u16("값"))
+    records += _make_record(0x42, 0, b"")
+
+    table = _parse_section(records).to_document().units[0]
+    content = table.content
+
+    assert content["rows"][0]["cells"][0]["text"] == "첫 줄\n둘째 줄"
+    assert "row 1: 항목: 첫 줄 / 둘째 줄; 내용: 값" in table.source.text
+
+
 def test_hwp5_table_uses_table_body_dimensions_to_keep_blank_form_rows():
     from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
 
@@ -832,6 +856,46 @@ def test_hwp5_diagram_labels_inferred_edges_from_step_text():
     assert edge["label"] == "①신청"
     assert "relations:" in document.units[0].source.text
     assert "n2 -> n3: ①신청" in document.units[0].source.text
+
+
+def test_hwp5_diagram_splits_multiple_step_labels_for_edge_sources():
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
+
+    records = b""
+    records += _make_record(0x43, 0, _u16("①첫 단계 ②둘째"))
+    records += _make_record(0x43, 0, _u16("계속"))
+    records += _gso_ctrl_with_bbox(0, x=100, y=100, width=200, height=100)
+    records += _make_record(0x43, 1, _u16("A"))
+    records += _gso_line_with_bbox(
+        0,
+        x=300,
+        y=145,
+        width=200,
+        height=10,
+        link_type=1,
+    )
+    records += _gso_ctrl_with_bbox(0, x=500, y=100, width=200, height=100)
+    records += _make_record(0x43, 1, _u16("B"))
+    records += _gso_line_with_bbox(
+        0,
+        x=700,
+        y=145,
+        width=200,
+        height=10,
+        link_type=1,
+    )
+    records += _gso_ctrl_with_bbox(0, x=900, y=100, width=200, height=100)
+    records += _make_record(0x43, 1, _u16("C"))
+
+    document = _parse_section(records).to_document()
+    edges = document.units[0].content["edges"]
+
+    assert [edge["label"] for edge in edges] == [
+        "①첫 단계",
+        "②둘째\n계속",
+    ]
+    assert "n3 -> n4: ①첫 단계" in document.units[0].source.text
+    assert "n4 -> n5: ②둘째\n계속" in document.units[0].source.text
 
 
 def test_hwp5_diagram_uses_shape_ctrl_ids_and_connector_subjects():

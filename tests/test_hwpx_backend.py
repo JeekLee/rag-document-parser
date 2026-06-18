@@ -96,6 +96,50 @@ def _line(
     )
 
 
+def _curve(
+    *,
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    arrow: bool = False,
+) -> str:
+    arrow_xml = '<hp:lineShape endArrowType="NORMAL" />' if arrow else ""
+    return (
+        f'<hp:curve><hp:pos x="{x}" y="{y}" />'
+        f'<hp:sz width="{width}" height="{height}" />'
+        f'<hp:pt x="{x}" y="{y}" />'
+        f'<hp:pt x="{x + width}" y="{y + height}" />'
+        f"{arrow_xml}</hp:curve>"
+    )
+
+
+def _arc(
+    *,
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    arrow: bool = False,
+) -> str:
+    arrow_xml = '<hp:lineShape endArrowType="NORMAL" />' if arrow else ""
+    return (
+        f'<hp:arc><hp:pos x="{x}" y="{y}" />'
+        f'<hp:sz width="{width}" height="{height}" />'
+        f"{arrow_xml}</hp:arc>"
+    )
+
+
+def _polygon(text: str, *, x: int, y: int, width: int, height: int) -> str:
+    return (
+        f'<hp:polygon><hp:pos x="{x}" y="{y}" />'
+        f'<hp:sz width="{width}" height="{height}" />'
+        "<hp:drawText><hp:p>"
+        f"{_run(text)}"
+        "</hp:p></hp:drawText></hp:polygon>"
+    )
+
+
 def _make_hwpx(section_xml: str, *, image_bytes: bytes | None = None) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
@@ -743,6 +787,65 @@ def test_hwpx_drawing_shapes_become_structured_diagram():
     assert parsed.quality_warnings == []
 
 
+def test_hwpx_curve_arc_and_polygon_drawing_objects_are_structured():
+    from rag_document_parser import HwpxBackend
+
+    xml = (
+        f'<hp:sec xmlns:hp="{HP}">'
+        "<hp:p><hp:run>"
+        f"{_rect('요청자', x=100, y=100, width=120, height=80)}"
+        f"{_curve(x=220, y=140, width=180, height=0, arrow=True)}"
+        f"{_polygon('처리기관', x=400, y=100, width=140, height=80)}"
+        f"{_arc(x=540, y=140, width=120, height=0, arrow=True)}"
+        f"{_rect('결과통보', x=660, y=100, width=120, height=80)}"
+        "</hp:run></hp:p>"
+        "</hp:sec>"
+    )
+
+    parsed = HwpxBackend().parse(_make_hwpx(xml), ".hwpx")
+
+    assert parsed.quality_warnings == []
+    assert [unit.type for unit in parsed.units] == ["diagram"]
+    diagram = parsed.units[0]
+    assert diagram.format == "structured_diagram"
+    assert [node["shape_type"] for node in diagram.content["nodes"]] == [
+        "rect",
+        "polygon",
+        "rect",
+    ]
+    assert [node["text"] for node in diagram.content["nodes"]] == [
+        "요청자",
+        "처리기관",
+        "결과통보",
+    ]
+    assert [
+        (connector["type"], connector["points"], connector["arrow"])
+        for connector in diagram.content["connectors"]
+    ] == [
+        ("curve", [{"x": 220, "y": 140}, {"x": 400, "y": 140}], True),
+        ("arc", [{"x": 540, "y": 140}, {"x": 660, "y": 140}], True),
+    ]
+    assert diagram.content["edges"] == [
+        {
+            "from": "n1",
+            "to": "n2",
+            "type": "arrow",
+            "label": "",
+            "confidence": "inferred_geometry",
+            "connector_id": "c1",
+        },
+        {
+            "from": "n2",
+            "to": "n3",
+            "type": "arrow",
+            "label": "",
+            "confidence": "inferred_geometry",
+            "connector_id": "c2",
+        },
+    ]
+    assert diagram.content["mermaid"] is None
+
+
 def test_hwpx_single_text_box_stays_text_unit():
     from rag_document_parser import HwpxBackend
 
@@ -823,8 +926,8 @@ def test_hwpx_unsupported_drawing_structure_is_reported_as_quality_warning():
 
     xml = (
         f'<hp:sec xmlns:hp="{HP}">'
-        '<hp:p><hp:run><hp:arc><hp:pos x="10" y="20" />'
-        '<hp:sz width="100" height="50" /></hp:arc></hp:run></hp:p>'
+        '<hp:p><hp:run><hp:ole><hp:pos x="10" y="20" />'
+        '<hp:sz width="100" height="50" /></hp:ole></hp:run></hp:p>'
         "</hp:sec>"
     )
 
@@ -835,8 +938,8 @@ def test_hwpx_unsupported_drawing_structure_is_reported_as_quality_warning():
         {
             "type": "hwpx_drawing_structure_unsupported",
             "severity": "medium",
-            "element": "arc",
-            "message": "Unsupported HWPX drawing structure was skipped: arc",
+            "element": "ole",
+            "message": "Unsupported HWPX drawing structure was skipped: ole",
         }
     ]
 

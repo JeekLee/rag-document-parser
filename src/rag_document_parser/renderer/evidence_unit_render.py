@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import json
 import re
 from html import escape
 from typing import Any
 
 _DIAGRAM_STEP_RE = re.compile(r"^(?:[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]|\d+[.)])")
+_DIAGRAM_STEP_TOKEN_RE = re.compile(r"(?:[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]|\d+[.)])")
 
 
 def render_evidence_units_html(
@@ -37,36 +37,6 @@ def render_evidence_units_html(
     return "\n".join(parts)
 
 
-def render_rag_chunks_html(
-    chunks: list[Any],
-    *,
-    title: str = "RAG chunks",
-    assets: list[dict[str, Any]] | None = None,
-) -> str:
-    assets_by_id = _assets_by_id(assets)
-    parts = [
-        "<!doctype html>",
-        '<html lang="ko">',
-        "<head>",
-        '<meta charset="utf-8">',
-        '<meta name="viewport" content="width=device-width, initial-scale=1">',
-        f"<title>{escape(title)}</title>",
-        "<style>",
-        _CSS,
-        "</style>",
-        "</head>",
-        "<body>",
-        "<main>",
-        f"<h1>{escape(title)}</h1>",
-    ]
-    for chunk in chunks:
-        chunk_dict = _as_dict(chunk)
-        if chunk_dict is not None:
-            parts.append(_render_rag_chunk(chunk_dict, assets_by_id))
-    parts.extend(["</main>", "</body>", "</html>"])
-    return "\n".join(parts)
-
-
 def render_evidence_html(
     evidence: dict[str, Any],
     assets_by_id: dict[str, dict[str, Any]] | None = None,
@@ -85,20 +55,6 @@ def render_evidence_html(
     if isinstance(content, str):
         return f"<p>{escape(content)}</p>"
     return f"<pre>{escape(str(content))}</pre>"
-
-
-def _as_dict(value: Any) -> dict[str, Any] | None:
-    if isinstance(value, dict):
-        return value
-
-    to_dict = getattr(value, "to_dict", None)
-    if not callable(to_dict):
-        return None
-
-    payload = to_dict()
-    if isinstance(payload, dict):
-        return payload
-    return None
 
 
 def _evidence_shape(evidence: dict[str, Any]) -> tuple[str, str | None, object]:
@@ -170,122 +126,6 @@ def _render_evidence_unit(
     )
 
 
-def _render_rag_chunk(
-    chunk: dict[str, Any],
-    assets_by_id: dict[str, dict[str, Any]],
-) -> str:
-    source = chunk.get("source", {})
-    source_text = source.get("text", "") if isinstance(source, dict) else ""
-    metadata = chunk.get("metadata", {})
-    if not isinstance(metadata, dict):
-        metadata = {}
-
-    evidence = chunk.get("evidence", {})
-    if isinstance(evidence, dict):
-        evidence_html = render_evidence_html(evidence, assets_by_id)
-    else:
-        evidence_html = f"<pre>{escape(str(evidence))}</pre>"
-
-    parts = [
-        '<section class="chunk rag-chunk">',
-        '<header class="chunk-header">',
-        f"<code>{escape(str(chunk.get('id', '')))}</code>",
-        f"<span>{escape(str(chunk.get('type', '')))}</span>",
-        "</header>",
-    ]
-    summary = chunk.get("summary")
-    if isinstance(summary, str) and summary:
-        parts.append(f'<p class="summary">{escape(summary)}</p>')
-
-    parts.append(_render_chunk_lists(chunk))
-    parts.append(_render_chunk_metadata(metadata))
-    parts.append(_render_chunk_diagnostics(metadata))
-    parts.append(f'<pre class="source-text">{escape(str(source_text))}</pre>')
-    parts.append(evidence_html)
-    parts.append("</section>")
-    return "".join(parts)
-
-
-def _render_chunk_lists(chunk: dict[str, Any]) -> str:
-    keywords = _string_list(chunk.get("keywords"))
-    questions = _string_list(chunk.get("questions"))
-    if not keywords and not questions:
-        return ""
-
-    parts = ['<div class="chunk-fields">']
-    if keywords:
-        parts.append("<div><strong>keywords</strong>")
-        parts.append(_render_tag_list(keywords))
-        parts.append("</div>")
-    if questions:
-        parts.append("<div><strong>questions</strong>")
-        parts.append("<ul>")
-        for question in questions:
-            parts.append(f"<li>{escape(question)}</li>")
-        parts.append("</ul></div>")
-    parts.append("</div>")
-    return "".join(parts)
-
-
-def _render_chunk_metadata(metadata: dict[str, Any]) -> str:
-    labels = []
-    source_unit_ids = _string_list(metadata.get("source_unit_ids"))
-    context_unit_ids = _string_list(metadata.get("context_unit_ids"))
-    if source_unit_ids:
-        labels.append(f"source units: {', '.join(source_unit_ids)}")
-    if context_unit_ids:
-        labels.append(f"context units: {', '.join(context_unit_ids)}")
-    if not labels:
-        return ""
-
-    return (
-        '<div class="chunk-meta">'
-        + "".join(f"<span>{escape(label)}</span>" for label in labels)
-        + "</div>"
-    )
-
-
-def _render_chunk_diagnostics(metadata: dict[str, Any]) -> str:
-    parts = []
-    fallback_reason = metadata.get("_fallback_reason")
-    if isinstance(fallback_reason, str) and fallback_reason:
-        parts.append(
-            '<div class="diagnostic diagnostic-error">'
-            f"<strong>fallback</strong>: {escape(fallback_reason)}"
-            "</div>"
-        )
-
-    warnings = metadata.get("_warnings")
-    if warnings:
-        parts.append(_render_debug_details("warnings", warnings))
-
-    rejected_plan = metadata.get("_rejected_plan")
-    if rejected_plan is not None:
-        parts.append(_render_debug_details("rejected plan", rejected_plan))
-
-    return "".join(parts)
-
-
-def _render_debug_details(label: str, value: Any) -> str:
-    return (
-        '<details class="diagnostic">'
-        f"<summary>{escape(label)}</summary>"
-        f"<pre>{_json_debug(value)}</pre>"
-        "</details>"
-    )
-
-
-def _json_debug(value: Any) -> str:
-    return escape(json.dumps(value, ensure_ascii=False, indent=2, default=str))
-
-
-def _render_tag_list(values: list[str]) -> str:
-    return (
-        '<ul class="tag-list">'
-        + "".join(f"<li>{escape(value)}</li>" for value in values)
-        + "</ul>"
-    )
-
 
 def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
@@ -307,7 +147,7 @@ def _render_structured_table(
     header_rows = [
         row
         for row in table.get("header_rows", [])
-        if isinstance(row, dict)
+        if isinstance(row, dict) and _table_row_has_content(row)
     ]
     if header_rows:
         html.append("<thead>")
@@ -341,6 +181,55 @@ def _render_structured_table(
     if not columns and not rows:
         return "<p class=\"empty-table\">빈 표</p>"
     return "".join(html)
+
+
+def _render_table_rows(
+    rows: list[dict[str, Any]],
+    tag: str,
+    assets_by_id: dict[str, dict[str, Any]],
+    *,
+    column_count: int,
+) -> str:
+    html: list[str] = []
+    active_rowspans: dict[int, int] = {}
+    for row in rows:
+        cells = row.get("cells", [])
+        next_rowspans = {
+            column: remaining - 1
+            for column, remaining in active_rowspans.items()
+            if remaining > 1
+        }
+        html.append("<tr>")
+        html.append(
+            _render_table_row_cells(
+                cells,
+                tag,
+                assets_by_id,
+                column_count=column_count,
+                active_rowspans=active_rowspans,
+                next_rowspans=next_rowspans,
+            )
+        )
+        if not cells and column_count:
+            html.append(f'<{tag} colspan="{column_count}">&nbsp;</{tag}>')
+        html.append("</tr>")
+        active_rowspans = next_rowspans
+    return "".join(html)
+
+
+def _table_row_has_content(row: dict[str, Any]) -> bool:
+    cells = row.get("cells")
+    if not isinstance(cells, list):
+        return False
+    for cell in cells:
+        if not isinstance(cell, dict):
+            continue
+        if str(cell.get("text", "")).strip():
+            return True
+        children = cell.get("children")
+        if isinstance(children, list) and children:
+            return True
+    return False
 
 
 def _render_structured_diagram(diagram: dict[str, Any]) -> str:
@@ -575,7 +464,14 @@ def _render_positioned_label_diagram(
         height = bbox["height"] / canvas_height * 100
         text = str(node.get("text", "")).strip()
         shape_type = str(node.get("shape_type", node.get("type", "label"))).strip()
-        shape_class = _diagram_shape_class(shape_type)
+        shape_class = " ".join(
+            part
+            for part in [
+                _diagram_shape_class(shape_type),
+                _diagram_node_text_flow_class(text, bbox),
+            ]
+            if part
+        )
         html.append(
             f'<div class="diagram-positioned-node {shape_class}" '
             f'style="left:{left:.3f}%;top:{top:.3f}%;'
@@ -585,6 +481,21 @@ def _render_positioned_label_diagram(
         )
     html.append("</div></section>")
     return "".join(html)
+
+
+def _diagram_node_text_flow_class(text: str, bbox: dict[str, float]) -> str:
+    if (
+        text
+        and not any(char.isspace() for char in text)
+        and _contains_hangul(text)
+        and bbox["width"] <= bbox["height"] * 0.75
+    ):
+        return "diagram-node-vertical"
+    return ""
+
+
+def _contains_hangul(text: str) -> bool:
+    return any("\uac00" <= char <= "\ud7a3" for char in text)
 
 
 def _diagram_shape_class(shape_type: str) -> str:
@@ -784,7 +695,7 @@ def _group_diagram_section_items(items: list[str]) -> list[dict[str, Any]]:
         if _is_diagram_step(text):
             if actors:
                 flush_route()
-            pending_steps.append(text)
+            pending_steps.extend(_split_diagram_step_labels(text))
             continue
         if _looks_like_diagram_actor(text):
             actors.append(text)
@@ -840,6 +751,23 @@ def _is_diagram_step(text: str) -> bool:
     return bool(_DIAGRAM_STEP_RE.match(text.strip()))
 
 
+def _split_diagram_step_labels(text: str) -> list[str]:
+    stripped = text.strip()
+    if not stripped:
+        return []
+    matches = list(_DIAGRAM_STEP_TOKEN_RE.finditer(stripped))
+    if not matches or matches[0].start() != 0:
+        return [stripped]
+    labels: list[str] = []
+    for index, match in enumerate(matches):
+        start = match.start()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(stripped)
+        label = stripped[start:end].strip()
+        if label:
+            labels.append(label)
+    return labels or [stripped]
+
+
 def _looks_like_diagram_actor(text: str) -> bool:
     stripped = text.strip()
     if _is_diagram_step(stripped) or _is_diagram_note(stripped):
@@ -858,27 +786,6 @@ def _looks_like_diagram_actor(text: str) -> bool:
 
 def _escape_multiline(text: str) -> str:
     return "<br>".join(escape(part) or "&nbsp;" for part in text.splitlines())
-
-
-def _render_table_row_cells(
-    cells: Any,
-    tag: str,
-    assets_by_id: dict[str, dict[str, Any]],
-    *,
-    column_count: int,
-    occupied_columns: set[int] | None = None,
-) -> str:
-    positioned = _position_table_row_cells(
-        cells,
-        column_count=column_count,
-        occupied_columns=occupied_columns or set(),
-    )
-    return "".join(
-        f"<{tag}>&nbsp;</{tag}>"
-        if cell is None
-        else _render_table_cell(cell, tag, assets_by_id)
-        for cell, _column_number in positioned
-    )
 
 
 def _render_table_rows(
@@ -910,7 +817,13 @@ def _render_table_rows(
             for cell, _column_number in positioned
         )
         if not positioned and column_count:
-            html.append(f'<{tag} colspan="{column_count}">&nbsp;</{tag}>')
+            html.append(
+                _render_empty_table_row_cells(
+                    tag,
+                    column_count=column_count,
+                    active_rowspans=active_rowspans,
+                )
+            )
         html.append("</tr>")
 
         for column_number in list(active_rowspans):
@@ -931,6 +844,27 @@ def _render_table_rows(
                     rowspan - 1,
                 )
     return "".join(html)
+
+
+def _render_table_row_cells(
+    cells: Any,
+    tag: str,
+    assets_by_id: dict[str, dict[str, Any]],
+    *,
+    column_count: int,
+    occupied_columns: set[int] | None = None,
+) -> str:
+    positioned = _position_table_row_cells(
+        cells,
+        column_count=column_count,
+        occupied_columns=occupied_columns or set(),
+    )
+    return "".join(
+        f"<{tag}>&nbsp;</{tag}>"
+        if cell is None
+        else _render_table_cell(cell, tag, assets_by_id)
+        for cell, _column_number in positioned
+    )
 
 
 def _position_table_row_cells(
@@ -967,6 +901,29 @@ def _position_table_row_cells(
     return positioned
 
 
+def _render_empty_table_row_cells(
+    tag: str,
+    *,
+    column_count: int,
+    active_rowspans: dict[int, int],
+) -> str:
+    html = []
+    column = 1
+    while column <= column_count:
+        if column in active_rowspans:
+            column += 1
+            continue
+        start = column
+        while column <= column_count and column not in active_rowspans:
+            column += 1
+        width = column - start
+        if width == 1:
+            html.append(f"<{tag}>&nbsp;</{tag}>")
+        elif width > 1:
+            html.append(f'<{tag} colspan="{width}">&nbsp;</{tag}>')
+    return "".join(html)
+
+
 def _render_table_cell(
     cell: dict[str, Any],
     tag: str,
@@ -981,7 +938,8 @@ def _render_table_cell(
         attrs.append(f'colspan="{colspan}"')
     attrs_text = (" " + " ".join(attrs)) if attrs else ""
     children = _render_children(cell.get("children", []), assets_by_id)
-    text = escape(str(cell.get("text", "")))
+    raw_text = str(cell.get("text", ""))
+    text = _escape_multiline(raw_text) if raw_text else ""
     if not text and not children:
         text = "&nbsp;"
     return f"<{tag}{attrs_text}>{text}{children}</{tag}>"
@@ -1308,6 +1266,12 @@ th {
 }
 .diagram-positioned-node.diagram-shape-textbox {
   border-style: dashed;
+}
+.diagram-positioned-node.diagram-node-vertical {
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+  padding: 4px 2px;
+  line-height: 1.1;
 }
 .diagram-positioned-node.diagram-shape-group,
 .diagram-positioned-node.diagram-shape-container {

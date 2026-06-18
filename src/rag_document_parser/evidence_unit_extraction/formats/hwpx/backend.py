@@ -22,16 +22,31 @@ from ...table_source import (
 _HP = "http://www.hancom.co.kr/hwpml/2011/paragraph"
 _OPF = "http://www.idpf.org/2007/opf/"
 _DRAWING_NODE_TAGS = {
+    "arc",
     "container",
+    "curve",
     "ellipse",
+    "polygon",
     "rect",
     "roundRect",
     "shapeObject",
     "textBox",
     "textbox",
 }
-_DRAWING_CONNECTOR_TAGS = {"connectLine", "line"}
-_UNSUPPORTED_DRAWING_TAGS = {"arc", "curve", "polygon"}
+_DRAWING_CONNECTOR_TAGS = {"arc", "connectLine", "curve", "line", "polygon"}
+_UNSUPPORTED_DRAWING_TAGS = {
+    "button",
+    "checkBtn",
+    "comboBox",
+    "edit",
+    "equation",
+    "listBox",
+    "ole",
+    "radio",
+    "scrollBar",
+    "textart",
+    "video",
+}
 _DIAGRAM_STEP_LABEL_RE = re.compile(
     r"^(?:[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]|\d+[.)])"
 )
@@ -75,57 +90,64 @@ class HwpxBackend:
                         )
                         if not structured["columns"] and not structured["rows"]:
                             continue
-                        text_box = _single_cell_text_table_text(structured)
-                        if text_box is not None:
+                        table_diagram = _table_flowchart_diagram(structured)
+                        table_structured = (
+                            _table_without_flowchart_rows(structured)
+                            if table_diagram is not None
+                            else structured
+                        )
+                        if table_structured["rows"] or table_diagram is None:
+                            public_table = _public_structured_table(table_structured)
+                            text_box = _single_cell_text_table_text(public_table)
+                            if text_box is not None:
+                                units.append(
+                                    EvidenceUnit(
+                                        id=f"b{block_index}",
+                                        type="text",
+                                        format="plain",
+                                        source=SourceEvidence(kind="text", text=text_box),
+                                        content=text_box,
+                                        metadata={
+                                            "common": {
+                                                "chunk_kind": "text",
+                                                "section_path": [],
+                                                "display_format": "plain",
+                                            }
+                                        },
+                                    )
+                                )
+                                block_index += 1
+                                continue
+                            table_id = f"t{table_index}"
+                            table_index += 1
                             units.append(
                                 EvidenceUnit(
                                     id=f"b{block_index}",
-                                    type="text",
-                                    format="plain",
-                                    source=SourceEvidence(kind="text", text=text_box),
-                                    content=text_box,
+                                    type="table",
+                                    format="structured_table",
+                                    source=SourceEvidence(
+                                        kind="table",
+                                        text=_table_source_text(public_table),
+                                    ),
+                                    content=public_table,
                                     metadata={
                                         "common": {
-                                            "chunk_kind": "text",
+                                            "chunk_kind": "table",
                                             "section_path": [],
-                                            "display_format": "plain",
-                                        }
+                                            "display_format": "structured_table",
+                                        },
+                                        "table": {
+                                            "table_id": table_id,
+                                            "headers": [
+                                                str(column["text"])
+                                                for column in public_table["columns"]
+                                            ],
+                                            "row_count": len(public_table["rows"]),
+                                        },
                                     },
                                 )
                             )
                             block_index += 1
-                            continue
-                        table_id = f"t{table_index}"
-                        table_index += 1
-                        units.append(
-                            EvidenceUnit(
-                                id=f"b{block_index}",
-                                type="table",
-                                format="structured_table",
-                                source=SourceEvidence(
-                                    kind="table",
-                                    text=_table_source_text(structured),
-                                ),
-                                content=structured,
-                                metadata={
-                                    "common": {
-                                        "chunk_kind": "table",
-                                        "section_path": [],
-                                        "display_format": "structured_table",
-                                    },
-                                    "table": {
-                                        "table_id": table_id,
-                                        "headers": [
-                                            str(column["text"])
-                                            for column in structured["columns"]
-                                        ],
-                                        "row_count": len(structured["rows"]),
-                                    },
-                                },
-                            )
-                        )
-                        block_index += 1
-                        table_diagram = _table_flowchart_diagram(structured)
                         if table_diagram is not None:
                             units.append(_diagram_unit(f"b{block_index}", table_diagram))
                             block_index += 1
@@ -480,12 +502,30 @@ def _evidence_cells(
             {
                 "column_id": column_id,
                 "text": raw_cell["text"],
+                "row_addr": raw_cell["row_addr"],
+                "col_addr": raw_cell["col_addr"],
                 "rowspan": raw_cell["rowspan"],
                 "colspan": raw_cell["colspan"],
                 "children": raw_cell["children"],
             }
         )
     return cells
+
+
+def _public_structured_table(table: dict[str, object]) -> dict[str, object]:
+    return _without_table_grid_fields(table)
+
+
+def _without_table_grid_fields(value: object) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _without_table_grid_fields(child)
+            for key, child in value.items()
+            if key not in {"row_addr", "col_addr"}
+        }
+    if isinstance(value, list):
+        return [_without_table_grid_fields(item) for item in value]
+    return value
 
 
 def _single_cell_text_table_text(table: dict[str, object]) -> str | None:
@@ -767,6 +807,18 @@ def _paragraph_drawing(
         if local in _UNSUPPORTED_DRAWING_TAGS:
             _warn_unsupported_drawing(warnings, local)
             continue
+        text = _element_text(element)
+        if local in _DRAWING_NODE_TAGS and text:
+            nodes.append(
+                {
+                    "id": f"n{len(nodes) + 1}",
+                    "shape_type": local,
+                    "text": text,
+                    "bbox": _bbox_from_element(element),
+                    "metadata": {"source": "hwpx_drawing_text"},
+                }
+            )
+            continue
         if local in _DRAWING_CONNECTOR_TAGS:
             connector = _structured_connector(len(connectors) + 1, element)
             if connector is not None:
@@ -774,18 +826,6 @@ def _paragraph_drawing(
             continue
         if local not in _DRAWING_NODE_TAGS:
             continue
-        text = _element_text(element)
-        if not text:
-            continue
-        nodes.append(
-            {
-                "id": f"n{len(nodes) + 1}",
-                "shape_type": local,
-                "text": text,
-                "bbox": _bbox_from_element(element),
-                "metadata": {"source": "hwpx_drawing_text"},
-            }
-        )
 
     if len(nodes) == 1 and not connectors:
         return _DrawingResult(single_text=str(nodes[0]["text"]))
@@ -833,20 +873,26 @@ def _structured_connector(
     index: int,
     element: ET.Element,
 ) -> dict[str, object] | None:
-    bbox = _bbox_from_element(element)
+    bbox = _bbox_from_element(element, allow_flat=True)
     if bbox is None:
         return None
+    local = _local_name(element.tag)
+    connector_type = "line" if local == "connectLine" else local
     return {
         "id": f"c{index}",
-        "type": "line",
+        "type": connector_type,
         "bbox": bbox,
-        "points": _line_points_from_bbox(bbox),
+        "points": _points_from_element(element) or _line_points_from_bbox(bbox),
         "arrow": _line_has_arrow(element),
-        "metadata": {"source": "hwpx_line"},
+        "metadata": {"source": f"hwpx_{connector_type}"},
     }
 
 
-def _bbox_from_element(element: ET.Element) -> dict[str, int | str] | None:
+def _bbox_from_element(
+    element: ET.Element,
+    *,
+    allow_flat: bool = False,
+) -> dict[str, int | str] | None:
     pos = _first_descendant(element, "pos")
     size = _first_descendant(element, "sz")
     x = _int_attr(pos, ("x", "left")) if pos is not None else 0
@@ -857,7 +903,10 @@ def _bbox_from_element(element: ET.Element) -> dict[str, int | str] | None:
     y = _int_attr(element, ("y", "top"), y)
     width = _int_attr(element, ("width", "w", "cx"), width)
     height = _int_attr(element, ("height", "h", "cy"), height)
-    if width <= 0 or height <= 0:
+    if allow_flat:
+        if width <= 0 and height <= 0:
+            return None
+    elif width <= 0 or height <= 0:
         return None
     return {
         "x": x,
@@ -866,6 +915,45 @@ def _bbox_from_element(element: ET.Element) -> dict[str, int | str] | None:
         "height": height,
         "unit": "hwpx",
     }
+
+
+def _points_from_element(element: ET.Element) -> list[dict[str, int]]:
+    points: list[dict[str, int]] = []
+    for descendant in element.iter():
+        local = _local_name(descendant.tag)
+        if local not in {"pt", "point"}:
+            continue
+        point = _xy_from_attrs(descendant, ("x",), ("y",))
+        if point is not None:
+            points.append(point)
+    if len(points) >= 2:
+        return points
+
+    start = _xy_from_attrs(
+        element,
+        ("x1", "startX", "fromX"),
+        ("y1", "startY", "fromY"),
+    )
+    end = _xy_from_attrs(
+        element,
+        ("x2", "endX", "toX"),
+        ("y2", "endY", "toY"),
+    )
+    if start is not None and end is not None:
+        return [start, end]
+    return []
+
+
+def _xy_from_attrs(
+    element: ET.Element,
+    x_names: tuple[str, ...],
+    y_names: tuple[str, ...],
+) -> dict[str, int] | None:
+    x = _optional_int_attr(element, x_names)
+    y = _optional_int_attr(element, y_names)
+    if x is None or y is None:
+        return None
+    return {"x": x, "y": y}
 
 
 def _first_descendant(element: ET.Element, local_name: str) -> ET.Element | None:
@@ -882,8 +970,16 @@ def _int_attr(
     names: tuple[str, ...],
     default: int = 0,
 ) -> int:
+    value = _optional_int_attr(element, names)
+    return default if value is None else value
+
+
+def _optional_int_attr(
+    element: ET.Element | None,
+    names: tuple[str, ...],
+) -> int | None:
     if element is None:
-        return default
+        return None
     for name in names:
         value = element.get(name)
         if value is None:
@@ -892,7 +988,7 @@ def _int_attr(
             return int(float(value))
         except ValueError:
             continue
-    return default
+    return None
 
 
 def _line_points_from_bbox(bbox: dict[str, int | str]) -> list[dict[str, int]]:
@@ -1084,8 +1180,11 @@ def _table_flowchart_diagram(table: dict[str, object]) -> dict[str, object] | No
     if not flowchart_rows:
         return None
 
-    node_texts: list[str] = []
-    edge_labels: list[str] = []
+    min_row_addr = _min_flowchart_row_addr(flowchart_rows)
+    nodes: list[dict[str, object]] = []
+    label_nodes: list[dict[str, object]] = []
+    connectors: list[dict[str, object]] = []
+    seen_node_texts: set[str] = set()
     for row in flowchart_rows:
         if not isinstance(row, dict):
             continue
@@ -1099,36 +1198,295 @@ def _table_flowchart_diagram(table: dict[str, object]) -> dict[str, object] | No
             if not text:
                 continue
             if _is_flowchart_edge_label(text):
-                edge_labels.append(text)
+                label = _flowchart_edge_label(text)
+                connectors.append(
+                    _table_flowchart_connector(
+                        len(connectors) + 1,
+                        text,
+                        label,
+                        _table_cell_grid_bbox(cell, min_row_addr),
+                    )
+                )
+                label_nodes.append(
+                    {
+                        "id": "",
+                        "shape_type": "label",
+                        "text": label,
+                        "bbox": None,
+                        "metadata": {
+                            "source": "hwpx_table_flowchart_label",
+                            "raw_label": text,
+                        },
+                    }
+                )
                 continue
-            if text not in node_texts:
-                node_texts.append(text)
+            if text not in seen_node_texts:
+                seen_node_texts.add(text)
+                nodes.append(
+                    {
+                        "id": "",
+                        "shape_type": "label",
+                        "text": text,
+                        "bbox": _table_cell_grid_bbox(cell, min_row_addr),
+                        "metadata": {
+                            "source": "hwpx_table_flowchart",
+                            "role": (
+                                "title" if _is_flowchart_title(text) else "node"
+                            ),
+                        },
+                    }
+                )
 
-    if len(node_texts) < 2:
+    if len(nodes) < 2:
         return None
 
-    nodes = [
+    all_nodes = _assign_node_ids(nodes + label_nodes)
+    edges = _infer_table_grid_edges(all_nodes, connectors)
+    return _structured_diagram_content(nodes=all_nodes, edges=edges, connectors=connectors)
+
+
+def _assign_node_ids(nodes: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [
         {
+            **node,
             "id": f"n{index}",
-            "shape_type": "label",
-            "text": text,
-            "bbox": None,
-            "metadata": {"source": "hwpx_table_flowchart"},
         }
-        for index, text in enumerate(node_texts, start=1)
+        for index, node in enumerate(nodes, start=1)
     ]
-    edges = [
-        {
-            "from": f"n{index}",
-            "to": f"n{index + 1}",
-            "type": "arrow",
-            "label": edge_labels[index - 1] if index <= len(edge_labels) else "",
-            "confidence": "inferred_sequence",
-            "connector_id": "",
-        }
-        for index in range(1, len(nodes))
+
+
+def _min_flowchart_row_addr(rows: list[object]) -> int:
+    row_addrs = [
+        int(cell["row_addr"])
+        for row in rows
+        if isinstance(row, dict)
+        for cell in row.get("cells", [])
+        if isinstance(cell, dict) and "row_addr" in cell
     ]
-    return _structured_diagram_content(nodes=nodes, edges=edges, connectors=[])
+    return min(row_addrs, default=0)
+
+
+def _table_cell_grid_bbox(
+    cell: dict[str, object],
+    min_row_addr: int,
+) -> dict[str, int | str]:
+    return {
+        "x": _int_value(cell.get("col_addr"), 0),
+        "y": max(0, _int_value(cell.get("row_addr"), min_row_addr) - min_row_addr),
+        "width": _int_value(cell.get("colspan"), 1),
+        "height": _int_value(cell.get("rowspan"), 1),
+        "unit": "hwpx_table_grid",
+    }
+
+
+def _int_value(value: object, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _table_flowchart_connector(
+    index: int,
+    raw_label: str,
+    label: str,
+    bbox: dict[str, int | str],
+) -> dict[str, object]:
+    return {
+        "id": f"c{index}",
+        "type": "arrow",
+        "bbox": bbox,
+        "points": _table_flowchart_connector_points(raw_label, bbox),
+        "arrow": True,
+        "metadata": {
+            "source": "hwpx_table_flowchart",
+            "label": label,
+            "raw_label": raw_label,
+        },
+    }
+
+
+def _table_flowchart_connector_points(
+    raw_label: str,
+    bbox: dict[str, int | str],
+) -> list[dict[str, float | int]]:
+    x = _int_value(bbox.get("x"), 0)
+    y = _int_value(bbox.get("y"), 0)
+    width = _int_value(bbox.get("width"), 1)
+    height = _int_value(bbox.get("height"), 1)
+    x_mid = x + width / 2
+    y_mid = y + height / 2
+    arrow = _flowchart_arrow(raw_label)
+    if arrow == "←":
+        return [{"x": x + width, "y": y_mid}, {"x": x, "y": y_mid}]
+    if arrow == "↑":
+        return [{"x": x_mid, "y": y + height}, {"x": x_mid, "y": y}]
+    if arrow == "↕":
+        return [{"x": x_mid, "y": y + height}, {"x": x_mid, "y": y}]
+    if arrow == "↓":
+        return [{"x": x_mid, "y": y}, {"x": x_mid, "y": y + height}]
+    return [{"x": x, "y": y_mid}, {"x": x + width, "y": y_mid}]
+
+
+def _flowchart_arrow(text: str) -> str:
+    match = re.search(r"[→←↑↓↕]", text)
+    return match.group(0) if match is not None else "→"
+
+
+def _flowchart_edge_label(text: str) -> str:
+    label = re.sub(r"^[→←↑↓↕\s]+", "", text).strip()
+    if label.startswith("(") and label.endswith(")"):
+        label = label[1:-1].strip()
+    return label or text
+
+
+def _infer_table_grid_edges(
+    nodes: list[dict[str, object]],
+    connectors: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    bbox_nodes = [
+        (str(node.get("id", "")), bbox)
+        for node in nodes
+        if not _is_table_flowchart_title_node(node)
+        and (bbox := _diagram_node_bbox(node)) is not None
+    ]
+    edges: list[dict[str, object]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for connector in connectors:
+        points = connector.get("points")
+        if not isinstance(points, list) or len(points) < 2:
+            continue
+        start = _diagram_point(points[0])
+        end = _diagram_point(points[1])
+        if start is None or end is None:
+            continue
+        from_id = _nearest_node_id(start, bbox_nodes)
+        to_id = _nearest_node_id(end, bbox_nodes)
+        if from_id is not None and from_id == to_id:
+            from_id, to_id = _directional_table_grid_edge_node_ids(
+                connector,
+                bbox_nodes,
+            )
+        if from_id is None or to_id is None or from_id == to_id:
+            continue
+        connector_id = str(connector.get("id", ""))
+        key = (from_id, to_id, connector_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        metadata = connector.get("metadata")
+        label = (
+            str(metadata.get("label", "")).strip()
+            if isinstance(metadata, dict)
+            else ""
+        )
+        edges.append(
+            {
+                "from": from_id,
+                "to": to_id,
+                "type": "arrow",
+                "label": label,
+                "confidence": "inferred_table_grid",
+                "connector_id": connector_id,
+            }
+        )
+    return edges
+
+
+def _directional_table_grid_edge_node_ids(
+    connector: dict[str, object],
+    bbox_nodes: list[tuple[str, dict[str, int]]],
+) -> tuple[str | None, str | None]:
+    bbox = connector.get("bbox")
+    if not isinstance(bbox, dict):
+        return None, None
+    center = {
+        "x": _int_value(bbox.get("x"), 0)
+        + _int_value(bbox.get("width"), 1) / 2,
+        "y": _int_value(bbox.get("y"), 0)
+        + _int_value(bbox.get("height"), 1) / 2,
+    }
+    metadata = connector.get("metadata")
+    raw_label = (
+        str(metadata.get("raw_label", ""))
+        if isinstance(metadata, dict)
+        else ""
+    )
+    arrow = _flowchart_arrow(raw_label)
+    if arrow == "←":
+        return (
+            _nearest_directional_node_id(center, bbox_nodes, "right"),
+            _nearest_directional_node_id(center, bbox_nodes, "left"),
+        )
+    if arrow in {"↑", "↕"}:
+        return (
+            _nearest_directional_node_id(center, bbox_nodes, "below"),
+            _nearest_directional_node_id(center, bbox_nodes, "above"),
+        )
+    if arrow == "↓":
+        return (
+            _nearest_directional_node_id(center, bbox_nodes, "above"),
+            _nearest_directional_node_id(center, bbox_nodes, "below"),
+        )
+    return (
+        _nearest_directional_node_id(center, bbox_nodes, "left"),
+        _nearest_directional_node_id(center, bbox_nodes, "right"),
+    )
+
+
+def _nearest_directional_node_id(
+    point: dict[str, float],
+    bbox_nodes: list[tuple[str, dict[str, int]]],
+    direction: str,
+) -> str | None:
+    candidates = [
+        (node_id, bbox)
+        for node_id, bbox in bbox_nodes
+        if _bbox_is_in_direction(point, bbox, direction)
+    ]
+    return _nearest_node_id(point, candidates)
+
+
+def _bbox_is_in_direction(
+    point: dict[str, float],
+    bbox: dict[str, int],
+    direction: str,
+) -> bool:
+    if direction == "left":
+        return bbox["x"] + bbox["width"] <= point["x"]
+    if direction == "right":
+        return bbox["x"] >= point["x"]
+    if direction == "above":
+        return bbox["y"] + bbox["height"] <= point["y"]
+    if direction == "below":
+        return bbox["y"] >= point["y"]
+    return False
+
+
+def _is_table_flowchart_title_node(node: dict[str, object]) -> bool:
+    metadata = node.get("metadata")
+    return isinstance(metadata, dict) and metadata.get("role") == "title"
+
+
+def _table_without_flowchart_rows(
+    table: dict[str, object],
+) -> dict[str, object]:
+    rows = table.get("rows")
+    if not isinstance(rows, list):
+        return table
+    flowchart_rows = _flowchart_rows(rows)
+    if not flowchart_rows:
+        return table
+
+    flowchart_row_ids = {id(row) for row in flowchart_rows}
+    return {
+        **table,
+        "rows": [
+            row
+            for row in rows
+            if id(row) not in flowchart_row_ids
+        ],
+    }
 
 
 def _flowchart_rows(rows: list[object]) -> list[object]:

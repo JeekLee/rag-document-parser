@@ -19,7 +19,7 @@ def _manifest_documents() -> list[dict[str, object]]:
 def test_regression_corpus_files_are_pinned_by_hash_and_size():
     documents = _manifest_documents()
 
-    assert len(documents) == 10
+    assert len(documents) == 11
     assert {str(document["id"]) for document in documents} == {
         "hwpx-ultrasound-qa",
         "pdf-ultrasound-qa",
@@ -28,6 +28,7 @@ def test_regression_corpus_files_are_pinned_by_hash_and_size():
         "hwpx-cesarean-copay-qa",
         "pdf-cesarean-copay-qa",
         "hwpx-medical-fee-criteria-2022-139",
+        "hwp-benefit-criteria-2009-214-annex",
         "hwp-medical-aid-overpayment-deduction",
         "pdf-medical-aid-overpayment-deduction",
         "pdf-infection-prevention-management-fee-qa",
@@ -215,8 +216,106 @@ def test_hwpx_minio_diagram_fixture_extracts_real_file_diagram_evidence():
     assert "시군구 (읍면동 포함)" in node_texts
     assert "지원대상자" in node_texts
     assert len(diagram.content["edges"]) >= 4
-    assert all(edge["confidence"] == "inferred_sequence" for edge in diagram.content["edges"])
+    assert all(edge["confidence"] == "inferred_table_grid" for edge in diagram.content["edges"])
+    assert all(edge["connector_id"] for edge in diagram.content["edges"])
+    assert len(diagram.content["connectors"]) >= 4
     assert diagram.content["mermaid"] is None
+
+
+def test_hwpx_minio_diagram_fixture_preserves_flowchart_geometry():
+    from rag_document_parser import HwpxBackend
+
+    path = CORPUS_DIR / "hwpx" / "medical-fee-criteria-2022-139.hwpx"
+    assert path.is_file()
+
+    parsed = HwpxBackend().parse(path.read_bytes(), ".hwpx")
+    diagram = next(
+        unit
+        for unit in parsed.units
+        if unit.type == "diagram" and "조산아 및 저체중 출생아 등록절차" in unit.source.text
+    )
+
+    nodes_by_text = {
+        str(node["text"]): node
+        for node in diagram.content["nodes"]
+        if isinstance(node, dict)
+    }
+    assert nodes_by_text["조산아 및 저체중 출생아 등록절차"]["bbox"] == {
+        "x": 0,
+        "y": 0,
+        "width": 23,
+        "height": 1,
+        "unit": "hwpx_table_grid",
+    }
+    assert nodes_by_text["건강보험공단 (자격관리시스템)"]["bbox"] == {
+        "x": 6,
+        "y": 2,
+        "width": 6,
+        "height": 2,
+        "unit": "hwpx_table_grid",
+    }
+    assert nodes_by_text["지원대상자"]["bbox"] == {
+        "x": 13,
+        "y": 11,
+        "width": 4,
+        "height": 2,
+        "unit": "hwpx_table_grid",
+    }
+    assert "④자료전송" in nodes_by_text
+    assert nodes_by_text["④자료전송"]["bbox"] is None
+
+    connectors = diagram.content["connectors"]
+    assert len(connectors) >= 8
+    assert connectors[0] == {
+        "id": "c1",
+        "type": "arrow",
+        "bbox": {
+            "x": 13,
+            "y": 2,
+            "width": 7,
+            "height": 1,
+            "unit": "hwpx_table_grid",
+        },
+        "points": [{"x": 20, "y": 2.5}, {"x": 13, "y": 2.5}],
+        "arrow": True,
+        "metadata": {
+            "source": "hwpx_table_flowchart",
+            "label": "④자료전송",
+            "raw_label": "← (④자료전송)",
+        },
+    }
+    assert len(diagram.content["edges"]) >= 8
+    assert all(edge["connector_id"] for edge in diagram.content["edges"])
+    assert all(edge["confidence"] == "inferred_table_grid" for edge in diagram.content["edges"])
+    assert "relations:" in diagram.source.text
+
+
+def test_hwpx_minio_diagram_fixture_does_not_duplicate_flowchart_rows_in_table():
+    from rag_document_parser import HwpxBackend
+
+    path = CORPUS_DIR / "hwpx" / "medical-fee-criteria-2022-139.hwpx"
+    assert path.is_file()
+
+    parsed = HwpxBackend().parse(path.read_bytes(), ".hwpx")
+    form_table = next(
+        unit
+        for unit in parsed.units
+        if unit.type == "table"
+        and "의료급여 2종 조산아 및 저체중출생아 등록 신청서" in unit.source.text
+    )
+    diagram = next(
+        unit
+        for unit in parsed.units
+        if unit.type == "diagram"
+        and "조산아 및 저체중 출생아 등록절차" in unit.source.text
+    )
+
+    assert "조산아 및 저체중 출생아 등록절차" not in form_table.source.text
+    assert "건강보험공단 (자격관리시스템)" not in form_table.source.text
+    assert "지원대상자" not in form_table.source.text
+    assert len(form_table.content["rows"]) == 11
+    assert "조산아 및 저체중 출생아 등록절차" in diagram.source.text
+    assert "지원대상자" in diagram.source.text
 
 
 def test_supported_hwp5_and_pdf_corpus_extracts_evidence_units():
@@ -284,6 +383,46 @@ def test_supported_hwp5_and_pdf_corpus_extracts_evidence_units():
             assert unit.format == "structured_diagram", document["id"]
             assert isinstance(unit.content, dict), document["id"]
             assert "nodes" in unit.content, document["id"]
+
+
+def test_hwp5_complex_annex_fixture_preserves_span_heavy_table():
+    from rag_document_parser import Hwp5Backend
+
+    documents = {document["id"]: document for document in _manifest_documents()}
+    document = documents["hwp-benefit-criteria-2009-214-annex"]
+    parsed = Hwp5Backend().parse(
+        (CORPUS_DIR / str(document["path"])).read_bytes(),
+        ".hwp",
+    )
+
+    table = next(unit for unit in parsed.units if unit.type == "table")
+    content = table.content
+    all_cells = [
+        cell
+        for row in [*content["header_rows"], *content["rows"]]
+        for cell in row["cells"]
+    ]
+    span_cells = [
+        cell
+        for cell in all_cells
+        if cell["rowspan"] > 1 or cell["colspan"] > 1
+    ]
+
+    assert [column["text"] for column in content["columns"]] == [
+        "처방명",
+        "현 행 / 한 방",
+        "현 행 / 양 방",
+        "현 행 / 분류기호",
+        "개정(안) / 적응증",
+    ]
+    assert len(content["header_rows"]) == 2
+    assert len(content["rows"]) == 424
+    assert len(span_cells) >= 100
+    assert "header 1: col 1: 처방명; cols 2-4: 현 행; col 5: 개정(안)" in (
+        table.source.text
+    )
+    assert "row 1: 처방명: 1. 가미소요산" in table.source.text
+    assert parsed.quality_warnings == []
 
 
 def test_pdf_corpus_preserves_grouped_headers_and_reduces_fragmentation():
