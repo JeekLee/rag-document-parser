@@ -23,7 +23,7 @@ def test_parse_text_document_returns_evidence_units_without_llm(monkeypatch):
         raise AssertionError("parse() must not call LLM enrichment")
 
     monkeypatch.setattr(
-        "rag_document_parser.parser._chat_json",
+        "rag_document_parser.enrichment.llm.chat_json",
         fail_chat_json,
         raising=False,
     )
@@ -214,7 +214,7 @@ def test_custom_backend_can_be_registered_for_suffix():
         RagDocumentParser,
         SourceEvidence,
     )
-    from rag_document_parser.backends import ParsedDocument
+    from rag_document_parser.evidence_unit_extraction.backend import ParsedDocument
 
     class CustomBackend:
         calls: list[tuple[bytes, str]]
@@ -271,7 +271,7 @@ def test_unsupported_suffix_fails_before_llm_call(monkeypatch):
         raise AssertionError("parse() must not call LLM enrichment")
 
     monkeypatch.setattr(
-        "rag_document_parser.parser._chat_json",
+        "rag_document_parser.enrichment.llm.chat_json",
         fail_chat_json,
         raising=False,
     )
@@ -293,7 +293,7 @@ def test_image_assets_are_uploaded_to_s3_and_linked_in_evidence(monkeypatch):
         RagDocumentParser,
         SourceEvidence,
     )
-    from rag_document_parser.backends import ParsedDocument
+    from rag_document_parser.evidence_unit_extraction.backend import ParsedDocument
 
     uploads = []
 

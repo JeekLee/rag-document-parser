@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from rag_document_parser import HwpxBackend, S3Config
-from rag_document_parser.backends import PendingAsset
+from rag_document_parser.models import PendingAsset
 from rag_document_parser.renderer.evidence_unit_render import render_evidence_units_html
 from rag_document_parser.storage import public_url_for_s3_uri, put_object
 

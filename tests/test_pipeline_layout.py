@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib.util
+
 
 def test_pipeline_layout_exports_stage_and_format_modules():
     from rag_document_parser import (
@@ -60,22 +62,10 @@ def test_pipeline_layout_exports_stage_and_format_modules():
     assert isinstance(backends[".pdf"], PdfBackend)
 
 
-def test_legacy_import_paths_remain_compatible():
-    from rag_document_parser import HwpxBackend, MarkdownBackend, RagDocumentParser
-    from rag_document_parser.backends import MarkdownBackend as LegacyMarkdownBackend
-    from rag_document_parser.backends import ParsedDocument as LegacyParsedDocument
-    from rag_document_parser.evidence_unit_extraction.backend import (
-        ParsedDocument as CanonicalParsedDocument,
-    )
-    from rag_document_parser.extract.backend import ParsedDocument
-    from rag_document_parser.hwpx import HwpxBackend as LegacyHwpxBackend
-    from rag_document_parser.llm import LlmConfig as LegacyLlmConfig
-    from rag_document_parser.parser import RagDocumentParser as LegacyParser
-    from rag_document_parser.enrichment.llm import LlmConfig
-
-    assert LegacyParser is RagDocumentParser
-    assert LegacyHwpxBackend is HwpxBackend
-    assert LegacyMarkdownBackend is MarkdownBackend
-    assert LegacyParsedDocument is ParsedDocument
-    assert ParsedDocument is CanonicalParsedDocument
-    assert LegacyLlmConfig is LlmConfig
+def test_legacy_import_paths_are_removed():
+    assert importlib.util.find_spec("rag_document_parser.backends") is None
+    assert importlib.util.find_spec("rag_document_parser.evidence_html") is None
+    assert importlib.util.find_spec("rag_document_parser.extract") is None
+    assert importlib.util.find_spec("rag_document_parser.hwpx") is None
+    assert importlib.util.find_spec("rag_document_parser.llm") is None
+    assert importlib.util.find_spec("rag_document_parser.parser") is None

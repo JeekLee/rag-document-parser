@@ -22,13 +22,13 @@ def test_common_metadata_schema_helper_keeps_canonical_shape():
 
 def test_evidence_unit_schema_reexports_canonical_envelope_types():
     from rag_document_parser import EvidenceItem, EvidenceUnit, SourceEvidence
-    from rag_document_parser.evidence_unit_extraction.schema.evidence_unit import (
+    from rag_document_parser.evidence_unit_extraction.schema import (
         EvidenceItem as SchemaEvidenceItem,
     )
-    from rag_document_parser.evidence_unit_extraction.schema.evidence_unit import (
+    from rag_document_parser.evidence_unit_extraction.schema import (
         EvidenceUnit as SchemaEvidenceUnit,
     )
-    from rag_document_parser.evidence_unit_extraction.schema.evidence_unit import (
+    from rag_document_parser.evidence_unit_extraction.schema import (
         SourceEvidence as SchemaSourceEvidence,
     )
 

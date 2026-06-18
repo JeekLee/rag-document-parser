@@ -112,11 +112,6 @@ input -> evidence_unit_extraction EvidenceUnit -> agentic chunk -> RagChunk
 - `chunk/`: chunker protocol and `EvidenceUnitAgenticChunker`.
 - `enrichment/`: LLM client and future chunk enrichment logic.
 
-Legacy import modules such as `rag_document_parser.parser`,
-`rag_document_parser.extract`, `rag_document_parser.evidence_html`,
-`rag_document_parser.backends`, `rag_document_parser.hwpx`, and
-`rag_document_parser.llm` remain as compatibility shims.
-
 ## Optional dependencies
 
 Install format dependencies explicitly when using non-HWPX formats:

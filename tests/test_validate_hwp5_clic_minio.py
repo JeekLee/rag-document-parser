@@ -17,7 +17,7 @@ def test_hwp5_validation_run_id_gets_datetime_prefix():
 
 
 def test_hwp5_validation_metrics_include_tables_diagrams_and_warnings():
-    from rag_document_parser.backends import ParsedDocument
+    from rag_document_parser.evidence_unit_extraction.backend import ParsedDocument
     from rag_document_parser.models import EvidenceUnit, SourceEvidence
 
     validate_hwp5_clic_minio = _load_validation_script()

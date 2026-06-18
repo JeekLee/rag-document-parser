@@ -1,5 +1,0 @@
-from __future__ import annotations
-
-from .evidence_unit_extraction.formats.hwpx import HwpxBackend
-
-__all__ = ["HwpxBackend"]

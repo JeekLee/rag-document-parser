@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from ...models import EvidenceItem, EvidenceUnit, SourceEvidence
 from .asset_ref import AssetRefContent, asset_ref_content
 from .common import CommonMetadata, CommonMetadataPayload, common_metadata
-from .evidence_unit import EvidenceItem, EvidenceUnit, SourceEvidence
 from .structured_diagram import (
     BoundingBox,
     DiagramConnector,

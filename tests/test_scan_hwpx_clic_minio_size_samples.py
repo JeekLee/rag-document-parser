@@ -126,7 +126,7 @@ def test_html_object_key_is_ascii_safe_for_minio_http_upload():
 
 
 def test_upload_assets_uses_ascii_object_key_and_public_url(monkeypatch):
-    from rag_document_parser.backends import PendingAsset
+    from rag_document_parser.models import PendingAsset
     from rag_document_parser.storage import S3Config
 
     scan_hwpx = _load_scan_script()
