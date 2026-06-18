@@ -318,6 +318,30 @@ def test_hwpx_minio_diagram_fixture_does_not_duplicate_flowchart_rows_in_table()
     assert "지원대상자" in diagram.source.text
 
 
+def test_hwpx_medical_fee_form_table_preserves_blank_body_rows():
+    from rag_document_parser import HwpxBackend
+
+    path = CORPUS_DIR / "hwpx" / "medical-fee-criteria-2022-139.hwpx"
+    assert path.is_file()
+
+    parsed = HwpxBackend().parse(path.read_bytes(), ".hwpx")
+    table = next(unit for unit in parsed.units if unit.id == "b705")
+
+    assert len(table.content["columns"]) == 100
+    assert len(table.content["header_rows"]) == 15
+    assert len(table.content["rows"]) == 47
+    assert table.metadata["table"]["row_count"] == 47
+    assert all(
+        row["index"] == index
+        for index, row in enumerate(table.content["rows"], start=1)
+    )
+    assert not any(
+        str(cell["text"]).strip() or cell["children"]
+        for cell in table.content["rows"][1]["cells"]
+    )
+    assert "row 2:" not in table.source.text
+
+
 def test_supported_hwp5_and_pdf_corpus_extracts_evidence_units():
     from rag_document_parser import Hwp5Backend, PdfBackend
 
