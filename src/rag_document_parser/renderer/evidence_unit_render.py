@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 from html import escape
 from typing import Any
@@ -38,36 +37,6 @@ def render_evidence_units_html(
     return "\n".join(parts)
 
 
-def render_rag_chunks_html(
-    chunks: list[Any],
-    *,
-    title: str = "RAG chunks",
-    assets: list[dict[str, Any]] | None = None,
-) -> str:
-    assets_by_id = _assets_by_id(assets)
-    parts = [
-        "<!doctype html>",
-        '<html lang="ko">',
-        "<head>",
-        '<meta charset="utf-8">',
-        '<meta name="viewport" content="width=device-width, initial-scale=1">',
-        f"<title>{escape(title)}</title>",
-        "<style>",
-        _CSS,
-        "</style>",
-        "</head>",
-        "<body>",
-        "<main>",
-        f"<h1>{escape(title)}</h1>",
-    ]
-    for chunk in chunks:
-        chunk_dict = _as_dict(chunk)
-        if chunk_dict is not None:
-            parts.append(_render_rag_chunk(chunk_dict, assets_by_id))
-    parts.extend(["</main>", "</body>", "</html>"])
-    return "\n".join(parts)
-
-
 def render_evidence_html(
     evidence: dict[str, Any],
     assets_by_id: dict[str, dict[str, Any]] | None = None,
@@ -86,20 +55,6 @@ def render_evidence_html(
     if isinstance(content, str):
         return f"<p>{escape(content)}</p>"
     return f"<pre>{escape(str(content))}</pre>"
-
-
-def _as_dict(value: Any) -> dict[str, Any] | None:
-    if isinstance(value, dict):
-        return value
-
-    to_dict = getattr(value, "to_dict", None)
-    if not callable(to_dict):
-        return None
-
-    payload = to_dict()
-    if isinstance(payload, dict):
-        return payload
-    return None
 
 
 def _evidence_shape(evidence: dict[str, Any]) -> tuple[str, str | None, object]:
@@ -170,122 +125,6 @@ def _render_evidence_unit(
         "</section>"
     )
 
-
-def _render_rag_chunk(
-    chunk: dict[str, Any],
-    assets_by_id: dict[str, dict[str, Any]],
-) -> str:
-    source = chunk.get("source", {})
-    source_text = source.get("text", "") if isinstance(source, dict) else ""
-    metadata = chunk.get("metadata", {})
-    if not isinstance(metadata, dict):
-        metadata = {}
-
-    evidence = chunk.get("evidence", {})
-    if isinstance(evidence, dict):
-        evidence_html = render_evidence_html(evidence, assets_by_id)
-    else:
-        evidence_html = f"<pre>{escape(str(evidence))}</pre>"
-
-    parts = [
-        '<section class="chunk rag-chunk">',
-        '<header class="chunk-header">',
-        f"<code>{escape(str(chunk.get('id', '')))}</code>",
-        f"<span>{escape(str(chunk.get('type', '')))}</span>",
-        "</header>",
-    ]
-    summary = chunk.get("summary")
-    if isinstance(summary, str) and summary:
-        parts.append(f'<p class="summary">{escape(summary)}</p>')
-
-    parts.append(_render_chunk_lists(chunk))
-    parts.append(_render_chunk_metadata(metadata))
-    parts.append(_render_chunk_diagnostics(metadata))
-    parts.append(f'<pre class="source-text">{escape(str(source_text))}</pre>')
-    parts.append(evidence_html)
-    parts.append("</section>")
-    return "".join(parts)
-
-
-def _render_chunk_lists(chunk: dict[str, Any]) -> str:
-    keywords = _string_list(chunk.get("keywords"))
-    questions = _string_list(chunk.get("questions"))
-    if not keywords and not questions:
-        return ""
-
-    parts = ['<div class="chunk-fields">']
-    if keywords:
-        parts.append("<div><strong>keywords</strong>")
-        parts.append(_render_tag_list(keywords))
-        parts.append("</div>")
-    if questions:
-        parts.append("<div><strong>questions</strong>")
-        parts.append("<ul>")
-        for question in questions:
-            parts.append(f"<li>{escape(question)}</li>")
-        parts.append("</ul></div>")
-    parts.append("</div>")
-    return "".join(parts)
-
-
-def _render_chunk_metadata(metadata: dict[str, Any]) -> str:
-    labels = []
-    source_unit_ids = _string_list(metadata.get("source_unit_ids"))
-    context_unit_ids = _string_list(metadata.get("context_unit_ids"))
-    if source_unit_ids:
-        labels.append(f"source units: {', '.join(source_unit_ids)}")
-    if context_unit_ids:
-        labels.append(f"context units: {', '.join(context_unit_ids)}")
-    if not labels:
-        return ""
-
-    return (
-        '<div class="chunk-meta">'
-        + "".join(f"<span>{escape(label)}</span>" for label in labels)
-        + "</div>"
-    )
-
-
-def _render_chunk_diagnostics(metadata: dict[str, Any]) -> str:
-    parts = []
-    fallback_reason = metadata.get("_fallback_reason")
-    if isinstance(fallback_reason, str) and fallback_reason:
-        parts.append(
-            '<div class="diagnostic diagnostic-error">'
-            f"<strong>fallback</strong>: {escape(fallback_reason)}"
-            "</div>"
-        )
-
-    warnings = metadata.get("_warnings")
-    if warnings:
-        parts.append(_render_debug_details("warnings", warnings))
-
-    rejected_plan = metadata.get("_rejected_plan")
-    if rejected_plan is not None:
-        parts.append(_render_debug_details("rejected plan", rejected_plan))
-
-    return "".join(parts)
-
-
-def _render_debug_details(label: str, value: Any) -> str:
-    return (
-        '<details class="diagnostic">'
-        f"<summary>{escape(label)}</summary>"
-        f"<pre>{_json_debug(value)}</pre>"
-        "</details>"
-    )
-
-
-def _json_debug(value: Any) -> str:
-    return escape(json.dumps(value, ensure_ascii=False, indent=2, default=str))
-
-
-def _render_tag_list(values: list[str]) -> str:
-    return (
-        '<ul class="tag-list">'
-        + "".join(f"<li>{escape(value)}</li>" for value in values)
-        + "</ul>"
-    )
 
 
 def _string_list(value: Any) -> list[str]:
