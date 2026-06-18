@@ -30,6 +30,7 @@ _CJK = re.compile(r"[가-힣一-鿿㐀-䶿]")
 _MIN_IMAGE_AREA_PT2 = 2500
 _DEFAULT_RENDER_SCALE = 2.0
 _SCANNED_OCR_RENDER_SCALE = 3.0
+_PdfDiagramShape = tuple[float, float, float, float, str]
 
 
 @dataclass(frozen=True)
@@ -103,7 +104,13 @@ class PdfBackend:
             pdf_reader: object | None = None
 
             for page_idx, page in enumerate(pdf.pages):
-                if _is_scanned_page(page):
+                ocr_fallback_reason = _ocr_fallback_reason(
+                    page,
+                    allow_degraded_native=(
+                        self.ocr_fn is not None or self.ocr_llm is not None
+                    ),
+                )
+                if ocr_fallback_reason is not None:
                     png = _render_scanned_page_for_ocr(
                         data,
                         page_idx,
@@ -111,6 +118,18 @@ class PdfBackend:
                         warnings,
                     ) if self.ocr_fn is not None or self.ocr_llm is not None else b""
                     scanned.append((page_idx, png))
+                    if ocr_fallback_reason == "degraded_native_text":
+                        warnings.append(
+                            {
+                                "type": "pdf_native_text_ocr_fallback",
+                                "severity": "low",
+                                "page": page_idx + 1,
+                                "message": (
+                                    "Native PDF text looked degraded; OCR fallback "
+                                    "was used."
+                                ),
+                            }
+                        )
                     continue
 
                 tables = _find_tables(page, warnings, page_idx)
@@ -377,6 +396,7 @@ def _table_cell_diagram_children(
     warnings: list[dict[str, Any]],
 ) -> dict[int, dict[tuple[int, int], list[dict[str, object]]]]:
     cell_children: dict[int, dict[tuple[int, int], list[dict[str, object]]]] = {}
+    page_shapes = _pdf_page_diagram_shapes(page)
     for table_idx, table in enumerate(tables):
         nested_children = nested.children.get(table_idx, {})
         for row_idx, row in enumerate(getattr(table, "rows", [])):
@@ -391,6 +411,7 @@ def _table_cell_diagram_children(
                     page,
                     nested_table_bboxes,
                     container_bbox=cell_bbox,
+                    page_shapes=page_shapes,
                 ):
                     child = _table_cell_diagram_child(
                         data,
@@ -700,7 +721,11 @@ def _page_segments_ordered(
         )
         if structured is None:
             continue
+        if _is_empty_single_cell_table_artifact(structured):
+            continue
         text_box = _title_table_text(structured)
+        if text_box is None:
+            text_box = _single_line_header_only_table_text(table, structured)
         if text_box is not None:
             segments.append(
                 _Segment(
@@ -1010,15 +1035,38 @@ def _is_duplicate_short_title_segment(
 ) -> bool:
     if segment.kind != "text" or next_segment is None or next_segment.kind != "text":
         return False
+    if segment.page != next_segment.page:
+        return False
     title = str(segment.payload).strip()
     next_text = str(next_segment.payload).strip()
-    return (
+    if (
         0 < len(title) <= 30
         and "\n" not in title
         and title.endswith("대상")
         and title in next_text
         and bool(re.match(r"^[가-힣]\.", next_text))
+    ):
+        return True
+    if not _is_short_pdf_text_box_segment(segment, title):
+        return False
+    normalized_title = _normalize_duplicate_text(title)
+    normalized_next = _normalize_duplicate_text(next_text)
+    return (
+        len(normalized_title) >= 6
+        and normalized_title in normalized_next
     )
+
+
+def _is_short_pdf_text_box_segment(segment: _Segment, text: str) -> bool:
+    return (
+        0 < len(text) <= 160
+        and "\n" not in text
+        and segment.bottom - segment.top <= 24
+    )
+
+
+def _normalize_duplicate_text(text: str) -> str:
+    return re.sub(r"\s+", "", text.strip())
 
 
 def _official_notice_text_parts(text: str) -> list[str] | None:
@@ -1165,13 +1213,13 @@ def _sectioned_text_parts(text: str) -> list[str] | None:
     for line in lines:
         if _is_section_heading_line(line):
             if paragraph:
-                parts.append(_join_pdf_text_lines(paragraph))
+                parts.append(_join_section_text_lines(paragraph))
                 paragraph = []
             parts.append(line)
             continue
         paragraph.append(line)
     if paragraph:
-        parts.append(_join_pdf_text_lines(paragraph))
+        parts.append(_join_section_text_lines(paragraph))
     return parts if len(parts) > 1 else None
 
 
@@ -1209,6 +1257,34 @@ def _join_pdf_text_lines(lines: list[str]) -> str:
     text = " ".join(line.strip() for line in lines if line.strip())
     text = text.replace("세부 사항", "세부사항")
     return text.strip()
+
+
+def _join_section_text_lines(lines: list[str]) -> str:
+    groups: list[list[str]] = []
+    current: list[str] = []
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            continue
+        if current and _is_section_text_boundary_line(line):
+            groups.append(current)
+            current = [line]
+            continue
+        current.append(line)
+    if current:
+        groups.append(current)
+    return "\n".join(_join_pdf_text_lines(group) for group in groups).strip()
+
+
+def _is_section_text_boundary_line(line: str) -> bool:
+    stripped = line.strip()
+    return bool(
+        stripped.startswith(("■", "□", "○", "〇", "-", "ㆍ", "․", "*", "※"))
+        or re.match(r"^\d+\.\s+", stripped)
+        or re.match(r"^\(?\d+\)\s*", stripped)
+        or re.match(r"^[가-힣]\.\s+", stripped)
+        or re.match(r"^제\d+조(?:의\d+)?\(", stripped)
+    )
 
 
 def _revision_history_parts(text: str) -> list[tuple[str, object]] | None:
@@ -2513,10 +2589,91 @@ def _title_table_text(table: dict[str, object]) -> str | None:
             parts.append(text)
     if not parts:
         return None
-    text = _join_lines("\n".join(parts)).strip()
+    text = _join_pdf_text_fragments(parts).strip()
     if len(cells) > 1 and len(text) > 40:
         return None
     return text or None
+
+
+def _single_line_header_only_table_text(
+    pdf_table: object,
+    table: dict[str, object],
+) -> str | None:
+    if table["rows"]:
+        return None
+    bbox = getattr(pdf_table, "bbox", None)
+    if not isinstance(bbox, (tuple, list)) or len(bbox) != 4:
+        return None
+    if float(bbox[3]) - float(bbox[1]) > 24:
+        return None
+    header_rows = table.get("header_rows")
+    if not isinstance(header_rows, list) or len(header_rows) != 1:
+        return None
+    cells = header_rows[0].get("cells")
+    if not isinstance(cells, list) or not cells or len(cells) > 3:
+        return None
+    parts: list[str] = []
+    for cell in cells:
+        if not isinstance(cell, dict) or cell.get("children"):
+            return None
+        text = str(cell.get("text", "")).strip()
+        if text:
+            parts.append(text)
+    if not parts:
+        return None
+    return _join_pdf_text_fragments(parts).strip() or None
+
+
+def _is_empty_single_cell_table_artifact(table: dict[str, object]) -> bool:
+    columns = table.get("columns")
+    if not isinstance(columns, list) or len(columns) != 1:
+        return False
+    all_rows: list[object] = []
+    header_rows = table.get("header_rows")
+    rows = table.get("rows")
+    if isinstance(header_rows, list):
+        all_rows.extend(header_rows)
+    if isinstance(rows, list):
+        all_rows.extend(rows)
+    if len(all_rows) != 1:
+        return False
+    row = all_rows[0]
+    if not isinstance(row, dict):
+        return False
+    cells = row.get("cells")
+    if not isinstance(cells, list) or len(cells) != 1:
+        return False
+    cell = cells[0]
+    if not isinstance(cell, dict):
+        return False
+    return not str(cell.get("text", "")).strip() and not cell.get("children")
+
+
+def _join_pdf_text_fragments(parts: list[str]) -> str:
+    if not parts:
+        return ""
+    out = parts[0].strip()
+    for part in parts[1:]:
+        current = part.strip()
+        if not current:
+            continue
+        if _should_join_pdf_text_fragment(out, current):
+            out = out.rstrip() + current.lstrip()
+        else:
+            out = out.rstrip() + " " + current.lstrip()
+    return out
+
+
+def _should_join_pdf_text_fragment(previous: str, current: str) -> bool:
+    previous_token = previous.rstrip().rsplit(" ", 1)[-1]
+    current_token = current.lstrip().split(" ", 1)[0]
+    return (
+        bool(previous_token)
+        and bool(current_token)
+        and len(current_token) <= 1
+        and _CJK.search(current_token[0]) is not None
+        and re.search(r"[0-9가-힣]$", previous_token) is not None
+    )
 
 
 def _resolve_nested_tables(tables: list[object]) -> _NestedResolution:
@@ -2674,6 +2831,39 @@ def _is_scanned_page(page: object, min_text_chars: int = 30) -> bool:
         ):
             return True
     return False
+
+
+def _ocr_fallback_reason(
+    page: object,
+    *,
+    allow_degraded_native: bool,
+) -> str | None:
+    if _is_scanned_page(page):
+        return "scanned"
+    if allow_degraded_native and _has_degraded_native_text(page):
+        return "degraded_native_text"
+    return None
+
+
+def _has_degraded_native_text(page: object) -> bool:
+    if not getattr(page, "images", None):
+        return False
+    text = "".join(
+        str(char.get("text", ""))
+        for char in getattr(page, "chars", [])
+        if str(char.get("text", "")).strip()
+    )
+    total = len(text)
+    if total < 15 or total > 250:
+        return False
+    cjk_count = sum(1 for char in text if _CJK.search(char))
+    latin_count = sum(1 for char in text if char.isascii() and char.isalpha())
+    punctuation_count = sum(1 for char in text if not char.isalnum())
+    return (
+        cjk_count / total < 0.05
+        and latin_count / total < 0.10
+        and punctuation_count / total >= 0.45
+    )
 
 
 def _ocr_pages(
@@ -3002,9 +3192,23 @@ def _vision_ocr_png(png: bytes, cfg: PdfOcrConfig) -> str:
     try:
         with request.urlopen(req, timeout=cfg.timeout) as response:
             payload = json.loads(response.read().decode("utf-8"))
-        return str(payload["choices"][0]["message"]["content"]).strip()
+        return _clean_vision_ocr_text(
+            str(payload["choices"][0]["message"]["content"])
+        )
     except Exception:
         return ""
+
+
+def _clean_vision_ocr_text(text: str) -> str:
+    cleaned = text.strip()
+    lines = cleaned.splitlines()
+    if (
+        len(lines) >= 2
+        and re.fullmatch(r"```[ \t]*[A-Za-z0-9_+.-]*[ \t]*", lines[0].strip())
+        and lines[-1].strip() == "```"
+    ):
+        return "\n".join(lines[1:-1]).strip()
+    return cleaned
 
 
 def _chat_completions_url(url: str) -> str:
@@ -3222,6 +3426,9 @@ def _should_skip_pdf_diagram(diagram: dict[str, object]) -> bool:
         return True
     if len(nodes) < 2:
         return True
+    connectors = diagram.get("connectors")
+    if _looks_like_pdf_text_line_boxes(nodes, connectors):
+        return True
     labels = [
         _normalize_diagram_label(str(node.get("text", "")))
         for node in nodes
@@ -3229,6 +3436,31 @@ def _should_skip_pdf_diagram(diagram: dict[str, object]) -> bool:
     ]
     table_like = sum(label in _TABLE_LIKE_DIAGRAM_LABELS for label in labels)
     return table_like >= 3 and table_like / max(len(labels), 1) >= 0.5
+
+
+def _looks_like_pdf_text_line_boxes(nodes: list[object], connectors: object) -> bool:
+    if connectors:
+        return False
+    if len(nodes) < 3:
+        return False
+    long_text_line_count = 0
+    for node in nodes:
+        if not isinstance(node, dict):
+            return False
+        text = str(node.get("text", "")).strip()
+        bbox = node.get("bbox")
+        if not text or not isinstance(bbox, dict):
+            return False
+        try:
+            width = float(bbox.get("width", 0.0))
+            height = float(bbox.get("height", 0.0))
+        except (TypeError, ValueError):
+            return False
+        if height <= 0:
+            return False
+        if width >= 120 and height <= 24 and width / height >= 8 and len(text) >= 12:
+            long_text_line_count += 1
+    return long_text_line_count == len(nodes)
 
 
 def _normalize_diagram_label(text: str) -> str:
@@ -3454,14 +3686,14 @@ def _detect_diagram_bboxes(
     table_bboxes: list[tuple[float, float, float, float]],
     *,
     container_bbox: tuple[float, float, float, float] | None = None,
+    page_shapes: list[_PdfDiagramShape] | None = None,
 ) -> list[tuple[float, tuple[float, float, float, float]]]:
-    shapes: list[tuple[float, float, float, float, str]] = []
-    for rect in getattr(page, "rects", []):
-        bbox = _pdf_shape_bbox(rect)
-        if bbox is None:
+    shapes: list[_PdfDiagramShape] = []
+    for x0, top, x1, bottom, kind in page_shapes or _pdf_page_diagram_shapes(page):
+        bbox = (x0, top, x1, bottom)
+        if kind == "rect" and ((x1 - x0) < 5 or (bottom - top) < 5):
             continue
-        x0, top, x1, bottom = bbox
-        if (x1 - x0) < 5 or (bottom - top) < 5:
+        if kind != "rect" and max(x1 - x0, bottom - top) < 10:
             continue
         if container_bbox is not None and not _bbox_in_cell(bbox, container_bbox, tol=2.0):
             continue
@@ -3470,31 +3702,7 @@ def _detect_diagram_bboxes(
             for tx0, ttop, tx1, tbottom in table_bboxes
         ):
             continue
-        shapes.append((x0, top, x1, bottom, "rect"))
-
-    for kind, items in (
-        ("line", getattr(page, "lines", [])),
-        ("curve", getattr(page, "curves", [])),
-    ):
-        for shape in items:
-            bbox = _pdf_shape_bbox(shape)
-            if bbox is None:
-                continue
-            x0, top, x1, bottom = bbox
-            if max(x1 - x0, bottom - top) < 10:
-                continue
-            if container_bbox is not None and not _bbox_in_cell(
-                bbox,
-                container_bbox,
-                tol=2.0,
-            ):
-                continue
-            if any(
-                x0 < tx1 and x1 > tx0 and top < tbottom and bottom > ttop
-                for tx0, ttop, tx1, tbottom in table_bboxes
-            ):
-                continue
-            shapes.append((x0, top, x1, bottom, kind))
+        shapes.append((x0, top, x1, bottom, kind))
 
     if not shapes:
         return []
@@ -3533,6 +3741,21 @@ def _detect_diagram_bboxes(
             continue
         results.append((top, (x0, top, x1, bottom)))
     return results
+
+
+def _pdf_page_diagram_shapes(page: object) -> list[_PdfDiagramShape]:
+    shapes: list[_PdfDiagramShape] = []
+    for kind, items in (
+        ("rect", getattr(page, "rects", [])),
+        ("line", getattr(page, "lines", [])),
+        ("curve", getattr(page, "curves", [])),
+    ):
+        for shape in items:
+            bbox = _pdf_shape_bbox(shape)
+            if bbox is None:
+                continue
+            shapes.append((*bbox, kind))
+    return shapes
 
 
 def _render_page_to_png(
