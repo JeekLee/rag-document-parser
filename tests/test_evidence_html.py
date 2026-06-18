@@ -2,7 +2,9 @@ from __future__ import annotations
 
 
 def test_render_evidence_units_as_html_without_llm_enrichment():
-    from rag_document_parser.evidence_html import render_evidence_units_html
+    from rag_document_parser.renderer.evidence_unit_render import (
+        render_evidence_units_html,
+    )
 
     units = [
         {
@@ -111,7 +113,7 @@ def test_render_evidence_units_as_html_without_llm_enrichment():
 
 
 def test_render_composite_chunk_evidence_items():
-    from rag_document_parser.evidence_html import render_evidence_html
+    from rag_document_parser.renderer.evidence_unit_render import render_evidence_html
 
     html = render_evidence_html(
         {
@@ -157,7 +159,7 @@ def test_render_composite_chunk_evidence_items():
 
 
 def test_render_evidence_unit_prefers_direct_content_over_legacy_evidence():
-    from rag_document_parser.evidence_html import render_evidence_units_html
+    from rag_document_parser.renderer.evidence_unit_render import render_evidence_units_html
 
     html = render_evidence_units_html(
         [
@@ -183,7 +185,7 @@ def test_render_evidence_unit_prefers_direct_content_over_legacy_evidence():
 
 
 def test_render_legacy_evidence_when_unit_only_has_top_level_type():
-    from rag_document_parser.evidence_html import render_evidence_units_html
+    from rag_document_parser.renderer.evidence_unit_render import render_evidence_units_html
 
     html = render_evidence_units_html(
         [
@@ -222,7 +224,7 @@ def test_render_legacy_evidence_when_unit_only_has_top_level_type():
 
 
 def test_render_evidence_image_uses_public_url_for_rendering_and_link_text():
-    from rag_document_parser.evidence_html import render_evidence_units_html
+    from rag_document_parser.renderer.evidence_unit_render import render_evidence_units_html
 
     units = [
         {
@@ -265,7 +267,7 @@ def test_render_evidence_image_uses_public_url_for_rendering_and_link_text():
 
 
 def test_render_structured_table_uses_header_rows_with_spans():
-    from rag_document_parser.evidence_html import render_evidence_html
+    from rag_document_parser.renderer.evidence_unit_render import render_evidence_html
 
     html = render_evidence_html(
         {
@@ -369,7 +371,7 @@ def test_render_structured_table_uses_header_rows_with_spans():
 
 
 def test_render_structured_table_fills_column_gaps_from_cell_ids():
-    from rag_document_parser.evidence_html import render_evidence_html
+    from rag_document_parser.renderer.evidence_unit_render import render_evidence_html
 
     html = render_evidence_html(
         {
@@ -413,7 +415,7 @@ def test_render_structured_table_fills_column_gaps_from_cell_ids():
 
 
 def test_render_rag_chunks_html_shows_final_evidence_and_chunk_fields():
-    from rag_document_parser.evidence_html import render_rag_chunks_html
+    from rag_document_parser.renderer.evidence_unit_render import render_rag_chunks_html
 
     chunks = [
         {
@@ -496,7 +498,7 @@ def test_render_rag_chunks_html_shows_final_evidence_and_chunk_fields():
 
 def test_render_rag_chunks_html_accepts_model_objects_and_escapes_diagnostics():
     from rag_document_parser import Evidence, EvidenceItem, RagChunk, SourceEvidence
-    from rag_document_parser.evidence_html import render_rag_chunks_html
+    from rag_document_parser.renderer.evidence_unit_render import render_rag_chunks_html
 
     chunk = RagChunk(
         id="chunk-2",
@@ -532,7 +534,7 @@ def test_render_rag_chunks_html_accepts_model_objects_and_escapes_diagnostics():
 
 
 def test_render_structured_diagram_shows_nodes_edges_and_mermaid():
-    from rag_document_parser.evidence_html import render_evidence_html
+    from rag_document_parser.renderer.evidence_unit_render import render_evidence_html
 
     html = render_evidence_html(
         {
@@ -568,7 +570,7 @@ def test_render_structured_diagram_shows_nodes_edges_and_mermaid():
 
 
 def test_render_structured_diagram_uses_bounding_boxes_for_positioned_layout():
-    from rag_document_parser.evidence_html import render_evidence_html
+    from rag_document_parser.renderer.evidence_unit_render import render_evidence_html
 
     html = render_evidence_html(
         {
@@ -625,7 +627,7 @@ def test_render_structured_diagram_uses_bounding_boxes_for_positioned_layout():
 
 
 def test_render_structured_diagram_positions_explicit_shape_nodes():
-    from rag_document_parser.evidence_html import render_evidence_html
+    from rag_document_parser.renderer.evidence_unit_render import render_evidence_html
 
     html = render_evidence_html(
         {
@@ -697,7 +699,7 @@ def test_render_structured_diagram_positions_explicit_shape_nodes():
 
 
 def test_render_structured_diagram_draws_positioned_connectors():
-    from rag_document_parser.evidence_html import render_evidence_html
+    from rag_document_parser.renderer.evidence_unit_render import render_evidence_html
 
     html = render_evidence_html(
         {
@@ -762,7 +764,7 @@ def test_render_structured_diagram_draws_positioned_connectors():
 
 
 def test_render_structured_diagram_keeps_positioned_layout_with_inferred_edges():
-    from rag_document_parser.evidence_html import render_evidence_html
+    from rag_document_parser.renderer.evidence_unit_render import render_evidence_html
 
     html = render_evidence_html(
         {
@@ -828,7 +830,7 @@ def test_render_structured_diagram_keeps_positioned_layout_with_inferred_edges()
 
 
 def test_render_structured_diagram_marks_arrow_connectors():
-    from rag_document_parser.evidence_html import render_evidence_html
+    from rag_document_parser.renderer.evidence_unit_render import render_evidence_html
 
     html = render_evidence_html(
         {
@@ -884,7 +886,7 @@ def test_render_structured_diagram_marks_arrow_connectors():
 
 
 def test_render_structured_diagram_places_step_labels_near_connectors():
-    from rag_document_parser.evidence_html import render_evidence_html
+    from rag_document_parser.renderer.evidence_unit_render import render_evidence_html
 
     html = render_evidence_html(
         {
@@ -945,7 +947,7 @@ def test_render_structured_diagram_places_step_labels_near_connectors():
 
 
 def test_render_label_only_diagram_as_original_like_flowchart():
-    from rag_document_parser.evidence_html import render_evidence_html
+    from rag_document_parser.renderer.evidence_unit_render import render_evidence_html
 
     labels = [
         "업무처리 흐름도",
@@ -1007,7 +1009,7 @@ def test_render_label_only_diagram_as_original_like_flowchart():
 
 
 def test_render_hwp5_flowchart_shapes_prefers_original_like_flowchart():
-    from rag_document_parser.evidence_html import render_evidence_html
+    from rag_document_parser.renderer.evidence_unit_render import render_evidence_html
 
     html = render_evidence_html(
         {

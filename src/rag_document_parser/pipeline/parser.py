@@ -3,9 +3,9 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
-from ..extract.assets import resolve_units, upload_assets
-from ..extract.backend import DocumentBackend
-from ..extract.registry import default_backends
+from ..evidence_unit_extraction.assets import resolve_units, upload_assets
+from ..evidence_unit_extraction.backend import DocumentBackend
+from ..evidence_unit_extraction.registry import default_backends
 from ..input import normalize_source, normalize_suffix
 from ..models import ParseResult, SourceInfo
 from ..storage import S3Config

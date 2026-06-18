@@ -105,8 +105,8 @@ def _cell_span_summary(rows):
 def test_pdf_backend_extracts_evidence_units_from_text_tables_images_and_ocr(
     monkeypatch,
 ):
-    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
-    from rag_document_parser.extract.formats.pdf import PdfBackend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     outer = _FakeTable(
         bbox=(0.0, 80.0, 300.0, 220.0),
@@ -246,8 +246,8 @@ def test_pdf_backend_extracts_evidence_units_from_text_tables_images_and_ocr(
 
 
 def test_pdf_backend_extracts_vector_diagram_with_fallback_asset(monkeypatch):
-    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
-    from rag_document_parser.extract.formats.pdf import PdfBackend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     page = _FakePage(
         chars=[{"text": "가"} for _ in range(40)],
@@ -310,8 +310,8 @@ def test_pdf_backend_extracts_vector_diagram_with_fallback_asset(monkeypatch):
 
 
 def test_pdf_backend_keeps_unstructured_diagram_fallback_as_diagram_unit(monkeypatch):
-    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
-    from rag_document_parser.extract.formats.pdf import PdfBackend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     page = _FakePage(
         chars=[{"text": "가"} for _ in range(40)],
@@ -353,8 +353,8 @@ def test_pdf_backend_keeps_unstructured_diagram_fallback_as_diagram_unit(monkeyp
 
 
 def test_pdf_backend_nests_images_inside_table_cells(monkeypatch):
-    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
-    from rag_document_parser.extract.formats.pdf import PdfBackend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     table = _FakeTable(
         bbox=(0.0, 80.0, 300.0, 220.0),
@@ -429,8 +429,8 @@ def test_pdf_backend_nests_images_inside_table_cells(monkeypatch):
 
 
 def test_pdf_backend_restores_ocr_markdown_table_as_structured_table(monkeypatch):
-    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
-    from rag_document_parser.extract.formats.pdf import PdfBackend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     scanned_page = _FakePage(
         chars=[],
@@ -482,7 +482,7 @@ def test_pdf_backend_restores_ocr_markdown_table_as_structured_table(monkeypatch
 
 
 def test_pdf_backend_merges_nested_table_continuations(monkeypatch):
-    from rag_document_parser.extract.formats.pdf import PdfBackend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     outer = _FakeTable(
         bbox=(0.0, 80.0, 300.0, 260.0),
@@ -581,7 +581,7 @@ def test_pdf_backend_merges_nested_table_continuations(monkeypatch):
 
 
 def test_pdf_backend_combines_grouped_header_rows(monkeypatch):
-    from rag_document_parser.extract.formats.pdf import PdfBackend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     grouped = _FakeTable(
         bbox=(0.0, 80.0, 300.0, 220.0),
@@ -658,7 +658,7 @@ def test_pdf_backend_combines_grouped_header_rows(monkeypatch):
 
 
 def test_pdf_backend_restores_pdf_header_cell_spans_from_missing_slots(monkeypatch):
-    from rag_document_parser.extract.formats.pdf import PdfBackend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     table = _FakeTable(
         bbox=(0.0, 80.0, 300.0, 180.0),
@@ -717,7 +717,7 @@ def test_pdf_backend_restores_pdf_header_cell_spans_from_missing_slots(monkeypat
 
 
 def test_pdf_backend_restores_pdf_body_rowspans_from_missing_slots(monkeypatch):
-    from rag_document_parser.extract.formats.pdf import PdfBackend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     table = _FakeTable(
         bbox=(0.0, 80.0, 300.0, 180.0),
@@ -769,7 +769,7 @@ def test_pdf_backend_restores_pdf_body_rowspans_from_missing_slots(monkeypatch):
 
 
 def test_pdf_backend_uses_semantic_source_label_for_mixed_colspan_headers():
-    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
 
     label = pdf_backend._cell_source_label(
         {"column_id": "c1", "colspan": 3},
@@ -785,7 +785,7 @@ def test_pdf_backend_uses_semantic_source_label_for_mixed_colspan_headers():
 
 
 def test_pdf_backend_disambiguates_duplicate_source_labels():
-    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
 
     table = {
         "columns": [
@@ -838,7 +838,7 @@ def test_pdf_backend_disambiguates_duplicate_source_labels():
 
 
 def test_pdf_backend_combines_single_group_header_rows(monkeypatch):
-    from rag_document_parser.extract.formats.pdf import PdfBackend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     table = _FakeTable(
         bbox=(0.0, 80.0, 300.0, 180.0),
@@ -887,7 +887,7 @@ def test_pdf_backend_combines_single_group_header_rows(monkeypatch):
 
 
 def test_pdf_backend_converts_multi_cell_title_table_to_text(monkeypatch):
-    from rag_document_parser.extract.formats.pdf import PdfBackend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     title = _FakeTable(
         bbox=(0.0, 80.0, 300.0, 100.0),
@@ -910,7 +910,7 @@ def test_pdf_backend_converts_multi_cell_title_table_to_text(monkeypatch):
 
 
 def test_pdf_backend_merges_wrapped_table_rows(monkeypatch):
-    from rag_document_parser.extract.formats.pdf import PdfBackend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     table = _FakeTable(
         bbox=(0.0, 80.0, 300.0, 180.0),
@@ -965,7 +965,7 @@ def test_pdf_backend_merges_wrapped_table_rows(monkeypatch):
 
 
 def test_pdf_backend_keeps_bullet_subrows_separate(monkeypatch):
-    from rag_document_parser.extract.formats.pdf import PdfBackend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     table = _FakeTable(
         bbox=(0.0, 80.0, 300.0, 160.0),
@@ -1010,7 +1010,7 @@ def test_pdf_backend_keeps_bullet_subrows_separate(monkeypatch):
 
 
 def test_pdf_backend_keeps_table_of_contents_rows_separate(monkeypatch):
-    from rag_document_parser.extract.formats.pdf import PdfBackend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     table = _FakeTable(
         bbox=(0.0, 80.0, 300.0, 160.0),
@@ -1055,7 +1055,7 @@ def test_pdf_backend_keeps_table_of_contents_rows_separate(monkeypatch):
 
 
 def test_pdf_backend_restores_table_of_contents_numbers(monkeypatch):
-    from rag_document_parser.extract.formats.pdf import PdfBackend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     table = _FakeTable(
         bbox=(0.0, 80.0, 300.0, 160.0),
@@ -1113,7 +1113,7 @@ def test_pdf_backend_restores_table_of_contents_numbers(monkeypatch):
 
 
 def test_pdf_backend_restores_cell_line_break_spaces():
-    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
 
     assert pdf_backend._clean_cell(
         "급여 확대되는\n초음파 검사에도\n면허종류와"
@@ -1122,7 +1122,7 @@ def test_pdf_backend_restores_cell_line_break_spaces():
 
 
 def test_pdf_backend_promotes_ultrasound_code_matrix_rows():
-    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
 
     table = {
         "caption": None,
@@ -1201,7 +1201,7 @@ def test_pdf_backend_promotes_ultrasound_code_matrix_rows():
 
 
 def test_pdf_backend_promotes_ultrasound_code_matrix_rows_with_leading_group():
-    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
 
     table = {
         "caption": None,
@@ -1265,7 +1265,7 @@ def test_pdf_backend_promotes_ultrasound_code_matrix_rows_with_leading_group():
 
 
 def test_pdf_backend_promotes_ultrasound_code_matrix_rows_with_known_heart_labels():
-    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
 
     table = {
         "caption": None,
@@ -1338,7 +1338,7 @@ def test_pdf_backend_promotes_ultrasound_code_matrix_rows_with_known_heart_label
 
 
 def test_pdf_backend_expands_parallel_code_action_rows():
-    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
 
     table = {
         "caption": None,
@@ -1381,7 +1381,7 @@ def test_pdf_backend_expands_parallel_code_action_rows():
 
 
 def test_pdf_backend_expands_parallel_code_action_rows_split_by_lines():
-    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
 
     table = {
         "caption": None,
@@ -1418,7 +1418,7 @@ def test_pdf_backend_expands_parallel_code_action_rows_split_by_lines():
 
 
 def test_pdf_backend_promotes_revision_history_text_to_table(monkeypatch):
-    from rag_document_parser.extract.formats.pdf import PdfBackend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     text = "\n".join(
         [
@@ -1469,7 +1469,7 @@ def test_pdf_backend_promotes_revision_history_text_to_table(monkeypatch):
 
 
 def test_pdf_backend_splits_official_notice_text_into_paragraphs(monkeypatch):
-    from rag_document_parser.extract.formats.pdf import PdfBackend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     text = "\n".join(
         [
@@ -1519,7 +1519,7 @@ def test_pdf_backend_splits_official_notice_text_into_paragraphs(monkeypatch):
 
 
 def test_pdf_backend_splits_short_heading_lines(monkeypatch):
-    from rag_document_parser.extract.formats.pdf import PdfBackend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     page = _FakePage(
         chars=[{"text": "가"} for _ in range(40)],
@@ -1542,7 +1542,7 @@ def test_pdf_backend_splits_short_heading_lines(monkeypatch):
 
 
 def test_pdf_backend_splits_related_basis_bullets(monkeypatch):
-    from rag_document_parser.extract.formats.pdf import PdfBackend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     text = "\n".join(
         [
@@ -1575,7 +1575,7 @@ def test_pdf_backend_splits_related_basis_bullets(monkeypatch):
 
 
 def test_pdf_backend_drops_duplicate_short_title_before_full_heading(monkeypatch):
-    from rag_document_parser.extract.formats.pdf import PdfBackend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     title = _FakeTable(
         bbox=(0.0, 80.0, 300.0, 100.0),
@@ -1606,7 +1606,7 @@ def test_pdf_backend_drops_duplicate_short_title_before_full_heading(monkeypatch
 
 
 def test_pdf_backend_splits_sectioned_text_blocks(monkeypatch):
-    from rag_document_parser.extract.formats.pdf import PdfBackend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     text = "\n".join(
         [
@@ -1638,8 +1638,8 @@ def test_pdf_backend_splits_sectioned_text_blocks(monkeypatch):
 
 
 def test_pdf_backend_splits_scanned_official_letter_ocr(monkeypatch):
-    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
-    from rag_document_parser.extract.formats.pdf import PdfBackend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     scanned_page = _FakePage(
         chars=[],
@@ -1692,8 +1692,8 @@ def test_pdf_backend_splits_scanned_official_letter_ocr(monkeypatch):
 
 
 def test_pdf_backend_splits_scanned_official_letter_continuation_ocr(monkeypatch):
-    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
-    from rag_document_parser.extract.formats.pdf import PdfBackend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     scanned_page = _FakePage(
         chars=[],
@@ -1734,8 +1734,8 @@ def test_pdf_backend_splits_scanned_official_letter_continuation_ocr(monkeypatch
 
 
 def test_pdf_backend_splits_multiline_official_letter_continuation_markers(monkeypatch):
-    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
-    from rag_document_parser.extract.formats.pdf import PdfBackend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     scanned_page = _FakePage(
         chars=[],
@@ -1777,7 +1777,7 @@ def test_pdf_backend_splits_multiline_official_letter_continuation_markers(monke
 
 
 def test_pdf_backend_reports_missing_pdfplumber_dependency(monkeypatch):
-    from rag_document_parser.extract.formats.pdf import PdfBackend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     monkeypatch.setitem(sys.modules, "pdfplumber", None)
 
@@ -1786,8 +1786,8 @@ def test_pdf_backend_reports_missing_pdfplumber_dependency(monkeypatch):
 
 
 def test_pdf_backend_isolates_ocr_failures_as_quality_warnings(monkeypatch):
-    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
-    from rag_document_parser.extract.formats.pdf import PdfBackend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     scanned_page = _FakePage(
         chars=[],
@@ -1827,7 +1827,7 @@ def test_pdf_backend_isolates_ocr_failures_as_quality_warnings(monkeypatch):
 
 
 def test_pdf_backend_renders_scanned_pages_at_ocr_scale(monkeypatch):
-    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
 
     calls = []
 
@@ -1858,8 +1858,8 @@ def test_pdf_backend_renders_scanned_pages_at_ocr_scale(monkeypatch):
 
 
 def test_pdf_backend_uses_openai_compatible_vision_ocr(monkeypatch):
-    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
-    from rag_document_parser.extract.formats.pdf import PdfBackend, PdfOcrConfig
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend, PdfOcrConfig
 
     scanned_page = _FakePage(
         chars=[],
@@ -1916,8 +1916,8 @@ def test_pdf_backend_uses_openai_compatible_vision_ocr(monkeypatch):
 
 
 def test_pdf_backend_falls_back_when_vision_ocr_is_empty(monkeypatch):
-    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
-    from rag_document_parser.extract.formats.pdf import PdfBackend, PdfOcrConfig
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend, PdfOcrConfig
 
     scanned_page = _FakePage(
         chars=[],
@@ -1953,8 +1953,8 @@ def test_pdf_backend_falls_back_when_vision_ocr_is_empty(monkeypatch):
 
 
 def test_pdf_backend_does_not_render_scanned_pages_without_image_ocr(monkeypatch):
-    from rag_document_parser.extract.formats.pdf import backend as pdf_backend
-    from rag_document_parser.extract.formats.pdf import PdfBackend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     scanned_page = _FakePage(
         chars=[],
@@ -1984,7 +1984,7 @@ def test_pdf_backend_does_not_render_scanned_pages_without_image_ocr(monkeypatch
 
 
 def test_pdf_backend_reuses_pdf_reader_for_multiple_image_pages(monkeypatch):
-    from rag_document_parser.extract.formats.pdf import PdfBackend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     class FakePilImage:
         format = "PNG"

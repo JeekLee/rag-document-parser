@@ -1,6 +1,4 @@
 from __future__ import annotations
 
-from .backend import DocumentBackend, ParsedDocument
-from .registry import default_backends
+from rag_document_parser.evidence_unit_extraction import *
 
-__all__ = ["DocumentBackend", "ParsedDocument", "default_backends"]

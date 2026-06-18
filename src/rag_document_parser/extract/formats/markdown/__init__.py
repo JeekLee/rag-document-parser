@@ -1,5 +1,4 @@
 from __future__ import annotations
 
-from .backend import MarkdownBackend
+from rag_document_parser.evidence_unit_extraction.formats.markdown import *
 
-__all__ = ["MarkdownBackend"]

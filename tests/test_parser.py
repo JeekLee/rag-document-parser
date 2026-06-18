@@ -301,7 +301,7 @@ def test_image_assets_are_uploaded_to_s3_and_linked_in_evidence(monkeypatch):
         uploads.append((cfg, key, data, content_type))
         return f"s3://{cfg.bucket}/{cfg.prefix}/{key}"
 
-    monkeypatch.setattr("rag_document_parser.extract.assets._put_object", fake_put_object)
+    monkeypatch.setattr("rag_document_parser.evidence_unit_extraction.assets._put_object", fake_put_object)
 
     class ImageBackend:
         def parse(self, data: bytes, suffix: str) -> ParsedDocument:

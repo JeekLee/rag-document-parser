@@ -1,5 +1,4 @@
 from __future__ import annotations
 
-from .backend import PdfBackend, PdfOcrConfig
+from rag_document_parser.evidence_unit_extraction.formats.pdf import *
 
-__all__ = ["PdfBackend", "PdfOcrConfig"]

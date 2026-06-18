@@ -188,7 +188,7 @@ def test_parser_registers_hwpx_backend_and_uploads_hwpx_images(monkeypatch):
         uploads.append((key, data, content_type))
         return f"s3://{cfg.bucket}/{cfg.prefix}/{key}"
 
-    monkeypatch.setattr("rag_document_parser.extract.assets._put_object", fake_put_object)
+    monkeypatch.setattr("rag_document_parser.evidence_unit_extraction.assets._put_object", fake_put_object)
 
     xml = (
         f'<hp:sec xmlns:hp="{HP}">'
@@ -252,7 +252,7 @@ def test_nested_asset_refs_are_uploaded_and_resolved_in_table_evidence(monkeypat
         uploads.append((key, data, content_type))
         return f"s3://{cfg.bucket}/{cfg.prefix}/{key}"
 
-    monkeypatch.setattr("rag_document_parser.extract.assets._put_object", fake_put_object)
+    monkeypatch.setattr("rag_document_parser.evidence_unit_extraction.assets._put_object", fake_put_object)
 
     table = _table(
         [_text_cell("구분"), _text_cell("이미지")],
@@ -286,7 +286,7 @@ def test_nested_asset_refs_are_uploaded_and_resolved_in_table_evidence(monkeypat
 
 
 def test_legacy_nested_kind_asset_ref_is_resolved_and_canonicalized():
-    from rag_document_parser.extract.assets import resolve_units
+    from rag_document_parser.evidence_unit_extraction.assets import resolve_units
     from rag_document_parser.models import DocumentAsset, EvidenceUnit, SourceEvidence
 
     unit = EvidenceUnit(

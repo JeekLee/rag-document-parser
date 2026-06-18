@@ -1,5 +1,4 @@
 from __future__ import annotations
 
-from .backend import HwpxBackend
+from rag_document_parser.evidence_unit_extraction.formats.hwpx import *
 
-__all__ = ["HwpxBackend"]

@@ -99,18 +99,21 @@ for chunk in chunks:
 The package is organized around the document pipeline:
 
 ```text
-input -> extract EvidenceUnit -> agentic chunk -> RagChunk
+input -> evidence_unit_extraction EvidenceUnit -> agentic chunk -> RagChunk
 ```
 
 - `input/`: raw input normalization and suffix normalization.
-- `extract/`: EvidenceUnit extraction, asset upload/resolve, backend registry.
-- `extract/formats/<format>/backend.py`: format-specific extraction entrypoints
-  for Markdown, HWPX, HWP5, and PDF.
+- `evidence_unit_extraction/`: EvidenceUnit extraction, asset upload/resolve,
+  backend registry, and shared evidence payload schema helpers.
+- `evidence_unit_extraction/formats/<format>/backend.py`: format-specific
+  extraction entrypoints for Markdown, HWPX, HWP5, and PDF.
+- `renderer/`: EvidenceUnit and RagChunk HTML rendering.
 - `pipeline/`: orchestration for the public parser API.
 - `chunk/`: chunker protocol and `EvidenceUnitAgenticChunker`.
 - `enrichment/`: LLM client and future chunk enrichment logic.
 
 Legacy import modules such as `rag_document_parser.parser`,
+`rag_document_parser.extract`, `rag_document_parser.evidence_html`,
 `rag_document_parser.backends`, `rag_document_parser.hwpx`, and
 `rag_document_parser.llm` remain as compatibility shims.
 

@@ -16,17 +16,24 @@ def test_pipeline_layout_exports_stage_and_format_modules():
     from rag_document_parser.chunk.backend import Chunker
     from rag_document_parser.enrichment.backend import Enricher
     from rag_document_parser.enrichment.llm import LlmConfig
-    from rag_document_parser.extract.backend import DocumentBackend, ParsedDocument
-    from rag_document_parser.extract.formats.hwp5.backend import Hwp5Backend as StageHwp5Backend
-    from rag_document_parser.extract.formats.hwpx.backend import HwpxBackend as StageHwpxBackend
-    from rag_document_parser.extract.formats.markdown.backend import (
+    from rag_document_parser.evidence_unit_extraction.backend import (
+        DocumentBackend,
+        ParsedDocument,
+    )
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import (
+        Hwp5Backend as StageHwp5Backend,
+    )
+    from rag_document_parser.evidence_unit_extraction.formats.hwpx.backend import (
+        HwpxBackend as StageHwpxBackend,
+    )
+    from rag_document_parser.evidence_unit_extraction.formats.markdown.backend import (
         MarkdownBackend as StageMarkdownBackend,
     )
-    from rag_document_parser.extract.formats.pdf.backend import (
+    from rag_document_parser.evidence_unit_extraction.formats.pdf.backend import (
         PdfBackend as StagePdfBackend,
         PdfOcrConfig as StagePdfOcrConfig,
     )
-    from rag_document_parser.extract.registry import default_backends
+    from rag_document_parser.evidence_unit_extraction.registry import default_backends
     from rag_document_parser.pipeline.parser import RagDocumentParser as StageParser
 
     backends = default_backends()
@@ -57,6 +64,9 @@ def test_legacy_import_paths_remain_compatible():
     from rag_document_parser import HwpxBackend, MarkdownBackend, RagDocumentParser
     from rag_document_parser.backends import MarkdownBackend as LegacyMarkdownBackend
     from rag_document_parser.backends import ParsedDocument as LegacyParsedDocument
+    from rag_document_parser.evidence_unit_extraction.backend import (
+        ParsedDocument as CanonicalParsedDocument,
+    )
     from rag_document_parser.extract.backend import ParsedDocument
     from rag_document_parser.hwpx import HwpxBackend as LegacyHwpxBackend
     from rag_document_parser.llm import LlmConfig as LegacyLlmConfig
@@ -67,4 +77,5 @@ def test_legacy_import_paths_remain_compatible():
     assert LegacyHwpxBackend is HwpxBackend
     assert LegacyMarkdownBackend is MarkdownBackend
     assert LegacyParsedDocument is ParsedDocument
+    assert ParsedDocument is CanonicalParsedDocument
     assert LegacyLlmConfig is LlmConfig

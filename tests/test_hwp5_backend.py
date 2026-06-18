@@ -19,7 +19,7 @@ PNG_BYTES = b"\x89PNG\r\n\x1a\nfake-png"
 
 
 def test_hwp5_backend_supported_suffixes():
-    from rag_document_parser.extract.formats.hwp5.backend import Hwp5Backend
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import Hwp5Backend
 
     assert Hwp5Backend.supported_suffixes == (".hwp",)
 
@@ -27,7 +27,7 @@ def test_hwp5_backend_supported_suffixes():
 def test_hwp5_backend_parses_real_fixture_text_and_tables():
     pytest.importorskip("olefile")
 
-    from rag_document_parser.extract.formats.hwp5.backend import Hwp5Backend
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import Hwp5Backend
 
     parsed = Hwp5Backend().parse(FIXTURE.read_bytes(), ".hwp")
 
@@ -70,7 +70,7 @@ def test_hwp5_backend_parses_real_fixture_text_and_tables():
 def test_hwp5_backend_keeps_source_and_evidence_payloads_separate():
     pytest.importorskip("olefile")
 
-    from rag_document_parser.extract.formats.hwp5.backend import Hwp5Backend
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import Hwp5Backend
 
     parsed = Hwp5Backend().parse(FIXTURE.read_bytes(), ".hwp")
 
@@ -87,7 +87,7 @@ def test_hwp5_backend_keeps_source_and_evidence_payloads_separate():
 
 
 def test_hwp5_table_source_disambiguates_duplicate_header_labels():
-    from rag_document_parser.extract.formats.hwp5 import backend as hwp5_backend
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5 import backend as hwp5_backend
 
     def cell(
         column_id: str,
@@ -147,7 +147,7 @@ def test_hwp5_table_source_disambiguates_duplicate_header_labels():
 
 
 def test_hwp5_backend_reports_missing_olefile_dependency(monkeypatch):
-    from rag_document_parser.extract.formats.hwp5.backend import Hwp5Backend
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import Hwp5Backend
 
     monkeypatch.setitem(sys.modules, "olefile", None)
 
@@ -277,7 +277,7 @@ def _connector_line_payload(
 
 
 def test_hwp5_nested_table_is_structured_child_not_flattened_text():
-    from rag_document_parser.extract.formats.hwp5.backend import _parse_section
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
 
     records = b""
     records += _table_ctrl(0)
@@ -317,7 +317,7 @@ def test_hwp5_nested_table_is_structured_child_not_flattened_text():
 
 
 def test_hwp5_table_preserves_column_addresses_with_blank_gaps():
-    from rag_document_parser.extract.formats.hwp5.backend import _parse_section
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
 
     records = b""
     records += _table_ctrl(0)
@@ -347,7 +347,7 @@ def test_hwp5_table_preserves_column_addresses_with_blank_gaps():
 
 
 def test_hwp5_table_uses_table_body_dimensions_to_keep_blank_form_rows():
-    from rag_document_parser.extract.formats.hwp5.backend import _parse_section
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
 
     records = b""
     records += _table_ctrl(0)
@@ -381,7 +381,7 @@ def test_hwp5_table_uses_table_body_dimensions_to_keep_blank_form_rows():
 
 
 def test_hwp5_table_preserves_cell_spans_like_hwpx_tables():
-    from rag_document_parser.extract.formats.hwp5.backend import _parse_section
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
 
     records = b""
     records += _table_ctrl(0)
@@ -437,7 +437,7 @@ def test_hwp5_table_preserves_cell_spans_like_hwpx_tables():
 
 
 def test_hwp5_table_source_repeats_rowspan_context_on_continuation_rows():
-    from rag_document_parser.extract.formats.hwp5.backend import _parse_section
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
 
     records = b""
     records += _table_ctrl(0)
@@ -465,7 +465,7 @@ def test_hwp5_table_source_repeats_rowspan_context_on_continuation_rows():
 
 
 def test_hwp5_table_header_detection_crosses_blank_spacer_row():
-    from rag_document_parser.extract.formats.hwp5.backend import _parse_section
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
 
     records = b""
     records += _table_ctrl(0)
@@ -514,7 +514,7 @@ def test_hwp5_table_header_detection_crosses_blank_spacer_row():
 
 
 def test_hwp5_sparse_mid_width_table_omits_blank_evidence_cells():
-    from rag_document_parser.extract.formats.hwp5.backend import _Cell, _structured_table
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _Cell, _structured_table
 
     rows: list[list[_Cell]] = [
         [
@@ -545,7 +545,7 @@ def test_hwp5_sparse_mid_width_table_omits_blank_evidence_cells():
 
 
 def test_hwp5_table_ignores_list_headers_outside_declared_dimensions():
-    from rag_document_parser.extract.formats.hwp5.backend import _parse_section
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
 
     records = b""
     records += _table_ctrl(0)
@@ -599,7 +599,7 @@ def test_hwp5_table_ignores_list_headers_outside_declared_dimensions():
 
 
 def test_hwp5_large_sparse_table_omits_blank_cells_from_evidence():
-    from rag_document_parser.extract.formats.hwp5.backend import _parse_section
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
 
     records = b""
     records += _table_ctrl(0)
@@ -635,7 +635,7 @@ def test_hwp5_large_sparse_table_omits_blank_cells_from_evidence():
 def test_hwp5_real_fixture_keeps_form_table_blank_rows():
     pytest.importorskip("olefile")
 
-    from rag_document_parser.extract.formats.hwp5.backend import Hwp5Backend
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import Hwp5Backend
 
     parsed = Hwp5Backend().parse(FIXTURE.read_bytes(), ".hwp")
     tables = [unit for unit in parsed.units if unit.type == "table"]
@@ -651,7 +651,7 @@ def test_hwp5_real_fixture_keeps_form_table_blank_rows():
 
 
 def test_hwp5_groups_drawing_labels_with_interleaved_short_text():
-    from rag_document_parser.extract.formats.hwp5.backend import _parse_section
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
 
     records = b""
     records += _make_record(0x43, 0, _u16("업무처리 흐름도"))
@@ -702,7 +702,7 @@ def test_hwp5_groups_drawing_labels_with_interleaved_short_text():
 
 
 def test_hwp5_diagram_nodes_keep_gso_bounding_boxes():
-    from rag_document_parser.extract.formats.hwp5.backend import _parse_section
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
 
     records = b""
     records += _make_record(0x43, 0, _u16("업무처리 흐름도"))
@@ -732,7 +732,7 @@ def test_hwp5_diagram_nodes_keep_gso_bounding_boxes():
 
 
 def test_hwp5_single_drawing_text_does_not_emit_structure_warning():
-    from rag_document_parser.extract.formats.hwp5.backend import _parse_section
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
 
     records = b""
     records += _gso_ctrl_with_bbox(0, x=100, y=200, width=300, height=120)
@@ -746,7 +746,7 @@ def test_hwp5_single_drawing_text_does_not_emit_structure_warning():
 
 
 def test_hwp5_diagram_keeps_line_connectors_with_bounding_boxes():
-    from rag_document_parser.extract.formats.hwp5.backend import _parse_section
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
 
     records = b""
     records += _gso_ctrl_with_bbox(0, x=100, y=200, width=300, height=120)
@@ -775,7 +775,7 @@ def test_hwp5_diagram_keeps_line_connectors_with_bounding_boxes():
 
 
 def test_hwp5_diagram_infers_edges_from_connector_endpoints():
-    from rag_document_parser.extract.formats.hwp5.backend import _parse_section
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
 
     records = b""
     records += _gso_ctrl_with_bbox(0, x=100, y=100, width=200, height=100)
@@ -807,7 +807,7 @@ def test_hwp5_diagram_infers_edges_from_connector_endpoints():
 
 
 def test_hwp5_diagram_labels_inferred_edges_from_step_text():
-    from rag_document_parser.extract.formats.hwp5.backend import _parse_section
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
 
     records = b""
     records += _make_record(0x43, 0, _u16("①신청"))
@@ -835,7 +835,7 @@ def test_hwp5_diagram_labels_inferred_edges_from_step_text():
 
 
 def test_hwp5_diagram_uses_shape_ctrl_ids_and_connector_subjects():
-    from rag_document_parser.extract.formats.hwp5.backend import _parse_section
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
 
     records = b""
     records += _shape_ctrl(
@@ -906,7 +906,7 @@ def test_hwp5_diagram_uses_shape_ctrl_ids_and_connector_subjects():
 
 
 def test_hwp5_diagram_preserves_unresolved_connector_and_warns():
-    from rag_document_parser.extract.formats.hwp5.backend import _parse_section
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
 
     records = b""
     records += _shape_ctrl(0, b"cer$", instance_id=10)
@@ -937,7 +937,7 @@ def test_hwp5_diagram_preserves_unresolved_connector_and_warns():
 
 
 def test_hwp5_drawing_inside_table_cell_becomes_diagram_child():
-    from rag_document_parser.extract.formats.hwp5.backend import _parse_section
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _parse_section
 
     records = b""
     records += _table_ctrl(0)
@@ -967,7 +967,7 @@ def test_hwp5_drawing_inside_table_cell_becomes_diagram_child():
 def test_hwp5_real_fixture_groups_flowchart_labels():
     pytest.importorskip("olefile")
 
-    from rag_document_parser.extract.formats.hwp5.backend import Hwp5Backend
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import Hwp5Backend
 
     parsed = Hwp5Backend().parse(FIXTURE.read_bytes(), ".hwp")
     drawing_units = [
@@ -998,7 +998,7 @@ def test_hwp5_real_fixture_groups_flowchart_labels():
 
 
 def test_hwp5_picture_shape_becomes_image_asset_ref():
-    from rag_document_parser.extract.formats.hwp5.backend import _BinEntry, _parse_section
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _BinEntry, _parse_section
 
     picture_payload = bytearray(80)
     struct.pack_into("<H", picture_payload, 71, 1)
@@ -1043,7 +1043,7 @@ def test_hwp5_picture_shape_becomes_image_asset_ref():
 
 
 def test_hwp5_image_only_document_uses_ocr_fallback():
-    from rag_document_parser.extract.formats.hwp5.backend import _BinEntry, _parse_section
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _BinEntry, _parse_section
 
     picture_payload = bytearray(80)
     struct.pack_into("<H", picture_payload, 71, 1)
@@ -1070,7 +1070,7 @@ def test_hwp5_image_only_document_uses_ocr_fallback():
 
 
 def test_hwp5_ocr_fallback_skips_when_native_text_exists():
-    from rag_document_parser.extract.formats.hwp5.backend import _BinEntry, _parse_section
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _BinEntry, _parse_section
 
     calls = []
     picture_payload = bytearray(80)
@@ -1097,7 +1097,7 @@ def test_hwp5_ocr_fallback_skips_when_native_text_exists():
 
 
 def test_hwp5_ocr_failure_is_reported_as_quality_warning():
-    from rag_document_parser.extract.formats.hwp5.backend import _BinEntry, _parse_section
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _BinEntry, _parse_section
 
     picture_payload = bytearray(80)
     struct.pack_into("<H", picture_payload, 71, 1)
@@ -1127,7 +1127,7 @@ def test_hwp5_ocr_failure_is_reported_as_quality_warning():
 
 
 def test_hwp5_load_bin_data_keeps_raw_image_when_file_is_compressed():
-    from rag_document_parser.extract.formats.hwp5.backend import _load_bin_data
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _load_bin_data
 
     class FakeStream:
         def __init__(self, data: bytes) -> None:
@@ -1155,7 +1155,7 @@ def test_hwp5_load_bin_data_keeps_raw_image_when_file_is_compressed():
 
 
 def test_hwp5_load_bin_data_still_inflates_compressed_image_stream():
-    from rag_document_parser.extract.formats.hwp5.backend import _load_bin_data
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import _load_bin_data
 
     compressor = zlib.compressobj(wbits=-15)
     compressed_png = compressor.compress(PNG_BYTES) + compressor.flush()
