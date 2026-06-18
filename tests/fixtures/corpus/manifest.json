@@ -113,8 +113,9 @@
       "parser_supported": true,
       "purpose": "Legacy HWP sample paired with PDF for HWP5 backend regression.",
       "expected": {
-        "min_units": 90,
-        "min_tables": 2
+        "min_units": 65,
+        "min_tables": 2,
+        "min_diagram_units": 1
       }
     },
     {

@@ -19,11 +19,17 @@ _TAG_BIN_DATA = 0x12
 _TAG_PARA_TEXT = 0x43
 _TAG_CTRL_HEADER = 0x47
 _TAG_LIST_HEADER = 0x48
+_TAG_SHAPE_COMPONENT = 0x4C
+_TAG_TABLE_BODY = 0x4D
+_TAG_SHAPE_COMPONENT_LINE = 0x4E
 _TAG_SHAPE_PICTURE = 0x55
 
 _CTRL_TABLE = b" lbt"
 _CTRL_GSO = b" osg"
 _PICTURE_BIN_DATA_ID_OFFSET = 71
+_DIAGRAM_STEP_LABEL_RE = re.compile(
+    r"^(?:[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]|\d+[.)])"
+)
 
 
 @dataclass(frozen=True)
@@ -70,17 +76,39 @@ class _BinEntry:
 class _Cell:
     text: str = ""
     children: list[dict[str, object]] = field(default_factory=list)
+    row_addr: int | None = None
     col_addr: int | None = None
+    rowspan: int = 1
+    colspan: int = 1
+    synthetic: bool = False
 
 
 @dataclass
 class _TextBlock:
     text: str
+    origin: str = "body"
+    bbox: dict[str, int | str] | None = None
+
+
+@dataclass
+class _DiagramBlock:
+    text: str
+    bboxes: list[dict[str, int | str] | None] = field(default_factory=list)
+    connectors: list[dict[str, object]] = field(default_factory=list)
+
+
+@dataclass
+class _DrawingLineBlock:
+    bbox: dict[str, int | str]
+    points: list[dict[str, int]]
+    arrow: bool = False
 
 
 @dataclass
 class _TableBlock:
     rows: list[list[_Cell]]
+    row_count: int | None = None
+    column_count: int | None = None
 
 
 @dataclass
@@ -90,7 +118,9 @@ class _ImageBlock:
 
 @dataclass
 class _ParsedBlocks:
-    blocks: list[_TextBlock | _TableBlock | _ImageBlock] = field(default_factory=list)
+    blocks: list[
+        _TextBlock | _DiagramBlock | _DrawingLineBlock | _TableBlock | _ImageBlock
+    ] = field(default_factory=list)
     assets: list[PendingAsset] = field(default_factory=list)
     saw_drawing: bool = False
     missing_image_count: int = 0
@@ -115,18 +145,25 @@ class _TableCtx:
     in_cell: bool = False
     row_addr: int = -1
     col_addr: int = -1
+    rowspan: int = 1
+    colspan: int = 1
+    row_count: int | None = None
+    column_count: int | None = None
 
 
 def _to_document(parsed: _ParsedBlocks) -> ParsedDocument:
     units: list[EvidenceUnit] = []
     block_index = 1
     table_index = 1
+    saw_structured_diagram = False
 
-    for block in parsed.blocks:
+    for block in _coalesce_drawing_text_blocks(parsed.blocks):
         if isinstance(block, _TextBlock):
             text = _clean_text(block.text)
             if not text:
                 continue
+            chunk_kind = "drawing" if block.origin == "drawing" else "text"
+            display_format = "drawing_text" if block.origin == "drawing" else "plain"
             units.append(
                 EvidenceUnit(
                     id=f"b{block_index}",
@@ -136,14 +173,50 @@ def _to_document(parsed: _ParsedBlocks) -> ParsedDocument:
                     content=text,
                     metadata={
                         "common": {
-                            "chunk_kind": "text",
+                            "chunk_kind": chunk_kind,
                             "section_path": [],
-                            "display_format": "plain",
+                            "display_format": display_format,
                         }
                     },
                 )
             )
             block_index += 1
+            continue
+
+        if isinstance(block, _DiagramBlock):
+            structured = _structured_diagram(
+                block.text,
+                bboxes=block.bboxes,
+                connectors=block.connectors,
+            )
+            source_text = _diagram_source_text(structured)
+            if not source_text:
+                continue
+            saw_structured_diagram = True
+            units.append(
+                EvidenceUnit(
+                    id=f"b{block_index}",
+                    type="diagram",
+                    format="structured_diagram",
+                    source=SourceEvidence(kind="diagram", text=source_text),
+                    content=structured,
+                    metadata={
+                        "common": {
+                            "chunk_kind": "diagram",
+                            "section_path": [],
+                            "display_format": "structured_diagram",
+                        },
+                        "diagram": {
+                            "node_count": len(structured["nodes"]),
+                            "edge_count": len(structured["edges"]),
+                        },
+                    },
+                )
+            )
+            block_index += 1
+            continue
+
+        if isinstance(block, _DrawingLineBlock):
             continue
 
         if isinstance(block, _ImageBlock):
@@ -167,7 +240,11 @@ def _to_document(parsed: _ParsedBlocks) -> ParsedDocument:
             block_index += 1
             continue
 
-        structured = _structured_table(block.rows)
+        structured = _structured_table(
+            block.rows,
+            row_count=block.row_count,
+            column_count=block.column_count,
+        )
         if not _table_has_content(block.rows):
             continue
         table_id = f"t{table_index}"
@@ -198,14 +275,15 @@ def _to_document(parsed: _ParsedBlocks) -> ParsedDocument:
         table_index += 1
 
     warnings: list[dict[str, Any]] = []
-    if parsed.saw_drawing:
+    if saw_structured_diagram:
         warnings.append(
             {
                 "type": "hwp5_drawing_structure_unsupported",
                 "severity": "medium",
                 "message": (
-                    "HWP5 drawing object text was extracted, but geometry and "
-                    "connector structure are not represented."
+                    "HWP5 drawing object text and some geometry were extracted as "
+                    "structured diagram evidence, but the drawing structure may still "
+                    "be incomplete."
                 ),
             }
         )
@@ -228,6 +306,329 @@ def _to_document(parsed: _ParsedBlocks) -> ParsedDocument:
     )
 
 
+def _coalesce_drawing_text_blocks(
+    blocks: list[
+        _TextBlock | _DiagramBlock | _DrawingLineBlock | _TableBlock | _ImageBlock
+    ],
+) -> list[
+    _TextBlock | _DiagramBlock | _DrawingLineBlock | _TableBlock | _ImageBlock
+]:
+    result: list[
+        _TextBlock | _DiagramBlock | _DrawingLineBlock | _TableBlock | _ImageBlock
+    ] = []
+    index = 0
+    while index < len(blocks):
+        block = blocks[index]
+        if not _is_drawing_text_block(block):
+            result.append(block)
+            index += 1
+            continue
+
+        cluster_end = index
+        drawing_count = 1
+        short_body_gap = 0
+        scan = index + 1
+        while scan < len(blocks):
+            candidate = blocks[scan]
+            if _is_drawing_text_block(candidate):
+                drawing_count += 1
+                cluster_end = scan
+                short_body_gap = 0
+                scan += 1
+                continue
+            if isinstance(candidate, _DrawingLineBlock):
+                cluster_end = scan
+                short_body_gap = 0
+                scan += 1
+                continue
+            if _is_short_body_text_block(candidate) and short_body_gap < 6:
+                short_body_gap += 1
+                scan += 1
+                continue
+            break
+
+        if drawing_count < 2:
+            result.append(_TextBlock(block.text))
+            index += 1
+            continue
+
+        prefix: list[_TextBlock] = []
+        while (
+            result
+            and len(prefix) < 3
+            and _is_short_body_text_block(result[-1])
+        ):
+            previous = result.pop()
+            if isinstance(previous, _TextBlock):
+                prefix.append(previous)
+        prefix.reverse()
+
+        text_blocks = [
+            item
+            for item in [*prefix, *blocks[index : cluster_end + 1]]
+            if isinstance(item, _TextBlock)
+        ]
+        line_blocks = [
+            item
+            for item in blocks[index : cluster_end + 1]
+            if isinstance(item, _DrawingLineBlock)
+        ]
+        result.append(
+            _DiagramBlock(
+                "\n".join(
+                    text
+                    for text in (_clean_text(item.text) for item in text_blocks)
+                    if text
+                ),
+                bboxes=[
+                    item.bbox
+                    for item in text_blocks
+                    if _clean_text(item.text)
+                ],
+                connectors=[
+                    _structured_connector(connector_index, item)
+                    for connector_index, item in enumerate(line_blocks, start=1)
+                ],
+            )
+        )
+        index = cluster_end + 1
+
+    return result
+
+
+def _is_drawing_text_block(block: object) -> bool:
+    return isinstance(block, _TextBlock) and block.origin == "drawing"
+
+
+def _is_short_body_text_block(block: object) -> bool:
+    return (
+        isinstance(block, _TextBlock)
+        and block.origin == "body"
+        and 0 < len(_clean_text(block.text)) <= 80
+    )
+
+
+def _structured_diagram(
+    text: str,
+    *,
+    bboxes: list[dict[str, int | str] | None] | None = None,
+    connectors: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    labels = [
+        line
+        for line in (_clean_text(part) for part in text.splitlines())
+        if line
+    ]
+    nodes: list[dict[str, object]] = [
+        {
+            "id": f"n{index}",
+            "shape_type": "label",
+            "text": label,
+            "bbox": bboxes[index - 1] if bboxes and index <= len(bboxes) else None,
+            "metadata": {"source": "hwp5_drawing_text"},
+        }
+        for index, label in enumerate(labels, start=1)
+    ]
+    connector_items = connectors or []
+    return {
+        "caption": None,
+        "nodes": nodes,
+        "edges": _infer_connector_edges(nodes, connector_items),
+        "connectors": connector_items,
+        "mermaid": None,
+    }
+
+
+def _structured_connector(
+    index: int,
+    line: _DrawingLineBlock,
+) -> dict[str, object]:
+    return {
+        "id": f"c{index}",
+        "type": "line",
+        "bbox": dict(line.bbox),
+        "points": [dict(point) for point in line.points],
+        "arrow": line.arrow,
+        "metadata": {"source": "hwp5_gso_line"},
+    }
+
+
+def _infer_connector_edges(
+    nodes: list[dict[str, object]],
+    connectors: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    bbox_nodes = [
+        (str(node.get("id", "")), bbox)
+        for node in nodes
+        if (bbox := _diagram_node_bbox(node)) is not None
+    ]
+    if len(bbox_nodes) < 2:
+        return []
+
+    edges: list[dict[str, object]] = []
+    seen: set[tuple[str, str, str]] = set()
+    edge_labels = _diagram_connector_labels(nodes)
+    for connector_index, connector in enumerate(connectors):
+        points = connector.get("points")
+        if not isinstance(points, list) or len(points) < 2:
+            continue
+        start = _diagram_point(points[0])
+        end = _diagram_point(points[1])
+        if start is None or end is None:
+            continue
+        from_id = _nearest_node_id(start, bbox_nodes)
+        to_id = _nearest_node_id(end, bbox_nodes)
+        if from_id is None or to_id is None or from_id == to_id:
+            continue
+        connector_id = str(connector.get("id", ""))
+        key = (from_id, to_id, connector_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        edges.append(
+            {
+                "from": from_id,
+                "to": to_id,
+                "type": "arrow" if connector.get("arrow") else "line",
+                "label": (
+                    edge_labels[connector_index]
+                    if connector_index < len(edge_labels)
+                    else ""
+                ),
+                "confidence": "inferred_geometry",
+                "connector_id": connector_id,
+            }
+        )
+    return edges
+
+
+def _diagram_connector_labels(nodes: list[dict[str, object]]) -> list[str]:
+    labels: list[str] = []
+    for node in nodes:
+        if _diagram_node_bbox(node) is not None:
+            continue
+        text = str(node.get("text", "")).strip()
+        if not text:
+            continue
+        if _is_diagram_step_label(text):
+            labels.append(text)
+            continue
+        if (
+            labels
+            and not _is_diagram_section_heading(text)
+            and not _is_diagram_note(text)
+        ):
+            labels[-1] = f"{labels[-1]}\n{text}"
+    return labels
+
+
+def _is_diagram_step_label(text: str) -> bool:
+    return bool(_DIAGRAM_STEP_LABEL_RE.match(text.strip()))
+
+
+def _is_diagram_section_heading(text: str) -> bool:
+    stripped = text.strip()
+    return stripped.startswith("<") and stripped.endswith(">")
+
+
+def _is_diagram_note(text: str) -> bool:
+    stripped = text.strip()
+    return (
+        (stripped.startswith("(") and stripped.endswith(")"))
+        or (stripped.startswith("[") and stripped.endswith("]"))
+    )
+
+
+def _diagram_node_bbox(
+    node: dict[str, object],
+) -> dict[str, int] | None:
+    bbox = node.get("bbox")
+    if not isinstance(bbox, dict):
+        return None
+    x = _bbox_int(bbox, "x")
+    y = _bbox_int(bbox, "y")
+    width = _bbox_int(bbox, "width")
+    height = _bbox_int(bbox, "height")
+    if width <= 0 or height <= 0:
+        return None
+    return {"x": x, "y": y, "width": width, "height": height}
+
+
+def _diagram_point(point: object) -> dict[str, int] | None:
+    if not isinstance(point, dict):
+        return None
+    try:
+        return {"x": int(point["x"]), "y": int(point["y"])}
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _nearest_node_id(
+    point: dict[str, int],
+    bbox_nodes: list[tuple[str, dict[str, int]]],
+) -> str | None:
+    best_id: str | None = None
+    best_distance: int | None = None
+    for node_id, bbox in bbox_nodes:
+        distance = _point_bbox_distance_squared(point, bbox)
+        if best_distance is None or distance < best_distance:
+            best_id = node_id
+            best_distance = distance
+    return best_id
+
+
+def _point_bbox_distance_squared(
+    point: dict[str, int],
+    bbox: dict[str, int],
+) -> int:
+    min_x = bbox["x"]
+    max_x = bbox["x"] + bbox["width"]
+    min_y = bbox["y"]
+    max_y = bbox["y"] + bbox["height"]
+    dx = max(min_x - point["x"], 0, point["x"] - max_x)
+    dy = max(min_y - point["y"], 0, point["y"] - max_y)
+    return dx * dx + dy * dy
+
+
+def _diagram_source_text(diagram: dict[str, object]) -> str:
+    nodes = diagram.get("nodes", [])
+    if not isinstance(nodes, list):
+        return ""
+    lines = [
+        text
+        for text in (
+            str(node.get("text", "")).strip()
+            for node in nodes
+            if isinstance(node, dict)
+        )
+        if text
+    ]
+    edge_lines = _diagram_edge_source_lines(diagram.get("edges", []))
+    if edge_lines:
+        lines.append("relations:")
+        lines.extend(edge_lines)
+    return "\n".join(lines)
+
+
+def _diagram_edge_source_lines(edges: object) -> list[str]:
+    if not isinstance(edges, list):
+        return []
+    lines = []
+    for edge in edges:
+        if not isinstance(edge, dict):
+            continue
+        from_id = str(edge.get("from", "")).strip()
+        to_id = str(edge.get("to", "")).strip()
+        if not from_id or not to_id:
+            continue
+        label = str(edge.get("label", "")).strip()
+        line = f"{from_id} -> {to_id}"
+        if label:
+            line = f"{line}: {label}"
+        lines.append(line)
+    return lines
+
+
 def _parse_section(
     data: bytes,
     bin_entries: dict[int, _BinEntry] | None = None,
@@ -242,16 +643,32 @@ def _parse_section(
     in_gso = False
     gso_level = -1
     gso_text_parts: list[str] = []
+    gso_bbox: dict[str, int | str] | None = None
+    gso_shape_type: str | None = None
+    gso_line_payload: bytes | None = None
 
     def close_gso() -> None:
-        nonlocal in_gso, gso_level, gso_text_parts
+        nonlocal in_gso, gso_level, gso_text_parts, gso_bbox
+        nonlocal gso_shape_type, gso_line_payload
         text = _clean_text(" ".join(gso_text_parts))
         if text:
-            parsed.blocks.append(_TextBlock(text))
+            parsed.blocks.append(_TextBlock(text, origin="drawing", bbox=gso_bbox))
+            parsed.saw_drawing = True
+        elif gso_shape_type == "line" and gso_bbox is not None:
+            parsed.blocks.append(
+                _DrawingLineBlock(
+                    bbox=gso_bbox,
+                    points=_line_points_from_bbox(gso_bbox, gso_line_payload),
+                    arrow=_line_has_arrow(gso_line_payload),
+                )
+            )
             parsed.saw_drawing = True
         in_gso = False
         gso_level = -1
         gso_text_parts = []
+        gso_bbox = None
+        gso_shape_type = None
+        gso_line_payload = None
 
     def close_current_cell(ctx: _TableCtx) -> None:
         if not ctx.in_cell:
@@ -260,7 +677,10 @@ def _parse_section(
             _Cell(
                 text=_clean_text(" ".join(ctx.current_cell_parts)),
                 children=list(ctx.current_cell_children),
+                row_addr=ctx.row_addr,
                 col_addr=ctx.col_addr,
+                rowspan=ctx.rowspan,
+                colspan=ctx.colspan,
             )
         )
         ctx.current_cell_parts = []
@@ -273,11 +693,21 @@ def _parse_section(
             ctx.rows.append(ctx.current_row)
 
         if not table_stack:
-            single_text = _single_cell_table_text(ctx.rows)
+            single_text = _single_cell_table_text(
+                ctx.rows,
+                row_count=ctx.row_count,
+                column_count=ctx.column_count,
+            )
             if single_text is not None:
                 parsed.blocks.append(_TextBlock(single_text))
             elif _table_has_content(ctx.rows):
-                parsed.blocks.append(_TableBlock(ctx.rows))
+                parsed.blocks.append(
+                    _TableBlock(
+                        ctx.rows,
+                        row_count=ctx.row_count,
+                        column_count=ctx.column_count,
+                    )
+                )
             return
 
         if _table_has_content(ctx.rows):
@@ -285,7 +715,11 @@ def _parse_section(
                 {
                     "type": "table",
                     "format": "structured_table",
-                    "content": _structured_table(ctx.rows),
+                    "content": _structured_table(
+                        ctx.rows,
+                        row_count=ctx.row_count,
+                        column_count=ctx.column_count,
+                    ),
                 }
             )
 
@@ -304,8 +738,22 @@ def _parse_section(
                 in_gso = True
                 gso_level = level
                 gso_text_parts = []
+                gso_bbox = _gso_bbox_from_ctrl_header(payload)
+                gso_shape_type = None
+                gso_line_payload = None
             elif ctrl == _CTRL_TABLE:
                 table_stack.append(_TableCtx(ctrl_level=level))
+            continue
+
+        if (
+            table_stack
+            and tag_id == _TAG_TABLE_BODY
+            and level == table_stack[-1].ctrl_level + 1
+        ):
+            top = table_stack[-1]
+            if len(payload) >= 8:
+                top.row_count = max(0, struct.unpack_from("<H", payload, 4)[0])
+                top.column_count = max(0, struct.unpack_from("<H", payload, 6)[0])
             continue
 
         if in_gso and tag_id == _TAG_SHAPE_PICTURE:
@@ -325,6 +773,18 @@ def _parse_section(
             in_gso = False
             gso_level = -1
             gso_text_parts = []
+            gso_bbox = None
+            gso_shape_type = None
+            gso_line_payload = None
+            continue
+
+        if in_gso and tag_id == _TAG_SHAPE_COMPONENT:
+            if payload[:4] == b"nil$":
+                gso_shape_type = "line"
+            continue
+
+        if in_gso and tag_id == _TAG_SHAPE_COMPONENT_LINE:
+            gso_line_payload = payload
             continue
 
         if (
@@ -335,6 +795,20 @@ def _parse_section(
             top = table_stack[-1]
             col_addr = struct.unpack_from("<H", payload, 8)[0] if len(payload) >= 10 else 0
             row_addr = struct.unpack_from("<H", payload, 10)[0] if len(payload) >= 12 else 0
+            raw_colspan = (
+                struct.unpack_from("<H", payload, 12)[0] if len(payload) >= 14 else 1
+            )
+            raw_rowspan = (
+                struct.unpack_from("<H", payload, 14)[0] if len(payload) >= 16 else 1
+            )
+            if not _is_valid_table_cell_header(
+                top,
+                row_addr=row_addr,
+                col_addr=col_addr,
+                rowspan=raw_rowspan,
+                colspan=raw_colspan,
+            ):
+                continue
             if top.in_cell:
                 close_current_cell(top)
                 if row_addr != top.row_addr:
@@ -342,6 +816,8 @@ def _parse_section(
                     top.current_row = []
             top.row_addr = row_addr
             top.col_addr = col_addr
+            top.rowspan = raw_rowspan
+            top.colspan = raw_colspan
             top.in_cell = True
             continue
 
@@ -364,6 +840,80 @@ def _parse_section(
         close_gso()
 
     return parsed
+
+
+def _is_valid_table_cell_header(
+    ctx: _TableCtx,
+    *,
+    row_addr: int,
+    col_addr: int,
+    rowspan: int,
+    colspan: int,
+) -> bool:
+    if row_addr < 0 or col_addr < 0 or rowspan < 1 or colspan < 1:
+        return False
+    if ctx.row_count is not None and ctx.row_count > 0:
+        if row_addr >= ctx.row_count or row_addr + rowspan > ctx.row_count:
+            return False
+    if ctx.column_count is not None and ctx.column_count > 0:
+        if col_addr >= ctx.column_count or col_addr + colspan > ctx.column_count:
+            return False
+    return True
+
+
+def _gso_bbox_from_ctrl_header(payload: bytes) -> dict[str, int | str] | None:
+    if len(payload) < 24:
+        return None
+    x = struct.unpack_from("<I", payload, 8)[0]
+    y = struct.unpack_from("<I", payload, 12)[0]
+    width = struct.unpack_from("<I", payload, 16)[0]
+    height = struct.unpack_from("<I", payload, 20)[0]
+    if width == 0 and height == 0:
+        return None
+    return {
+        "x": x,
+        "y": y,
+        "width": width,
+        "height": height,
+        "unit": "hwp",
+    }
+
+
+def _line_points_from_bbox(
+    bbox: dict[str, int | str],
+    payload: bytes | None,
+) -> list[dict[str, int]]:
+    x = _bbox_int(bbox, "x")
+    y = _bbox_int(bbox, "y")
+    width = _bbox_int(bbox, "width")
+    height = _bbox_int(bbox, "height")
+    if width >= max(height, 1) * 3:
+        y_mid = y + max(height, 1) // 2
+        return [{"x": x, "y": y_mid}, {"x": x + width, "y": y_mid}]
+    if height >= max(width, 1) * 3:
+        x_mid = x + max(width, 1) // 2
+        return [{"x": x_mid, "y": y}, {"x": x_mid, "y": y + height}]
+    if payload is not None and len(payload) >= 16:
+        start_x, start_y, end_x, end_y = struct.unpack_from("<4i", payload)
+        if max(abs(start_x), abs(start_y), abs(end_x), abs(end_y)) >= 1000:
+            return [
+                {"x": x + start_x, "y": y + start_y},
+                {"x": x + end_x, "y": y + end_y},
+            ]
+    return [{"x": x, "y": y}, {"x": x + width, "y": y + height}]
+
+
+def _line_has_arrow(payload: bytes | None) -> bool:
+    if payload is None or len(payload) < 20:
+        return False
+    return struct.unpack_from("<I", payload, 16)[0] != 0
+
+
+def _bbox_int(bbox: dict[str, int | str], key: str) -> int:
+    try:
+        return int(bbox[key])
+    except (KeyError, TypeError, ValueError):
+        return 0
 
 
 def _image_child_from_picture(
@@ -403,90 +953,359 @@ def _image_child_from_picture(
     }
 
 
-def _structured_table(rows: list[list[_Cell]]) -> dict[str, object]:
-    normalized = _normalize_rows(rows)
+def _structured_table(
+    rows: list[list[_Cell]],
+    *,
+    row_count: int | None = None,
+    column_count: int | None = None,
+) -> dict[str, object]:
+    normalized = _normalize_rows(
+        rows,
+        row_count=row_count,
+        column_count=column_count,
+    )
     if not normalized:
         return {"caption": None, "columns": [], "rows": []}
 
-    column_count = max(len(row) for row in normalized)
-    header = _pad_row(normalized[0], column_count)
-    columns = [
-        {"id": f"c{index}", "text": header[index - 1].text}
-        for index in range(1, column_count + 1)
+    actual_column_count = _table_column_count(normalized, column_count)
+    header_count = _header_row_count(normalized)
+    header_raw_rows = normalized[:header_count]
+    visible_header_raw_rows = [
+        row for row in header_raw_rows if not _row_is_blank(row)
     ]
-    header_rows = [{"index": 1, "cells": _evidence_cells(header, columns)}]
+    data_raw_rows = normalized[header_count:]
+    columns = _table_columns(actual_column_count, visible_header_raw_rows)
+    omit_blank_cells = _should_omit_blank_cells(
+        normalized,
+        column_count=actual_column_count,
+    )
+    header_rows = [
+        {
+            "index": index,
+            "cells": _evidence_cells(
+                raw_cells,
+                columns,
+                omit_blank_cells=omit_blank_cells,
+            ),
+        }
+        for index, raw_cells in enumerate(visible_header_raw_rows, start=1)
+    ]
 
     data_rows: list[dict[str, object]] = []
-    for row in normalized[1:]:
-        padded = _pad_row(row, column_count)
-        if not any(cell.text.strip() or cell.children for cell in padded):
+    for row in data_raw_rows:
+        if row_count is None and _row_is_blank(row):
             continue
         data_rows.append(
             {
                 "index": len(data_rows) + 1,
-                "cells": _evidence_cells(padded, columns),
+                "cells": _evidence_cells(
+                    row,
+                    columns,
+                    omit_blank_cells=omit_blank_cells,
+                ),
             }
         )
 
-    return {
+    structured: dict[str, object] = {
         "caption": None,
         "columns": columns,
         "rows": data_rows,
         "header_rows": header_rows,
     }
+    omitted_count = _omitted_blank_cell_count(
+        normalized,
+        omit=omit_blank_cells,
+    )
+    if omitted_count:
+        structured["compact"] = {"omitted_blank_cells": omitted_count}
+    return structured
 
 
 def _evidence_cells(
     row: list[_Cell],
     columns: list[dict[str, str]],
+    *,
+    omit_blank_cells: bool = False,
 ) -> list[dict[str, object]]:
-    return [
-        {
-            "column_id": column["id"],
-            "text": row[index].text,
-            "rowspan": 1,
-            "colspan": 1,
-            "children": list(row[index].children),
-        }
-        for index, column in enumerate(columns)
-    ]
+    cells: list[dict[str, object]] = []
+    for cell in sorted(row, key=lambda item: item.col_addr or 0):
+        if omit_blank_cells and not cell.text.strip() and not cell.children:
+            continue
+        column_index = cell.col_addr or 0
+        column_id = (
+            columns[column_index]["id"]
+            if 0 <= column_index < len(columns)
+            else f"c{column_index + 1}"
+        )
+        cells.append(
+            {
+                "column_id": column_id,
+                "text": cell.text,
+                "rowspan": cell.rowspan,
+                "colspan": cell.colspan,
+                "children": list(cell.children),
+            }
+        )
+    return cells
 
 
-def _normalize_rows(rows: list[list[_Cell]]) -> list[list[_Cell]]:
-    sparse_rows: list[list[tuple[int, _Cell]]] = []
-    column_count = 0
-    for row in rows:
-        sparse_row: list[tuple[int, _Cell]] = []
+def _normalize_rows(
+    rows: list[list[_Cell]],
+    *,
+    row_count: int | None = None,
+    column_count: int | None = None,
+) -> list[list[_Cell]]:
+    row_map: dict[int, list[_Cell]] = {}
+    all_cells: list[_Cell] = []
+    max_row_end = 0
+    max_col_end = 0
+    for fallback_row, row in enumerate(rows):
         fallback_col = 0
         for cell in row:
-            col_addr = cell.col_addr if cell.col_addr is not None and cell.col_addr >= 0 else fallback_col
+            row_addr = (
+                cell.row_addr
+                if cell.row_addr is not None and cell.row_addr >= 0
+                else fallback_row
+            )
+            col_addr = (
+                cell.col_addr
+                if cell.col_addr is not None and cell.col_addr >= 0
+                else fallback_col
+            )
             cleaned = _Cell(
                 text=_clean_text(cell.text),
                 children=list(cell.children),
+                row_addr=row_addr,
                 col_addr=col_addr,
+                rowspan=max(1, cell.rowspan),
+                colspan=max(1, cell.colspan),
+                synthetic=cell.synthetic,
             )
-            sparse_row.append((col_addr, cleaned))
-            column_count = max(column_count, col_addr + 1)
-            fallback_col = col_addr + 1
-        if any(cell.text or cell.children for _, cell in sparse_row):
-            sparse_rows.append(sparse_row)
+            row_map.setdefault(row_addr, []).append(cleaned)
+            all_cells.append(cleaned)
+            max_row_end = max(max_row_end, row_addr + cleaned.rowspan)
+            max_col_end = max(max_col_end, col_addr + cleaned.colspan)
+            fallback_col = col_addr + cleaned.colspan
+
+    actual_column_count = max(column_count or 0, max_col_end)
+    if actual_column_count <= 0:
+        return []
+    if row_count is not None:
+        row_indexes = list(range(max(row_count, max_row_end)))
+    else:
+        row_indexes = sorted(row_map)
 
     normalized: list[list[_Cell]] = []
-    for sparse_row in sparse_rows:
-        dense_row = [_Cell(col_addr=index) for index in range(column_count)]
-        for col_addr, cell in sparse_row:
-            if 0 <= col_addr < column_count:
-                dense_row[col_addr] = cell
-        normalized.append(dense_row)
+    for row_index in row_indexes:
+        current_cells = row_map.get(row_index, [])
+        covered = _covered_columns_from_rowspans(all_cells, row_index)
+        occupied = set(covered)
+        for cell in current_cells:
+            start = cell.col_addr or 0
+            occupied.update(range(start, min(actual_column_count, start + cell.colspan)))
+
+        materialized = list(current_cells)
+        for col_addr in range(actual_column_count):
+            if col_addr in occupied:
+                continue
+            materialized.append(
+                _Cell(row_addr=row_index, col_addr=col_addr, synthetic=True)
+            )
+        if materialized:
+            normalized.append(sorted(materialized, key=lambda item: item.col_addr or 0))
     return normalized
 
 
-def _pad_row(row: list[_Cell], column_count: int) -> list[_Cell]:
-    return row + [_Cell() for _ in range(column_count - len(row))]
+def _should_omit_blank_cells(
+    rows: list[list[_Cell]],
+    *,
+    column_count: int,
+) -> bool:
+    cells = [cell for row in rows for cell in row]
+    if column_count < 10 or len(cells) < 50:
+        return False
+    blank_count = _omitted_blank_cell_count(rows, omit=True)
+    return blank_count / len(cells) >= 0.5
 
 
-def _single_cell_table_text(rows: list[list[_Cell]]) -> str | None:
-    normalized = _normalize_rows(rows)
+def _omitted_blank_cell_count(
+    rows: list[list[_Cell]],
+    *,
+    omit: bool,
+) -> int:
+    if not omit:
+        return 0
+    return sum(
+        1
+        for row in rows
+        for cell in row
+        if not cell.text.strip() and not cell.children
+    )
+
+
+def _covered_columns_from_rowspans(cells: list[_Cell], row_index: int) -> set[int]:
+    covered: set[int] = set()
+    for cell in cells:
+        row_addr = cell.row_addr or 0
+        if not row_addr < row_index < row_addr + cell.rowspan:
+            continue
+        col_addr = cell.col_addr or 0
+        covered.update(range(col_addr, col_addr + cell.colspan))
+    return covered
+
+
+def _table_column_count(
+    rows: list[list[_Cell]],
+    declared_column_count: int | None,
+) -> int:
+    return max(
+        declared_column_count or 0,
+        max(
+            (
+                (cell.col_addr or 0) + cell.colspan
+                for row in rows
+                for cell in row
+            ),
+            default=0,
+        ),
+    )
+
+
+def _table_columns(
+    column_count: int,
+    header_rows: list[list[_Cell]],
+) -> list[dict[str, str]]:
+    return [
+        {
+            "id": f"c{index}",
+            "text": _column_header_text(header_rows, index - 1),
+        }
+        for index in range(1, column_count + 1)
+    ]
+
+
+def _column_header_text(
+    header_rows: list[list[_Cell]],
+    column_index: int,
+) -> str:
+    texts: list[str] = []
+    last_header_row = len(header_rows) - 1
+    for row_index, row in enumerate(header_rows):
+        for cell in row:
+            if not _header_cell_contributes_to_column(
+                cell,
+                column_index,
+                row_index,
+                last_header_row,
+            ):
+                continue
+            text = cell.text.strip()
+            if text and text not in texts:
+                texts.append(text)
+    return " / ".join(texts)
+
+
+def _header_cell_contributes_to_column(
+    cell: _Cell,
+    column_index: int,
+    row_index: int,
+    last_header_row: int,
+) -> bool:
+    start = cell.col_addr or 0
+    end = start + cell.colspan
+    return column_index == start or (
+        start < column_index < end and row_index < last_header_row
+    )
+
+
+def _header_row_count(rows: list[list[_Cell]]) -> int:
+    first_row = rows[0]
+    if any(cell.children for cell in first_row):
+        return 0
+    if len(rows) == 1:
+        return 1
+    count = 1
+    header_row_end = _row_span_end(first_row)
+    last_header_row = first_row
+    while count < len(rows):
+        row = rows[count]
+        if _row_is_blank(row):
+            if (
+                count + 1 < len(rows)
+                and _row_refines_previous_header(rows[count + 1], last_header_row)
+            ):
+                count += 1
+                continue
+            break
+        row_start = _row_start(row)
+        if (
+            row_start < header_row_end
+            or _row_refines_previous_header(row, last_header_row)
+        ):
+            count += 1
+            header_row_end = max(header_row_end, _row_span_end(row))
+            last_header_row = row
+            continue
+        break
+    return count
+
+
+def _row_refines_previous_header(
+    row: list[_Cell],
+    previous_row: list[_Cell],
+) -> bool:
+    if any(cell.children for cell in row) or _row_is_blank(row):
+        return False
+    groups = [
+        cell
+        for cell in previous_row
+        if cell.colspan > 1 and cell.text.strip()
+    ]
+    if not groups:
+        return False
+    for group in groups:
+        group_start = group.col_addr or 0
+        group_end = group_start + group.colspan
+        refiners = [
+            cell
+            for cell in row
+            if group_start <= (cell.col_addr or 0)
+            and (cell.col_addr or 0) + cell.colspan <= group_end
+        ]
+        if not any(cell.text.strip() for cell in refiners):
+            return False
+    return True
+
+
+def _row_start(row: list[_Cell]) -> int:
+    return min((cell.row_addr or 0 for cell in row), default=0)
+
+
+def _row_span_end(row: list[_Cell]) -> int:
+    return max(
+        (
+            (cell.row_addr or 0) + cell.rowspan
+            for cell in row
+        ),
+        default=0,
+    )
+
+
+def _row_is_blank(row: list[_Cell]) -> bool:
+    return not any(cell.text.strip() or cell.children for cell in row)
+
+
+def _single_cell_table_text(
+    rows: list[list[_Cell]],
+    *,
+    row_count: int | None = None,
+    column_count: int | None = None,
+) -> str | None:
+    normalized = _normalize_rows(
+        rows,
+        row_count=row_count,
+        column_count=column_count,
+    )
     if len(normalized) != 1 or len(normalized[0]) != 1:
         return None
     cell = normalized[0][0]
@@ -505,6 +1324,7 @@ def _table_source_text(table: dict[str, object]) -> str:
     rows = table["rows"]
     column_text = _build_column_source_labels(columns, _column_source_label, rows)
     lines: list[str] = []
+    active_rowspans: list[tuple[int, int, int, dict[str, object]]] = []
     if columns:
         lines.append(f"table: {len(columns)} columns")
     for header_row in table.get("header_rows", []):
@@ -516,14 +1336,75 @@ def _table_source_text(table: dict[str, object]) -> str:
         if cells:
             lines.append(f"header {header_row['index']}: " + "; ".join(cells))
     for row in rows:
+        row_index = int(row["index"])
+        row_cells = list(row["cells"])
+        source_row_cells = _source_cells_with_rowspan_context(
+            row_cells,
+            active_rowspans,
+            row_index,
+        )
         cells = _table_source_cells(
-            row["cells"],
+            source_row_cells,
             column_text,
             use_header_labels=True,
         )
         if cells:
             lines.append(f"row {row['index']}: " + "; ".join(cells))
+        active_rowspans = [
+            span for span in active_rowspans if span[2] > row_index
+        ]
+        active_rowspans.extend(_rowspan_source_spans(row_cells, row_index))
     return "\n".join(lines)
+
+
+def _source_cells_with_rowspan_context(
+    cells: list[dict[str, object]],
+    active_rowspans: list[tuple[int, int, int, dict[str, object]]],
+    row_index: int,
+) -> list[dict[str, object]]:
+    occupied = [_cell_column_range(cell) for cell in cells]
+    context_cells = [
+        cell
+        for start, end, last_row, cell in active_rowspans
+        if last_row >= row_index
+        and not any(
+            _ranges_overlap(start, end, other_start, other_end)
+            for other_start, other_end in occupied
+        )
+    ]
+    return sorted(
+        [*context_cells, *cells],
+        key=lambda cell: _cell_column_range(cell)[0],
+    )
+
+
+def _rowspan_source_spans(
+    cells: list[dict[str, object]],
+    row_index: int,
+) -> list[tuple[int, int, int, dict[str, object]]]:
+    spans: list[tuple[int, int, int, dict[str, object]]] = []
+    for cell in cells:
+        rowspan = _positive_int(cell.get("rowspan"), default=1)
+        if rowspan <= 1:
+            continue
+        start, end = _cell_column_range(cell)
+        spans.append((start, end, row_index + rowspan - 1, cell))
+    return spans
+
+
+def _cell_column_range(cell: dict[str, object]) -> tuple[int, int]:
+    column = _column_id_number(str(cell.get("column_id", "c1")))
+    colspan = _positive_int(cell.get("colspan"), default=1)
+    return column, column + colspan
+
+
+def _ranges_overlap(
+    start: int,
+    end: int,
+    other_start: int,
+    other_end: int,
+) -> bool:
+    return start < other_end and other_start < end
 
 
 def _table_source_cells(
@@ -607,6 +1488,13 @@ def _column_id_number(column_id: str) -> int:
         return 1
 
 
+def _positive_int(value: object, *, default: int) -> int:
+    try:
+        return max(1, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
 def _inline_table_source(table: dict[str, object]) -> str:
     source = _table_source_text(table)
     return source.replace("\n", " / ")
@@ -663,6 +1551,16 @@ def _decode_stream(raw: bytes, compressed: bool) -> bytes:
         return zlib.decompress(raw, -15)
     except zlib.error:
         return zlib.decompress(raw)
+
+
+def _decode_bin_data_stream(raw: bytes, compressed: bool) -> bytes:
+    if not compressed:
+        return raw
+    try:
+        return _decode_stream(raw, compressed=True)
+    except zlib.error:
+        # Some HWP5 files mix deflated BinData streams with raw image bytes.
+        return raw
 
 
 def _read_flags(ole: object) -> int:
@@ -723,7 +1621,7 @@ def _load_bin_data(ole: object, compressed: bool) -> dict[int, tuple[bytes, str]
         ext = match.group(2).lower()
         try:
             raw = ole.openstream(f"BinData/{name}").read()
-            result[stream_id] = (_decode_stream(raw, compressed), ext)
+            result[stream_id] = (_decode_bin_data_stream(raw, compressed), ext)
         except Exception:
             continue
     return result

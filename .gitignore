@@ -1,5 +1,6 @@
 .venv/
 .worktrees/
+.superpowers/
 .pytest_cache/
 __pycache__/
 *.py[cod]
