@@ -1,11 +1,27 @@
 # rag-document-parser
 
-RAG-ready document parser for producing canonical source evidence units and
-user-facing evidence payloads from document formats such as HWP, HWPX, and PDF.
+RAG-ready document parser for producing source-preserving evidence units,
+structured evidence payloads, and final retrieval chunks from HWP, HWPX, PDF,
+Markdown, and plain text documents.
 
-The parser is not a Markdown converter. Its primary output is source-preserving
-evidence units for downstream agentic chunking, embedding, retrieval, LLM
-grounding, and user-facing evidence display.
+The parser is not a Markdown converter. Its primary output is a typed evidence
+contract that downstream systems can use for indexing, retrieval, LLM grounding,
+manual inspection, and user-facing evidence display.
+
+## Pipeline
+
+```text
+raw document
+  -> EvidenceUnit extraction
+  -> optional asset upload and asset_ref resolution
+  -> optional agentic chunking
+  -> RagChunk enrichment
+  -> optional HTML rendering for inspection
+```
+
+The public `RagDocumentParser` handles extraction plus S3-compatible asset
+upload. Format backends can also be used directly when you want raw
+`ParsedDocument` output before asset upload.
 
 ```python
 import os
@@ -27,10 +43,14 @@ parser = RagDocumentParser(
     ),
 )
 
-result = parser.parse(raw_bytes, suffix=".md")
+result = parser.parse(
+    raw_bytes,
+    suffix=".pdf",
+    source_name="notice.pdf",
+)
 
 for unit in result.units:
-    store_extracted_unit(unit.id, unit.source, unit.type, unit.format, unit.content, unit.metadata)
+    store_evidence_unit(unit.to_dict())
 
 for asset in result.assets:
     register_asset(asset.uri)
@@ -55,67 +75,163 @@ for chunk in chunks:
     )
 ```
 
-## Current scope
+## Model Contract
 
-- Defines the public RAG result model:
-  - `ParseResult`: parser output containing extracted units and uploaded assets.
-  - `EvidenceUnit`: extraction-stage id, source, content, type, format, and
-    metadata.
-  - `EvidenceItem`: one evidence payload item inside composite chunk evidence.
-  - `Evidence`: composite chunk evidence made from one or more `EvidenceItem`
-    values for a `RagChunk`.
-  - `RagChunk`: final chunk with source text, composite evidence, summary,
-    keywords, questions, and metadata.
-  - `PendingAsset`
-  - `DocumentAsset`
-  - `SourceInfo`
-  - `SourceEvidence`
-  - `S3Config`
-- Requires S3-compatible object storage; binary assets are uploaded and exposed
-  as asset references instead of being embedded in source or evidence.
-- Supports UTF-8 text/Markdown, HWPX, HWP5 (`.hwp`), and PDF parsing.
-- Selects a parser backend by suffix; `.md`, `.markdown`, `.txt`, `.hwpx`,
-  `.hwp`, and `.pdf` are backed by built-in backends.
-- Parser backends produce `EvidenceUnit` objects; the current default chunker
-  has intentionally been removed from parsing. Agentic chunking and
-  summary/keyword/question generation happen after parsing.
-- The HWPX backend extracts text, coordinate-based structured tables, nested
-  tables, multi-row headers, merged cells, and image assets. Images embedded in
-  table cells are preserved as nested `asset_ref` evidence and uploaded to
-  S3-compatible object storage.
-- The HWP5 backend adapts the `md-converter` record parser to produce text,
-  structured table, nested table, and image evidence units instead of Markdown.
-- The PDF backend adapts the `md-converter` pdfplumber/OCR flow to produce
-  page-ordered text, structured tables, nested table evidence, image assets,
-  and OCR text units for scanned pages.
-- Converts simple Markdown tables into table evidence units with:
-  - canonical row-oriented source text for LLM grounding
-  - `structured_table` evidence payloads instead of Markdown table strings
-  - user-facing evidence payloads
-  - `agentic-chunker`-compatible metadata such as `common.chunk_kind`
+The canonical contract lives in `rag_document_parser.models`. Models are
+Pydantic v2 models with explicit fields, runtime validation, JSON schema
+introspection, attribute access, mapping-compatible access, and stable
+`to_dict()` serialization.
 
-## Internal pipeline layout
+Use model attributes inside Python code:
 
-The package is organized around the document pipeline:
-
-```text
-source -> evidence_unit_extraction EvidenceUnit -> agentic chunk -> RagChunk
+```python
+if unit.format == "structured_table":
+    first_column = unit.content.columns[0].text
 ```
 
-- `evidence_unit_extraction/`: EvidenceUnit extraction, asset upload/resolve,
-  backend registry, and shared evidence payload schema helpers.
-- `evidence_unit_extraction/formats/<format>/backend.py`: format-specific
-  extraction entrypoints for Markdown, HWPX, HWP5, and PDF.
-- `renderer/`: EvidenceUnit and RagChunk HTML rendering.
-- `pipeline/`: orchestration for the public parser API.
-- `chunk/`: chunker protocol, `EvidenceUnitAgenticChunker`, and final
-  `RagChunk` enrichment.
-- `llm.py`: shared OpenAI-compatible LLM config and chat-completions helpers
-  for chunking and PDF vision OCR.
+Use `to_dict()` at storage, API, JSON, or renderer boundaries:
 
-## Optional dependencies
+```python
+payload = result.to_dict()
+schema = RagChunk.model_json_schema()
+```
 
-Install format dependencies explicitly when using non-HWPX formats:
+Primary output models:
+
+- `ParseResult`: public parser output with `source`, resolved `units`,
+  uploaded `assets`, and `quality_warnings`.
+- `ParsedDocument`: backend output before S3 upload and asset URI resolution.
+- `EvidenceUnit`: extracted unit with `id`, `type`, `format`, `source`,
+  structured `content`, and `metadata`.
+- `RagChunk`: retrieval chunk with `source`, composite `evidence`, `summary`,
+  `keywords`, `questions`, and chunk metadata.
+- `Evidence` and `EvidenceItem`: composite chunk evidence. The JSON field is
+  `items`; the Python attribute `chunk.evidence.items` is preserved.
+- `PendingAsset` and `DocumentAsset`: pre-upload and uploaded asset records.
+- `SourceInfo` and `SourceEvidence`: source metadata and source-grounding text.
+
+Structured evidence content models:
+
+- `AssetRefContent`: `{asset_id, caption}` references to uploaded assets.
+- `StructuredTableContent`: table `caption`, `columns`, `rows`,
+  `header_rows`, and optional compact metadata.
+- `TableColumn`, `TableRow`, `TableCell`, `EvidenceChild`: table internals and
+  nested evidence inside cells.
+- `StructuredDiagramContent`: diagram `caption`, `nodes`, `edges`,
+  `connectors`, optional Mermaid text, and optional asset/confidence metadata.
+- `DiagramNode`, `DiagramEdge`, `DiagramConnector`, `BoundingBox`,
+  `DiagramPoint`: diagram internals.
+- `CommonMetadata` and `CommonMetadataPayload`: common metadata envelope used by
+  extractors and chunkers.
+
+`TypedDict` schema aliases are not part of the current implementation. Schema
+helpers under `evidence_unit_extraction/schema/` construct these Pydantic model
+objects directly.
+
+## Supported Inputs
+
+Built-in parser suffixes:
+
+- `.md`, `.markdown`, `.txt`: text and Markdown backend.
+- `.hwpx`: HWPX backend.
+- `.hwp`: HWP5 backend.
+- `.pdf`: PDF backend.
+
+Current extraction behavior by format:
+
+| Format | Text | Structured tables | Nested tables | Images/assets | Structured diagrams | OCR |
+| --- | --- | --- | --- | --- | --- | --- |
+| Markdown/text | yes | Markdown tables | no | no | no | no |
+| HWPX | yes | yes | yes | yes | yes | optional `ocr_fn` fallback |
+| HWP5 | yes | yes | yes | yes | yes | optional `ocr_fn` fallback |
+| PDF | yes | yes | yes | yes | vector/fallback diagrams | local or vision OCR |
+
+Notes:
+
+- Parser backends produce `EvidenceUnit` objects. Chunking and
+  summary/keyword/question generation are intentionally separate from parsing.
+- Binary assets are uploaded to S3-compatible object storage by
+  `RagDocumentParser` and represented as `asset_ref` evidence instead of being
+  embedded into text or content payloads.
+- Backend classes such as `HwpxBackend`, `Hwp5Backend`, and `PdfBackend` return
+  `ParsedDocument` directly and do not upload assets by themselves.
+
+## Package Layout
+
+```text
+src/rag_document_parser/
+  models.py
+  llm.py
+  storage.py
+  evidence_unit_extraction/
+    backend.py
+    registry.py
+    assets.py
+    schema/
+    formats/
+      markdown/
+      hwpx/
+      hwp5/
+      pdf/
+  chunk/
+    backend.py
+    agentic.py
+    enrichment.py
+  pipeline/
+    parser.py
+  renderer/
+    evidence_unit_render.py
+    rag_chunk_render.py
+```
+
+Key boundaries:
+
+- `models.py`: canonical Pydantic contract.
+- `evidence_unit_extraction/`: extraction backends, schema construction
+  helpers, table source text helpers, and asset upload/resolve support.
+- `pipeline/parser.py`: public parser orchestration.
+- `chunk/`: `EvidenceUnitAgenticChunker`, chunker protocol, and final
+  `RagChunkEnricher`.
+- `renderer/`: HTML rendering for extracted evidence units and final chunks.
+- `llm.py`: shared OpenAI-compatible `LlmConfig`, JSON chat helper, and
+  chat-completions URL normalization for chunking and PDF vision OCR.
+
+## Rendering
+
+HTML renderers are inspection tools. They accept canonical model objects or
+serialized dictionaries and preserve plain-text newlines, structured tables,
+asset references, and structured diagrams.
+
+```python
+from pathlib import Path
+
+from rag_document_parser.renderer import (
+    render_evidence_units_html,
+    render_rag_chunks_html,
+)
+
+Path("evidence-units.html").write_text(
+    render_evidence_units_html(
+        result.units,
+        title="Extracted evidence",
+        assets=result.assets,
+    ),
+    encoding="utf-8",
+)
+
+Path("rag-chunks.html").write_text(
+    render_rag_chunks_html(
+        chunks,
+        title="Final chunks",
+        assets=result.assets,
+    ),
+    encoding="utf-8",
+)
+```
+
+## Optional Dependencies
+
+Install only the format dependencies you need:
 
 ```bash
 uv sync --extra hwp5
@@ -123,12 +239,24 @@ uv sync --extra pdf
 uv sync --extra pdf-ocr
 ```
 
-`pdf-ocr` includes Python bindings for OCR fallback. The local Tesseract binary,
-Korean language data, and Poppler must still be installed on the host if
+For development and the full test suite:
+
+```bash
+uv sync --extra dev
+uv run pytest -q
+```
+
+`pdf-ocr` installs Python bindings for local OCR fallback. The host still needs
+the local Tesseract binary, Korean language data, and Poppler when
 pytesseract/pdf2image OCR fallback is used.
 
-For scanned PDFs, `PdfBackend` can also call an OpenAI-compatible vision model
-before the local OCR fallback:
+## OCR
+
+HWPX and HWP5 backends accept an optional `ocr_fn` callback for image fallback
+OCR. PDF supports `ocr_fn`, OpenAI-compatible vision OCR, and local OCR
+fallback.
+
+`PdfBackend` can call an OpenAI-compatible vision model before local OCR:
 
 ```python
 import os
@@ -144,25 +272,28 @@ backend = PdfBackend(
     ),
 )
 
-result = backend.parse(raw_pdf_bytes, suffix=".pdf")
+parsed = backend.parse(raw_pdf_bytes, ".pdf")
 ```
 
 When both `ocr_fn` and `ocr_llm` are configured, `ocr_fn` takes precedence. If
-the vision OCR request fails or returns empty text, the backend falls back to
-the local pytesseract/pdf2image path.
+vision OCR fails or returns empty text, the backend falls back to the local OCR
+path when local OCR dependencies are available.
 
-## Next scope
+## Validation Scripts
 
-- Tune and evaluate production chunking prompts against broader document
-  fixtures and retrieval-quality metrics.
-- Improve complex table fidelity beyond the current HWPX/HWP5/PDF baseline,
-  especially header inference and PDF table fragmentation.
-- Add optional source locators later only if product UX needs page/region jumps.
+The repository includes corpus-oriented scripts for local MinIO validation:
 
-## Validation
+- `scripts/validate_hwpx_clic_minio.py`: validate one HWPX file, upload
+  evidence JSON/HTML, metrics, and assets.
+- `scripts/validate_hwp5_clic_minio.py`: validate one HWP file, upload evidence
+  JSON/HTML, metrics, and assets.
+- `scripts/scan_hwp5_clic_minio.py`: scan HWP5 corpus extraction outliers.
+- `scripts/scan_hwpx_clic_minio_size_samples.py`: scan and report HWPX size
+  samples from the CLIC MinIO corpus.
+- `scripts/validate_pdf_clic_size_samples.py`: sample PDF corpus by size band,
+  validate extraction, upload HTML/JSON reports, and emit summary indexes.
 
-When local `clic-minio` is running, the HWPX backend can be validated against a
-real HWPX file and upload the evidence outputs back to MinIO:
+Example local MinIO setup:
 
 ```bash
 docker exec clic-minio sh -lc \
@@ -170,28 +301,21 @@ docker exec clic-minio sh -lc \
 
 docker exec clic-minio sh -lc \
   '/usr/bin/mc anonymous set download local/rag-document-parser-test'
+```
 
+Validate a single HWPX file:
+
+```bash
 uv run python scripts/validate_hwpx_clic_minio.py /path/to/sample.hwpx \
   --source-name "sample.hwpx" \
   --public-asset-endpoint "http://<browser-reachable-server>:10190"
 ```
 
-`--public-asset-endpoint` must point to the MinIO/S3 API endpoint reachable
-from the browser opening `evidence-units.html`; for local checks this can be
-`http://localhost:10190`, and for external checks it should be the server IP or
-DNS name plus the published S3 API port. Evidence JSON keeps canonical
-`s3://bucket/key` asset URIs; the generated HTML uses `public_url` only for
-browser rendering.
+`--public-asset-endpoint` must point to the S3 API endpoint reachable from the
+browser opening the generated HTML. Evidence JSON keeps canonical
+`s3://bucket/key` URIs; generated HTML uses public URLs only for display.
 
-The script writes and uploads:
-
-- `evidence-units.json`
-- `evidence-units.html`
-- `metrics.json`
-- extracted image assets under `{document_sha256}/assets/`
-
-For HWP5 corpus checks, scan table and diagram extraction outliers from the
-same local MinIO corpus:
+Scan HWP5 corpus outliers:
 
 ```bash
 uv run python scripts/scan_hwp5_clic_minio.py \
@@ -200,6 +324,20 @@ uv run python scripts/scan_hwp5_clic_minio.py \
   --output /tmp/hwp5-scan-300.json
 ```
 
-The scanner reports per-document table counts, cell counts, blank ratios, span
-counts, diagram node/connectors/edge counts, and ranked table and diagram
-outliers so parser changes can be compared against a stable corpus slice.
+## Current Scope
+
+- Source-preserving evidence extraction for text, tables, images, diagrams, and
+  scanned PDF OCR text.
+- Strong Pydantic object contracts for evidence units, chunk evidence, assets,
+  structured tables, structured diagrams, and shared LLM configuration.
+- Agentic chunk planning with table row splitting, omitted-row repair,
+  boundary merging, and final chunk enrichment.
+- HTML inspection output for extracted evidence units and final chunks.
+- S3-compatible asset upload and browser-resolvable asset rendering support.
+
+## Known Follow-Up Areas
+
+- Tune production chunking prompts against broader retrieval-quality metrics.
+- Continue improving complex table fidelity, especially PDF header inference,
+  fragmentation, and continuation handling.
+- Add source locators only if product UX needs page/region jump behavior.
