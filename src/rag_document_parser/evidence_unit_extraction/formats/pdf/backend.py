@@ -72,15 +72,12 @@ class _OcrResults(dict[int, str]):
         self.failed_pages: list[dict[str, object]] = []
 
 
-PdfOcrConfig = LlmConfig
-
-
 @dataclass
 class PdfBackend:
     supported_suffixes = (".pdf",)
     max_ocr_workers: int = 4
     ocr_fn: Callable[[bytes, int], str] | None = None
-    ocr_llm: PdfOcrConfig | None = None
+    ocr_llm: LlmConfig | None = None
 
     def parse(self, data: bytes, suffix: str) -> ParsedDocument:
         try:
@@ -2867,7 +2864,7 @@ def _ocr_pages(
     data: bytes,
     max_workers: int | None,
     ocr_fn: Callable[[bytes, int], str] | None,
-    ocr_llm: PdfOcrConfig | None,
+    ocr_llm: LlmConfig | None,
 ) -> _OcrResults:
     if not scanned:
         return _OcrResults()
@@ -3138,7 +3135,7 @@ def _ocr_page_with_vision(
     data: bytes,
     png: bytes,
     page_idx: int,
-    cfg: PdfOcrConfig,
+    cfg: LlmConfig,
 ) -> str:
     if png:
         text = _vision_ocr_png(png, cfg)
@@ -3158,7 +3155,7 @@ _VISION_OCR_PROMPT = """\
 - 텍스트 내용만 출력, 설명 없이"""
 
 
-def _vision_ocr_png(png: bytes, cfg: PdfOcrConfig) -> str:
+def _vision_ocr_png(png: bytes, cfg: LlmConfig) -> str:
     b64 = base64.b64encode(png).decode("ascii")
     body = {
         "model": cfg.model,

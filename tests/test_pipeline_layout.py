@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import importlib.util
+from typing import get_type_hints
 
 
 def test_pipeline_layout_exports_stage_and_format_modules():
+    import rag_document_parser
+    from rag_document_parser.evidence_unit_extraction.formats import pdf as pdf_format
     from rag_document_parser import (
         EvidenceItem,
         EvidenceUnitAgenticChunker,
         Hwp5Backend,
         HwpxBackend,
+        LlmConfig,
         MarkdownBackend,
         PdfBackend,
-        PdfOcrConfig,
         RagChunkEnricher,
         RagDocumentParser,
     )
@@ -31,10 +34,8 @@ def test_pipeline_layout_exports_stage_and_format_modules():
     )
     from rag_document_parser.evidence_unit_extraction.formats.pdf.backend import (
         PdfBackend as StagePdfBackend,
-        PdfOcrConfig as StagePdfOcrConfig,
     )
     from rag_document_parser.evidence_unit_extraction.registry import default_backends
-    from rag_document_parser.llm import LlmConfig
     from rag_document_parser.models import ParsedDocument
     from rag_document_parser.pipeline.parser import RagDocumentParser as StageParser
 
@@ -45,8 +46,9 @@ def test_pipeline_layout_exports_stage_and_format_modules():
     assert StageHwpxBackend is HwpxBackend
     assert StageMarkdownBackend is MarkdownBackend
     assert StagePdfBackend is PdfBackend
-    assert StagePdfOcrConfig is PdfOcrConfig
-    assert PdfOcrConfig is LlmConfig
+    assert not hasattr(rag_document_parser, "PdfOcrConfig")
+    assert not hasattr(pdf_format, "PdfOcrConfig")
+    assert get_type_hints(PdfBackend)["ocr_llm"] == LlmConfig | None
     assert ParsedDocument.__name__ == "ParsedDocument"
     assert DocumentBackend.__name__ == "DocumentBackend"
     assert Chunker.__name__ == "Chunker"

@@ -5,7 +5,7 @@ from .evidence_unit_extraction.backend import DocumentBackend
 from .evidence_unit_extraction.formats.hwp5 import Hwp5Backend
 from .evidence_unit_extraction.formats.hwpx import HwpxBackend
 from .evidence_unit_extraction.formats.markdown import MarkdownBackend
-from .evidence_unit_extraction.formats.pdf import PdfBackend, PdfOcrConfig
+from .evidence_unit_extraction.formats.pdf import PdfBackend
 from .llm import LlmConfig
 from .models import (
     AssetRefContent,
@@ -58,7 +58,6 @@ __all__ = [
     "MarkdownBackend",
     "PendingAsset",
     "PdfBackend",
-    "PdfOcrConfig",
     "ParseResult",
     "RagChunkEnricher",
     "ParsedDocument",

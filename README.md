@@ -256,6 +256,50 @@ HWPX and HWP5 backends accept an optional `ocr_fn` callback for image fallback
 OCR. PDF supports `ocr_fn`, OpenAI-compatible vision OCR, and local OCR
 fallback.
 
+PDF OCR configuration is independent from chunk enrichment configuration.
+Passing `LlmConfig` to `EvidenceUnitAgenticChunker(llm=...)` does not enable PDF
+vision OCR in `RagDocumentParser`. The parser's default backend registry uses
+`PdfBackend()` without `ocr_llm`, so vision OCR is off unless you explicitly
+install a PDF backend configured with `ocr_llm`.
+
+```python
+import os
+
+from rag_document_parser import (
+    EvidenceUnitAgenticChunker,
+    LlmConfig,
+    PdfBackend,
+    RagDocumentParser,
+    S3Config,
+)
+
+llm = LlmConfig(
+    url=os.environ["LLM_URL"],
+    api_key=os.environ["LLM_API_KEY"],
+    model=os.environ["LLM_MODEL"],
+)
+storage = S3Config(
+    endpoint=os.environ["S3_ENDPOINT"],
+    bucket=os.environ["S3_BUCKET"],
+    access_key=os.environ["S3_ACCESS_KEY"],
+    secret_key=os.environ["S3_SECRET_KEY"],
+)
+
+parser = RagDocumentParser(
+    object_storage=storage,
+    backends={
+        ".pdf": PdfBackend(ocr_llm=llm),
+    },
+)
+
+chunker = EvidenceUnitAgenticChunker(llm=llm)
+```
+
+These two call sites may share the same `LlmConfig` object, but they are not
+wired together automatically. If both `ocr_fn` and `ocr_llm` are omitted,
+`PdfBackend` can still try local OCR for scanned pages when local OCR
+dependencies are installed; it will not call a vision model.
+
 `PdfBackend` can call an OpenAI-compatible vision model before local OCR:
 
 ```python
