@@ -50,16 +50,11 @@ def _render_rag_chunk(
         metadata = {}
 
     evidence = chunk.get("evidence", {})
-    if isinstance(evidence, dict):
-        evidence_html = render_evidence_html(evidence, assets_by_id)
-    else:
-        evidence_html = f"<pre>{escape(str(evidence))}</pre>"
 
     parts = [
         '<section class="chunk rag-chunk">',
         '<header class="chunk-header">',
         f"<code>{escape(str(chunk.get('id', '')))}</code>",
-        f"<span>{escape(str(chunk.get('type', '')))}</span>",
         "</header>",
     ]
     parts.append(_render_title(metadata))
@@ -75,7 +70,7 @@ def _render_rag_chunk(
     parts.append('<h2 class="chunk-section-title">source text</h2>')
     parts.append(f'<pre class="source-text">{escape(str(source_text))}</pre>')
     parts.append('<h2 class="chunk-section-title">final evidence</h2>')
-    parts.append(evidence_html)
+    parts.append(_render_final_evidence(evidence, assets_by_id))
     parts.append("</section>")
     return "".join(parts)
 
@@ -114,7 +109,11 @@ def _render_chunk_metadata(metadata: dict[str, Any], evidence: Any) -> str:
     context_unit_ids = _string_list(metadata.get("context_unit_ids"))
     evidence_item_count = _evidence_item_count(evidence)
     common = metadata.get("common")
-    unit_types = _string_list(common.get("unit_types")) if isinstance(common, dict) else []
+    unit_types = (
+        _string_list(common.get("unit_types"))
+        if isinstance(common, dict)
+        else _evidence_item_types(evidence)
+    )
     display_format = common.get("display_format") if isinstance(common, dict) else None
 
     if source_unit_ids:
@@ -207,6 +206,64 @@ def _render_debug_details(label: str, value: Any, *, open_details: bool = False)
     )
 
 
+def _render_final_evidence(
+    evidence: Any,
+    assets_by_id: dict[str, dict[str, Any]],
+) -> str:
+    if not isinstance(evidence, dict):
+        return f"<pre>{escape(str(evidence))}</pre>"
+
+    items = evidence.get("items")
+    if not isinstance(items, list):
+        return render_evidence_html(evidence, assets_by_id)
+
+    item_dicts = [item for item in items if isinstance(item, dict)]
+    parts = ['<div class="final-evidence">']
+    for item in item_dicts:
+        parts.append('<div class="final-evidence-part">')
+        parts.append(render_evidence_html(item, assets_by_id))
+        parts.append("</div>")
+    parts.append("</div>")
+
+    if item_dicts:
+        parts.append('<div class="evidence-item-details">')
+        for index, item in enumerate(item_dicts, start=1):
+            parts.append(_render_evidence_item_detail(index, item, assets_by_id))
+        parts.append("</div>")
+    return "".join(parts)
+
+
+def _render_evidence_item_detail(
+    index: int,
+    item: dict[str, Any],
+    assets_by_id: dict[str, dict[str, Any]],
+) -> str:
+    labels = [f"evidence item {index}"]
+    item_type = item.get("type", item.get("kind"))
+    item_format = item.get("format")
+    if isinstance(item_type, str) and item_type:
+        labels.append(item_type)
+    if isinstance(item_format, str) and item_format:
+        labels.append(item_format)
+
+    source_unit_ids = _string_list(item.get("source_unit_ids"))
+    parts = [
+        '<details class="evidence-item-detail">',
+        "<summary>",
+        " / ".join(escape(label) for label in labels),
+        "</summary>",
+    ]
+    if source_unit_ids:
+        parts.append(
+            '<div class="chunk-meta">'
+            f"<span>item source units: {escape(', '.join(source_unit_ids))}</span>"
+            "</div>"
+        )
+    parts.append(render_evidence_html(item, assets_by_id))
+    parts.append("</details>")
+    return "".join(parts)
+
+
 def _render_tag_list(values: list[str]) -> str:
     return (
         '<ul class="tag-list">'
@@ -246,6 +303,22 @@ def _evidence_item_count(evidence: Any) -> int | None:
     if not isinstance(items, list):
         return None
     return len(items)
+
+
+def _evidence_item_types(evidence: Any) -> list[str]:
+    if not isinstance(evidence, dict):
+        return []
+    items = evidence.get("items")
+    if not isinstance(items, list):
+        return []
+    result: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        item_type = item.get("type")
+        if isinstance(item_type, str) and item_type and item_type not in result:
+            result.append(item_type)
+    return result
 
 
 def _other_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
@@ -315,6 +388,35 @@ _CSS = (
 }
 .source-unit-list span {
   color: #555;
+}
+.final-evidence {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 12px;
+}
+.final-evidence-part > :first-child {
+  margin-top: 0;
+}
+.final-evidence-part > :last-child {
+  margin-bottom: 0;
+}
+.evidence-item-details {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+.evidence-item-detail {
+  border: 1px solid #e0e0da;
+  border-radius: 4px;
+  padding: 8px;
+  background: #fafafa;
+}
+.evidence-item-detail summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.evidence-item-detail > :last-child {
+  margin-bottom: 0;
 }
 """
 )

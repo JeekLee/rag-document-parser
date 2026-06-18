@@ -796,8 +796,7 @@ def test_render_rag_chunks_html_shows_final_evidence_and_chunk_fields():
     chunks = [
         {
             "id": "chunk-1",
-            "type": "mixed",
-            "source": {"kind": "mixed", "text": "source text"},
+            "source": {"kind": "chunk", "text": "source text"},
             "evidence": {
                 "items": [
                     {
@@ -870,7 +869,7 @@ def test_render_rag_chunks_html_shows_final_evidence_and_chunk_fields():
     assert "<!doctype html>" in html
     assert "Agentic chunks" in html
     assert "chunk-1" in html
-    assert "mixed" in html
+    assert "unit types: text, table" in html
     assert "제왕절개 본인부담률 안내" in html
     assert "제왕절개" in html
     assert "본인부담률은 어떻게 바뀌나요?" in html
@@ -881,13 +880,15 @@ def test_render_rag_chunks_html_shows_final_evidence_and_chunk_fields():
     assert "same section" in html
     assert "structured_table" in html
     assert "source text" in html
+    assert '<div class="final-evidence">' in html
+    assert html.count('<details class="evidence-item-detail">') == 2
     assert "evidence item 1" in html
     assert "item source units: b1" in html
     assert "evidence item 2" in html
     assert "item source units: b2" in html
     assert "청크 설명" in html
     assert "급여" in html
-    assert html.count("<table") == 1
+    assert html.count("<table") == 2
     assert "agentic_chunk_exceeds_max_units" in html
 
 
@@ -897,8 +898,7 @@ def test_render_rag_chunks_html_accepts_model_objects_and_escapes_diagnostics():
 
     chunk = RagChunk(
         id="chunk-2",
-        type="text",
-        source=SourceEvidence(kind="text", text="raw <source>"),
+        source=SourceEvidence(kind="chunk", text="raw <source>"),
         evidence=Evidence(
             items=[
                 EvidenceItem(
