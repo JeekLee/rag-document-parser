@@ -2288,8 +2288,9 @@ def test_pdf_backend_renders_scanned_pages_at_ocr_scale(monkeypatch):
 
 
 def test_pdf_backend_uses_openai_compatible_vision_ocr(monkeypatch):
+    from rag_document_parser import LlmConfig
     from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
-    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend, PdfOcrConfig
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     scanned_page = _FakePage(
         chars=[],
@@ -2326,7 +2327,7 @@ def test_pdf_backend_uses_openai_compatible_vision_ocr(monkeypatch):
 
     parsed = PdfBackend(
         max_ocr_workers=1,
-        ocr_llm=PdfOcrConfig(
+        ocr_llm=LlmConfig(
             url="http://spark.test/v1",
             api_key="secret",
             model="qwen3-vl-30b-a3b",
@@ -2346,8 +2347,9 @@ def test_pdf_backend_uses_openai_compatible_vision_ocr(monkeypatch):
 
 
 def test_pdf_backend_strips_vision_ocr_markdown_fences(monkeypatch):
+    from rag_document_parser import LlmConfig
     from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
-    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend, PdfOcrConfig
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     scanned_page = _FakePage(
         chars=[],
@@ -2389,7 +2391,7 @@ def test_pdf_backend_strips_vision_ocr_markdown_fences(monkeypatch):
 
     parsed = PdfBackend(
         max_ocr_workers=1,
-        ocr_llm=PdfOcrConfig(
+        ocr_llm=LlmConfig(
             url="http://spark.test/v1",
             api_key="secret",
             model="qwen3-vl-30b-a3b",
@@ -2411,8 +2413,9 @@ def test_pdf_backend_strips_vision_ocr_markdown_fences(monkeypatch):
 
 
 def test_pdf_backend_falls_back_when_vision_ocr_is_empty(monkeypatch):
+    from rag_document_parser import LlmConfig
     from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
-    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend, PdfOcrConfig
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     scanned_page = _FakePage(
         chars=[],
@@ -2437,7 +2440,7 @@ def test_pdf_backend_falls_back_when_vision_ocr_is_empty(monkeypatch):
 
     parsed = PdfBackend(
         max_ocr_workers=1,
-        ocr_llm=PdfOcrConfig(
+        ocr_llm=LlmConfig(
             url="http://spark.test/v1",
             api_key="secret",
             model="qwen3-vl-30b-a3b",

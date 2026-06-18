@@ -7,8 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from ..llm import LlmConfig, chat_json
 from ..models import RagChunk
-from .llm import LlmConfig, chat_json
 
 ChunkEnrichmentFn = Callable[[RagChunk, LlmConfig | None], Any]
 ChatJsonFn = Callable[[str, LlmConfig], Any]

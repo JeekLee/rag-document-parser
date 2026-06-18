@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 from urllib import request
 
+from ....llm import LlmConfig, chat_completions_url
 from ....models import EvidenceUnit, PendingAsset, SourceEvidence
 from ...backend import ParsedDocument
 from ...schema import (
@@ -70,13 +71,7 @@ class _OcrResults(dict[int, str]):
         self.failed_pages: list[dict[str, object]] = []
 
 
-@dataclass(frozen=True)
-class PdfOcrConfig:
-    url: str
-    api_key: str
-    model: str
-    temperature: float = 0.0
-    timeout: float = 120.0
+PdfOcrConfig = LlmConfig
 
 
 @dataclass
@@ -3181,7 +3176,7 @@ def _vision_ocr_png(png: bytes, cfg: PdfOcrConfig) -> str:
         ],
     }
     req = request.Request(
-        _chat_completions_url(cfg.url),
+        chat_completions_url(cfg.url),
         data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
         headers={
             "Authorization": f"Bearer {cfg.api_key}",
@@ -3209,15 +3204,6 @@ def _clean_vision_ocr_text(text: str) -> str:
     ):
         return "\n".join(lines[1:-1]).strip()
     return cleaned
-
-
-def _chat_completions_url(url: str) -> str:
-    normalized = url.rstrip("/")
-    if normalized.endswith("/chat/completions"):
-        return normalized
-    if normalized.endswith("/v1"):
-        return f"{normalized}/chat/completions"
-    return f"{normalized}/v1/chat/completions"
 
 
 def _ocr_png(png: bytes, lang: str) -> str:

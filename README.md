@@ -108,8 +108,10 @@ source -> evidence_unit_extraction EvidenceUnit -> agentic chunk -> RagChunk
   extraction entrypoints for Markdown, HWPX, HWP5, and PDF.
 - `renderer/`: EvidenceUnit and RagChunk HTML rendering.
 - `pipeline/`: orchestration for the public parser API.
-- `chunk/`: chunker protocol, `EvidenceUnitAgenticChunker`, chunk LLM
-  planning helpers, and final `RagChunk` enrichment.
+- `chunk/`: chunker protocol, `EvidenceUnitAgenticChunker`, and final
+  `RagChunk` enrichment.
+- `llm.py`: shared OpenAI-compatible LLM config and chat-completions helpers
+  for chunking and PDF vision OCR.
 
 ## Optional dependencies
 
@@ -131,10 +133,10 @@ before the local OCR fallback:
 ```python
 import os
 
-from rag_document_parser import PdfBackend, PdfOcrConfig
+from rag_document_parser import LlmConfig, PdfBackend
 
 backend = PdfBackend(
-    ocr_llm=PdfOcrConfig(
+    ocr_llm=LlmConfig(
         url=os.environ.get("RDP_PDF_OCR_BASE_URL", "http://localhost:10080/v1"),
         api_key=os.environ["RDP_PDF_OCR_API_KEY"],
         model=os.environ.get("RDP_PDF_OCR_MODEL", "qwen3-vl-30b-a3b"),

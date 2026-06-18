@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..models import Evidence, EvidenceItem, EvidenceUnit, RagChunk, SourceEvidence
+from ..llm import LlmConfig, chat_json
 from .enrichment import Enricher, RagChunkEnricher
-from .llm import LlmConfig, chat_json
 
 PlanFn = Callable[[list[EvidenceUnit], LlmConfig | None, int], Any]
 BoundaryMergeFn = Callable[[RagChunk, RagChunk, LlmConfig | None, int], Any]

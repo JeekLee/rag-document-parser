@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from rag_document_parser import PdfBackend, PdfOcrConfig, S3Config
+from rag_document_parser import LlmConfig, PdfBackend, S3Config
 from rag_document_parser.evidence_unit_extraction.backend import ParsedDocument
 from rag_document_parser.renderer.evidence_unit_render import render_evidence_units_html
 from rag_document_parser.storage import public_url_for_s3_uri, put_object
@@ -882,11 +882,11 @@ def _summary_html(summary: dict[str, Any]) -> str:
     )
 
 
-def _ocr_config(args: argparse.Namespace) -> PdfOcrConfig | None:
+def _ocr_config(args: argparse.Namespace) -> LlmConfig | None:
     api_key = args.ocr_api_key
     if not api_key:
         return None
-    return PdfOcrConfig(
+    return LlmConfig(
         url=args.ocr_base_url,
         api_key=api_key,
         model=args.ocr_model,

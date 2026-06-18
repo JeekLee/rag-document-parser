@@ -16,7 +16,7 @@ class LlmConfig:
 
 
 def chat_json(prompt: str, cfg: LlmConfig) -> Any:
-    endpoint = _chat_completions_url(cfg.url)
+    endpoint = chat_completions_url(cfg.url)
     body = {
         "model": cfg.model,
         "temperature": cfg.temperature,
@@ -45,7 +45,7 @@ def chat_json(prompt: str, cfg: LlmConfig) -> Any:
     return _loads_json_object(content)
 
 
-def _chat_completions_url(url: str) -> str:
+def chat_completions_url(url: str) -> str:
     normalized = url.rstrip("/")
     if normalized.endswith("/chat/completions"):
         return normalized
