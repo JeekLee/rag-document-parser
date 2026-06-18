@@ -1,0 +1,266 @@
+{
+  "source": {
+    "minio_source": "local/clic/raw",
+    "pdf_count": 984,
+    "size_bands": [
+      {
+        "id": "small",
+        "min_exclusive": 0,
+        "max_inclusive": 102400
+      },
+      {
+        "id": "medium",
+        "min_exclusive": 102400,
+        "max_inclusive": 524288
+      },
+      {
+        "id": "large",
+        "min_exclusive": 524288,
+        "max_inclusive": 2097152
+      },
+      {
+        "id": "xlarge",
+        "min_exclusive": 2097152,
+        "max_inclusive": 20971520
+      }
+    ],
+    "selection": {
+      "strategy": "size-sorted quantiles with non-generic filename preference",
+      "quantiles": [
+        0.1,
+        0.3,
+        0.5,
+        0.7,
+        0.9
+      ]
+    },
+    "outliers_above_largest_band": [
+      {
+        "key": "20071002-2-0001/본문내용.pdf",
+        "bytes": 91070704
+      }
+    ]
+  },
+  "documents": [
+    {
+      "id": "small-01-20231130-2-0001",
+      "band": "small",
+      "band_index": 1,
+      "path": "small/small-01-20231130-2-0001.pdf",
+      "minio_key": "20231130-2-0001/34efa8c17f7e6691.pdf",
+      "bytes": 53066,
+      "sha256": "a508a9cd2b5fe854e63516a8fb9e378f20d251c8d8ba9566fdcb3629ed9f4f82",
+      "etag": "f0c524d0df988e467f56f1dedb0f2869",
+      "last_modified": "2026-05-15T04:54:48.012Z"
+    },
+    {
+      "id": "small-02-20220429-10-0001",
+      "band": "small",
+      "band_index": 2,
+      "path": "small/small-02-20220429-10-0001.pdf",
+      "minio_key": "20220429-10-0001/보험급여과-2323호(2022.4.29.) 코로나19 수가 및 청구방법 변경 안내.pdf",
+      "bytes": 63764,
+      "sha256": "017117fad4aa9dc7949024f66ecd1425699f1396c0371868034102f261ea7ce6",
+      "etag": "09ff06d00a9adcbb2fd3e63b28e2050d",
+      "last_modified": "2026-05-11T10:37:55.803Z"
+    },
+    {
+      "id": "small-03-20230927-4-0010",
+      "band": "small",
+      "band_index": 3,
+      "path": "small/small-03-20230927-4-0010.pdf",
+      "minio_key": "20230927-4-0010/5ec36b80510fdff0.pdf",
+      "bytes": 70838,
+      "sha256": "ed87d2cd7e29a1fbb7809d4769207ba252ac27601e1dd35b700af591e9b98c5c",
+      "etag": "cc4483e9949fc63280f3e89d4be8ce25",
+      "last_modified": "2026-05-15T04:55:53.018Z"
+    },
+    {
+      "id": "small-04-20240830-1-0010",
+      "band": "small",
+      "band_index": 4,
+      "path": "small/small-04-20240830-1-0010.pdf",
+      "minio_key": "20240830-1-0010/e9d6cad7fb674764.pdf",
+      "bytes": 80042,
+      "sha256": "2cd5955c183d8f230274a01e4366490b53330499c5828936c83091175392f5e1",
+      "etag": "df9cd43b9ea6803b1745b1f30eb4d97b",
+      "last_modified": "2026-05-15T04:51:28.287Z"
+    },
+    {
+      "id": "small-05-20230728-1-0006",
+      "band": "small",
+      "band_index": 5,
+      "path": "small/small-05-20230728-1-0006.pdf",
+      "minio_key": "20230728-1-0006/0459ed1ec74b8d96.pdf",
+      "bytes": 93576,
+      "sha256": "5c9830cd9e219f2e2aaa84f9587f2137ac53e4af2be06a056945d29cec393dcf",
+      "etag": "9a8ef157336ef5598b3603fecc05803f",
+      "last_modified": "2026-05-15T04:56:37.715Z"
+    },
+    {
+      "id": "medium-01-20220623-1-0001",
+      "band": "medium",
+      "band_index": 1,
+      "path": "medium/medium-01-20220623-1-0001.pdf",
+      "minio_key": "20220623-1-0001/요양병원 방역조치 개편안 안내.pdf",
+      "bytes": 112822,
+      "sha256": "b9dcc1d9e2039ec27c5c27031685b5f0fbba89c00f41218ec23ba5012339a394",
+      "etag": "9d56856a4beb76ced76ddb6dc3405e5e",
+      "last_modified": "2026-05-11T10:37:42.781Z"
+    },
+    {
+      "id": "medium-02-20241202-1-0004",
+      "band": "medium",
+      "band_index": 2,
+      "path": "medium/medium-02-20241202-1-0004.pdf",
+      "minio_key": "20241202-1-0004/a69a58bb10a3e96a.pdf",
+      "bytes": 147800,
+      "sha256": "7ea6e5c95bf0cc1f9298e7408601e7fb10402f81e0fad6f4fd71e45f21cc2e36",
+      "etag": "098fe9d2d30068b82169313746c45100",
+      "last_modified": "2026-05-15T04:50:17.109Z"
+    },
+    {
+      "id": "medium-03-20240912-7-0001",
+      "band": "medium",
+      "band_index": 3,
+      "path": "medium/medium-03-20240912-7-0001.pdf",
+      "minio_key": "20240912-7-0001/★(제2024-181호,+9.12.)+요양급여의+적용기준+및+방법에+관한+세부사항+일부개정안_v3.pdf",
+      "bytes": 197111,
+      "sha256": "b1c56576e691a467d8c29edcb3e16cae3f37f989a436928b92b1c43d3382fde5",
+      "etag": "ad68217f975e8ac47f95cdcbfca6a0f4",
+      "last_modified": "2026-05-11T07:30:43.222Z"
+    },
+    {
+      "id": "medium-04-20250313-1-0001",
+      "band": "medium",
+      "band_index": 4,
+      "path": "medium/medium-04-20250313-1-0001.pdf",
+      "minio_key": "20250313-1-0001/[공문] 달빛어린이병원 야간진료관리료 질의·답변 안내.pdf",
+      "bytes": 258543,
+      "sha256": "becc4ffe32b47f4403336d29574f8b08a22230d2247dcd0f0b804aec6423e8c6",
+      "etag": "d454178233a2a43f44b34da93e75cf7f",
+      "last_modified": "2026-05-11T10:35:18.014Z"
+    },
+    {
+      "id": "medium-05-20250918-1-0002",
+      "band": "medium",
+      "band_index": 5,
+      "path": "medium/medium-05-20250918-1-0002.pdf",
+      "minio_key": "20250918-1-0002/급성기+정신질환자+집중치료실+입원료+관련+질의응답_2025-162,163호.pdf",
+      "bytes": 369977,
+      "sha256": "ae97f6d39426d481bf30ec7c5d4d39a3446d4f60f0922971cc49ed4ce7691193",
+      "etag": "a1211883f7c7cb2232f6f212cd687ded",
+      "last_modified": "2026-05-11T07:26:31.533Z"
+    },
+    {
+      "id": "large-01-20250429-1-0003",
+      "band": "large",
+      "band_index": 1,
+      "path": "large/large-01-20250429-1-0003.pdf",
+      "minio_key": "20250429-1-0003/ed7164abf693f9c3.pdf",
+      "bytes": 618150,
+      "sha256": "ace481f89cf53bea23f3d67cd8d87579e80c852785dc9d0ea4c118b9a63ec12f",
+      "etag": "29dee508fe130c2ff10ada8943dfa5d3",
+      "last_modified": "2026-05-15T04:48:54.474Z"
+    },
+    {
+      "id": "large-02-20231211-1-0011",
+      "band": "large",
+      "band_index": 2,
+      "path": "large/large-02-20231211-1-0011.pdf",
+      "minio_key": "20231211-1-0011/(제2023-235호) 요양급여의 적용기준 및 방법에 관한 세부사항_일부개정(최종).pdf",
+      "bytes": 635395,
+      "sha256": "c3d65d371e3290fc404b151b025d05f07e375421cc3337648ab5b672994a27d8",
+      "etag": "8b308f32f9db7751da27946254d5217d",
+      "last_modified": "2026-05-11T07:36:52.607Z"
+    },
+    {
+      "id": "large-03-20231130-2-0010",
+      "band": "large",
+      "band_index": 3,
+      "path": "large/large-03-20231130-2-0010.pdf",
+      "minio_key": "20231130-2-0010/f5d12a8c3d2d097a.pdf",
+      "bytes": 785522,
+      "sha256": "15beba74d35b009bcb29897b97efdbe21c8f3b7314c87e2374705a43004938c3",
+      "etag": "a5f5162411fbe7367688b774ec1c9978",
+      "last_modified": "2026-05-15T04:55:07.795Z"
+    },
+    {
+      "id": "large-04-20191021-1-0001",
+      "band": "large",
+      "band_index": 4,
+      "path": "large/large-04-20191021-1-0001.pdf",
+      "minio_key": "20191021-1-0001/2019년 의료급여사업안내 (이재민).pdf",
+      "bytes": 1213719,
+      "sha256": "6cca1fbb2cf3a37c5697055c5fae7dc38ae8b8b9f160a850f23607e794806f05",
+      "etag": "56bf2d2fa0ddf582d6539b58bd5fd101",
+      "last_modified": "2026-05-11T10:41:53.64Z"
+    },
+    {
+      "id": "large-05-20211005-1-0005",
+      "band": "large",
+      "band_index": 5,
+      "path": "large/large-05-20211005-1-0005.pdf",
+      "minio_key": "20211005-1-0005/91b71a5a356dcce6.pdf",
+      "bytes": 1680540,
+      "sha256": "3dc586bcdd4469103608249bce4b13abc225d369dfeff2294b4fa5e638240c6f",
+      "etag": "8b9ebae294bff715438eb4cd05de6da1",
+      "last_modified": "2026-05-15T05:05:30.627Z"
+    },
+    {
+      "id": "xlarge-01-20211027-1-0003",
+      "band": "xlarge",
+      "band_index": 1,
+      "path": "xlarge/xlarge-01-20211027-1-0003.pdf",
+      "minio_key": "20211027-1-0003/6edefad2c52aa56c.pdf",
+      "bytes": 2132656,
+      "sha256": "ae7ee0977d40142f15fad03327b586534600543e5b8ffa9bbd806a028782587e",
+      "etag": "930abb6afdfdbf58b7b9031588120f6e",
+      "last_modified": "2026-05-15T05:05:24.288Z"
+    },
+    {
+      "id": "xlarge-02-20241218-1-0001",
+      "band": "xlarge",
+      "band_index": 2,
+      "path": "xlarge/xlarge-02-20241218-1-0001.pdf",
+      "minio_key": "20241218-1-0001/(공고 제2024-881호) Burr Saw등 절삭기류 치료재료 비용 산정 가능 행위 목록 공고(고시 2024-258호,12.18. 관련).pdf",
+      "bytes": 2531512,
+      "sha256": "cbf6f526ccb7293445c8a048b951f1d893c3e136ed059b6823e6d36c571e843a",
+      "etag": "606937c07412d7ba8ab3d7c1795fdb33",
+      "last_modified": "2026-05-11T10:35:23.291Z"
+    },
+    {
+      "id": "xlarge-03-20140625-1-0001",
+      "band": "xlarge",
+      "band_index": 3,
+      "path": "xlarge/xlarge-03-20140625-1-0001.pdf",
+      "minio_key": "20140625-1-0001/병의원용_치과임플란트 급여 관련 Q&A.pdf",
+      "bytes": 3784164,
+      "sha256": "b1cb3e62554ca6c90e3ba6951464225b45acb6c7ee06df4e20638783aca1ac42",
+      "etag": "d922fb199d550a1bc00ce6e6af340fbe",
+      "last_modified": "2026-05-11T10:48:39.663Z"
+    },
+    {
+      "id": "xlarge-04-20090123-2-0001",
+      "band": "xlarge",
+      "band_index": 4,
+      "path": "xlarge/xlarge-04-20090123-2-0001.pdf",
+      "minio_key": "20090123-2-0001/인플루엔자.pdf",
+      "bytes": 15031450,
+      "sha256": "83b0be2e4c415be513dc070bb89eb7bdaa33a407cba37f6bf7aa484feb54d69e",
+      "etag": "8cfcfb14a392fdbbc7c8727b414023d6",
+      "last_modified": "2026-05-11T10:54:10.439Z"
+    },
+    {
+      "id": "xlarge-05-20230102-1-0001",
+      "band": "xlarge",
+      "band_index": 5,
+      "path": "xlarge/xlarge-05-20230102-1-0001.pdf",
+      "minio_key": "20230102-1-0001/의료급여수가의_기준_및_일반기준(고시_제2023-1호_2023.1.2.)_전문.pdf",
+      "bytes": 2334409,
+      "sha256": "a33399e1696caf0440ee06ad5deff7bedfb3a1d33d42da4ac229c0d7ad6d4070",
+      "etag": "c33d2104672cc0b6e843f221f2fd2f62",
+      "last_modified": "2026-05-11T07:42:49.509Z"
+    }
+  ]
+}

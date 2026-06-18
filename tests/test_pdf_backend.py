@@ -352,6 +352,52 @@ def test_pdf_backend_keeps_unstructured_diagram_fallback_as_diagram_unit(monkeyp
     ]
 
 
+def test_pdf_backend_does_not_promote_paragraph_text_boxes_to_diagram(monkeypatch):
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
+
+    page = _FakePage(
+        chars=[{"text": "가"} for _ in range(40)],
+        images=[],
+        rects=[
+            {"x0": 60, "top": 100, "x1": 260, "bottom": 113},
+            {"x0": 60, "top": 121, "x1": 280, "bottom": 134},
+            {"x0": 60, "top": 142, "x1": 280, "bottom": 155},
+        ],
+        crop_text={
+            (0, 0, 300, 400): (
+                "① 보건복지부장관이 정하여 고시하는 정신질환을 말한다.\n"
+                "② 보건복지부 장관이 고시하는 항정신병\n"
+                "장기지속형주사제를 말한다."
+            ),
+            (60, 100, 260, 113): "① 보건복지부장관이 정하여 고시하는 정신질환을 말한다.",
+            (60, 121, 280, 134): "② 보건복지부 장관이 고시하는 항정신병",
+            (60, 142, 280, 155): "장기지속형주사제를 말한다.",
+        },
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "pdfplumber",
+        SimpleNamespace(open=lambda stream: _FakePdf([page])),
+    )
+
+    def fail_render(data, page_idx, bbox, scale=2.0):
+        raise AssertionError("paragraph text boxes should not render as diagrams")
+
+    monkeypatch.setattr(pdf_backend, "_render_page_to_png", fail_render)
+
+    parsed = PdfBackend().parse(b"%PDF-1.4 fake", ".pdf")
+
+    assert [unit.type for unit in parsed.units] == ["text"]
+    assert parsed.units[0].source.text == (
+        "① 보건복지부장관이 정하여 고시하는 정신질환을 말한다.\n"
+        "② 보건복지부 장관이 고시하는 항정신병\n"
+        "장기지속형주사제를 말한다."
+    )
+    assert parsed.assets == []
+    assert parsed.quality_warnings == []
+
+
 def test_pdf_backend_nests_images_inside_table_cells(monkeypatch):
     from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
     from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
@@ -505,6 +551,58 @@ def test_pdf_backend_nests_vector_diagrams_inside_table_cells(monkeypatch):
     ]
 
 
+def test_pdf_backend_reuses_page_shapes_when_scanning_table_cell_diagrams(monkeypatch):
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
+
+    table = _FakeTable(
+        bbox=(0.0, 80.0, 300.0, 260.0),
+        row_cells=[
+            [(0.0, 80.0, 100.0, 140.0), (100.0, 80.0, 200.0, 140.0)],
+            [(0.0, 140.0, 100.0, 200.0), (100.0, 140.0, 200.0, 200.0)],
+            [(0.0, 200.0, 100.0, 260.0), (100.0, 200.0, 200.0, 260.0)],
+        ],
+        extracted=[
+            ["구분", "내용"],
+            ["1", "본문"],
+            ["2", "본문"],
+        ],
+    )
+    page = _FakePage(
+        chars=[{"text": "가"} for _ in range(40)],
+        images=[],
+        tables=[table],
+        rects=[
+            {"x0": 10, "top": 90, "x1": 12, "bottom": 92},
+            {"x0": 20, "top": 150, "x1": 22, "bottom": 152},
+            {"x0": 120, "top": 210, "x1": 122, "bottom": 212},
+            {"x0": 180, "top": 220, "x1": 182, "bottom": 222},
+        ],
+    )
+
+    calls = 0
+    original_shape_bbox = pdf_backend._pdf_shape_bbox
+
+    def counted_shape_bbox(shape):
+        nonlocal calls
+        calls += 1
+        return original_shape_bbox(shape)
+
+    monkeypatch.setattr(pdf_backend, "_pdf_shape_bbox", counted_shape_bbox)
+
+    children = pdf_backend._table_cell_diagram_children(
+        b"%PDF-1.4 fake",
+        page,
+        0,
+        [table],
+        pdf_backend._resolve_nested_tables([table]),
+        [],
+        [],
+    )
+
+    assert children == {}
+    assert calls == len(page.rects)
+
+
 def test_pdf_backend_restores_ocr_markdown_table_as_structured_table(monkeypatch):
     from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
     from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
@@ -609,6 +707,72 @@ def test_pdf_backend_restores_ocr_aligned_text_table_as_structured_table(monkeyp
             "message": "OCR text was converted to structured_table from a detected text table.",
         }
     ]
+
+
+def test_pdf_backend_uses_ocr_for_degraded_native_text(monkeypatch):
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
+
+    degraded_text = "2 60 : , , : ( ) ( ) ( ) , , ( ) ( ), 300 " * 2
+    page = _FakePage(
+        chars=[{"text": char} for char in degraded_text if char.strip()],
+        images=[{"x0": 0, "x1": 300, "y0": 0, "y1": 400}],
+        crop_text={(0, 400): degraded_text},
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "pdfplumber",
+        SimpleNamespace(open=lambda stream: _FakePdf([page])),
+    )
+    monkeypatch.setattr(
+        pdf_backend,
+        "_render_scanned_page_for_ocr",
+        lambda data, page_idx, page, warnings: b"rendered-page",
+    )
+
+    parsed = PdfBackend(
+        max_ocr_workers=1,
+        ocr_fn=lambda png, page_idx: "정상 OCR 본문",
+    ).parse(b"%PDF-1.4 fake", ".pdf")
+
+    assert [unit.source.text for unit in parsed.units] == ["정상 OCR 본문"]
+    assert parsed.quality_warnings == [
+        {
+            "type": "pdf_native_text_ocr_fallback",
+            "severity": "low",
+            "page": 1,
+            "message": "Native PDF text looked degraded; OCR fallback was used.",
+        }
+    ]
+
+
+def test_pdf_backend_keeps_degraded_native_text_without_configured_ocr(monkeypatch):
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
+
+    degraded_text = "2 60 : , , : ( ) ( ) ( ) , , ( ) ( ), 300 " * 2
+    page = _FakePage(
+        chars=[{"text": char} for char in degraded_text if char.strip()],
+        images=[{"x0": 0, "x1": 300, "y0": 0, "y1": 400}],
+        crop_text={(0, 400): degraded_text},
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "pdfplumber",
+        SimpleNamespace(open=lambda stream: _FakePdf([page])),
+    )
+    monkeypatch.setattr(pdf_backend, "_pdf_reader", lambda data: object())
+    monkeypatch.setattr(
+        pdf_backend,
+        "_extract_page_images",
+        lambda data, page_idx, page, start_idx, reader=None: [],
+        raising=False,
+    )
+
+    parsed = PdfBackend(max_ocr_workers=1).parse(b"%PDF-1.4 fake", ".pdf")
+
+    assert [unit.source.text for unit in parsed.units] == [degraded_text.strip()]
+    assert parsed.quality_warnings == []
 
 
 def test_pdf_backend_merges_nested_table_continuations(monkeypatch):
@@ -1648,6 +1812,48 @@ def test_pdf_backend_splits_official_notice_text_into_paragraphs(monkeypatch):
     ]
 
 
+def test_pdf_backend_preserves_sectioned_list_line_breaks(monkeypatch):
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
+
+    text = "\n".join(
+        [
+            "□ 심율동 전환 제세동기 거치술 요양급여 대상여부",
+            "○ 우리원에서는 급여기준에 따라",
+            "사전승인제도를 실시하고 있음.",
+            "○ 사전심사의 절차에 의거하여",
+            "1. 요양기관은 신청서를",
+            "제출하여야 함.",
+            "2. 승인 후 90일 이내에",
+            "시술을 실시하여야 함.",
+            "□ 심의결과 총괄",
+        ]
+    )
+    page = _FakePage(
+        chars=[{"text": "가"} for _ in range(40)],
+        images=[],
+        tables=[],
+        crop_text={(0, 400): text},
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "pdfplumber",
+        SimpleNamespace(open=lambda stream: _FakePdf([page])),
+    )
+
+    parsed = PdfBackend().parse(b"%PDF-1.4 fake", ".pdf")
+
+    assert [unit.source.text for unit in parsed.units] == [
+        "□ 심율동 전환 제세동기 거치술 요양급여 대상여부",
+        (
+            "○ 우리원에서는 급여기준에 따라 사전승인제도를 실시하고 있음.\n"
+            "○ 사전심사의 절차에 의거하여\n"
+            "1. 요양기관은 신청서를 제출하여야 함.\n"
+            "2. 승인 후 90일 이내에 시술을 실시하여야 함."
+        ),
+        "□ 심의결과 총괄",
+    ]
+
+
 def test_pdf_backend_splits_short_heading_lines(monkeypatch):
     from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
@@ -1733,6 +1939,100 @@ def test_pdf_backend_drops_duplicate_short_title_before_full_heading(monkeypatch
     assert [unit.source.text for unit in parsed.units] == [
         "가. 「건강보험 행위 급여․비급여 목록표」고시 제2편 질병군 적용 대상",
     ]
+
+
+def test_pdf_backend_drops_short_text_box_duplicate_before_body_text(monkeypatch):
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
+
+    title_fragment = _FakeTable(
+        bbox=(0.0, 100.0, 300.0, 113.0),
+        row_cells=[
+            [(0.0, 100.0, 250.0, 113.0), (250.0, 100.0, 300.0, 113.0)],
+        ],
+        extracted=[["①영 보건복", "지"]],
+    )
+    page = _FakePage(
+        chars=[{"text": "가"} for _ in range(40)],
+        images=[],
+        tables=[title_fragment],
+        crop_text={
+            (0, 100): "도입부",
+            (113, 400): "제17조 ①영 보건복지 부장관이 정하여 고시하는 사항",
+        },
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "pdfplumber",
+        SimpleNamespace(open=lambda stream: _FakePdf([page])),
+    )
+
+    parsed = PdfBackend().parse(b"%PDF-1.4 fake", ".pdf")
+
+    assert [unit.source.text for unit in parsed.units] == [
+        "도입부",
+        "제17조 ①영 보건복지 부장관이 정하여 고시하는 사항",
+    ]
+
+
+def test_pdf_backend_treats_single_line_header_only_table_as_text_box(monkeypatch):
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
+
+    text_box = _FakeTable(
+        bbox=(0.0, 100.0, 300.0, 113.0),
+        row_cells=[
+            [(0.0, 100.0, 250.0, 113.0), (250.0, 100.0, 300.0, 113.0)],
+        ],
+        extracted=[
+            [
+                "「요양급여의 적용기준 및 방법에 관한 세부사항」에 따르며, 급여비용의 부담은 영 제13",
+                "조",
+            ]
+        ],
+    )
+    page = _FakePage(
+        chars=[{"text": "가"} for _ in range(40)],
+        images=[],
+        tables=[text_box],
+        crop_text={
+            (113, 400): "「요양급여의 적용기준 및 방법에 관한 세부사항」에 따르며, 급여비용의 부담은 영 제13조",
+        },
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "pdfplumber",
+        SimpleNamespace(open=lambda stream: _FakePdf([page])),
+    )
+
+    parsed = PdfBackend().parse(b"%PDF-1.4 fake", ".pdf")
+
+    assert [unit.type for unit in parsed.units] == ["text"]
+    assert parsed.units[0].source.text == (
+        "「요양급여의 적용기준 및 방법에 관한 세부사항」에 따르며, 급여비용의 부담은 영 제13조"
+    )
+
+
+def test_pdf_backend_drops_empty_single_cell_table_artifacts(monkeypatch):
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
+
+    empty = _FakeTable(
+        bbox=(0.0, 100.0, 60.0, 113.0),
+        row_cells=[[(0.0, 100.0, 60.0, 113.0)]],
+        extracted=[[""]],
+    )
+    page = _FakePage(
+        chars=[{"text": "가"} for _ in range(40)],
+        images=[],
+        tables=[empty],
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "pdfplumber",
+        SimpleNamespace(open=lambda stream: _FakePdf([page])),
+    )
+
+    parsed = PdfBackend().parse(b"%PDF-1.4 fake", ".pdf")
+
+    assert parsed.units == []
 
 
 def test_pdf_backend_splits_sectioned_text_blocks(monkeypatch):
@@ -2043,6 +2343,71 @@ def test_pdf_backend_uses_openai_compatible_vision_ocr(monkeypatch):
     body = request.data.decode("utf-8")
     assert '"model": "qwen3-vl-30b-a3b"' in body
     assert "data:image/png;base64," in body
+
+
+def test_pdf_backend_strips_vision_ocr_markdown_fences(monkeypatch):
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend, PdfOcrConfig
+
+    scanned_page = _FakePage(
+        chars=[],
+        images=[{"x0": 0, "x1": 300, "y0": 0, "y1": 400}],
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "pdfplumber",
+        SimpleNamespace(open=lambda stream: _FakePdf([scanned_page])),
+    )
+    monkeypatch.setattr(
+        pdf_backend,
+        "_render_page_to_png",
+        lambda data, page_idx, bbox, scale=2.0: b"rendered-page",
+    )
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return (
+                '{"choices":[{"message":{"content":"```markdown\\n'
+                '# 직인생략\\n'
+                '| 구분 | 금액 |\\n'
+                '| --- | --- |\\n'
+                '| 외래 | 1000 |\\n'
+                '```"}}]}'
+            ).encode("utf-8")
+
+    monkeypatch.setattr(
+        pdf_backend.request,
+        "urlopen",
+        lambda request, timeout: FakeResponse(),
+    )
+
+    parsed = PdfBackend(
+        max_ocr_workers=1,
+        ocr_llm=PdfOcrConfig(
+            url="http://spark.test/v1",
+            api_key="secret",
+            model="qwen3-vl-30b-a3b",
+        ),
+    ).parse(b"%PDF-1.4 fake", ".pdf")
+
+    assert [unit.type for unit in parsed.units] == ["text", "table"]
+    assert parsed.units[0].source.text == "# 직인생략"
+    table = parsed.units[1]
+    assert table.content["columns"] == [
+        {"id": "c1", "text": "구분"},
+        {"id": "c2", "text": "금액"},
+    ]
+    assert [
+        [cell["text"] for cell in row["cells"]]
+        for row in table.content["rows"]
+    ] == [["외래", "1000"]]
+    assert not any("```" in unit.source.text for unit in parsed.units)
 
 
 def test_pdf_backend_falls_back_when_vision_ocr_is_empty(monkeypatch):
