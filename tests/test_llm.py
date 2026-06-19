@@ -107,7 +107,25 @@ def test_chat_json_omits_provider_options_for_gemma(monkeypatch):
     assert "chat_template_kwargs" not in body
 
 
-def _capture_chat_requests(monkeypatch, llm_module):
+def test_chat_json_parses_fenced_json_array(monkeypatch):
+    import rag_document_parser.llm as llm_module
+    from rag_document_parser import LlmConfig
+
+    _capture_chat_requests(
+        monkeypatch,
+        llm_module,
+        content='```json\n[{"unit_ids": ["b1", "b2"]}]\n```',
+    )
+
+    result = llm_module.chat_json(
+        "return array",
+        LlmConfig(url="http://llm.test/v1", api_key="secret", model="model"),
+    )
+
+    assert result == [{"unit_ids": ["b1", "b2"]}]
+
+
+def _capture_chat_requests(monkeypatch, llm_module, *, content='{"ok": true}'):
     requests = []
 
     class FakeResponse:
@@ -119,7 +137,7 @@ def _capture_chat_requests(monkeypatch, llm_module):
 
         def read(self):
             return json.dumps(
-                {"choices": [{"message": {"content": "{\"ok\": true}"}}]}
+                {"choices": [{"message": {"content": content}}]}
             ).encode("utf-8")
 
     def fake_urlopen(request, timeout):

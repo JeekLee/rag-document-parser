@@ -670,6 +670,17 @@ def test_agentic_chunker_uses_rich_korean_llm_prompt_contract(monkeypatch):
     assert "양 끝을 포함" in prompt
     assert "inclusive [start, end]" in prompt
     assert "모든 실제 row index" in prompt
+    assert "0-based row index를 만들지 않습니다" in prompt
+    assert "rows[].index에 표시된 값만 사용합니다" in prompt
+    assert "row index는 unit별로 독립적입니다" in prompt
+    assert "이전 table unit의 row 번호를 이어서 계산하지 않습니다" in prompt
+    assert "해당 unit_id의 rows[].index 범위 안" in prompt
+    assert "max_units_per_chunk는 일반 chunk의 hard limit입니다" in prompt
+    assert "하나의 plan item에서 서로 다른 unit_id를 max_units_per_chunk보다 많이 포함하지 않습니다" in prompt
+    assert "unit_ids 길이와 operations의 고유 unit_id 개수는 max_units_per_chunk 이하" in prompt
+    assert "같은 title을 유지한 채 인접한 여러 plan item" in prompt
+    assert "검색 질문이 달라지는 조문, 번호 항목, 서식 작성 항목은 분리합니다" in prompt
+    assert "긴 연속 목록은 의미가 이어져도 max_units_per_chunk 이하" in prompt
     assert 'action "include"로 전체 table을 포함' in prompt
     assert "evidence content는 작성하지 않습니다" in prompt
     assert "evidence content는 unit에서 복사됩니다" in prompt
@@ -1098,7 +1109,7 @@ def test_agentic_chunker_splits_table_rows_across_chunks():
     assert "_fallback_reason" not in chunks[1].metadata
 
 
-def test_agentic_chunker_records_warning_when_plan_exceeds_max_unit_hint():
+def test_agentic_chunker_splits_plan_when_it_exceeds_max_unit_limit():
     from rag_document_parser.chunk import EvidenceUnitAgenticChunker
 
     units = [
@@ -1126,13 +1137,25 @@ def test_agentic_chunker_records_warning_when_plan_exceeds_max_unit_hint():
         max_units_per_chunk=2,
     ).chunk(units)
 
-    assert len(chunks) == 1
-    assert chunks[0].metadata["source_unit_ids"] == ["b1", "b2", "b3"]
+    assert len(chunks) == 2
+    assert chunks[0].metadata["source_unit_ids"] == ["b1", "b2"]
+    assert chunks[1].metadata["source_unit_ids"] == ["b3"]
     assert chunks[0].metadata["_warnings"] == [
         {
-            "type": "agentic_chunk_exceeds_max_units",
-            "source_unit_count": 3,
+            "type": "agentic_chunk_split_by_max_units",
+            "original_source_unit_count": 3,
             "max_units_per_chunk": 2,
+            "split_group_index": 1,
+            "split_group_count": 2,
+        }
+    ]
+    assert chunks[1].metadata["_warnings"] == [
+        {
+            "type": "agentic_chunk_split_by_max_units",
+            "original_source_unit_count": 3,
+            "max_units_per_chunk": 2,
+            "split_group_index": 2,
+            "split_group_count": 2,
         }
     ]
 
@@ -1506,7 +1529,7 @@ def test_agentic_chunker_rejects_overlapping_table_row_ranges():
     assert "overlap" in chunks[0].metadata["_fallback_reason"]
 
 
-def test_agentic_chunker_rejects_malformed_row_ranges():
+def test_agentic_chunker_repairs_malformed_row_ranges_to_full_include():
     from rag_document_parser.chunk import EvidenceUnitAgenticChunker
 
     def plan_fn(window, cfg, max_units):
@@ -1524,10 +1547,17 @@ def test_agentic_chunker_rejects_malformed_row_ranges():
 
     assert len(chunks) == 1
     assert chunks[0].metadata["source_unit_ids"] == ["b2"]
-    assert "row range must be [start, end] ints with start <= end" in chunks[0].metadata["_fallback_reason"]
+    assert "_fallback_reason" not in chunks[0].metadata
+    assert chunks[0].metadata["operations"] == [{"unit_id": "b2", "action": "include"}]
+    assert "row 1" in chunks[0].source.text
+    assert "row 2" in chunks[0].source.text
+    warning = chunks[0].metadata["_warnings"][0]
+    assert warning["type"] == "agentic_include_rows_repaired_to_full_include"
+    assert warning["unit_id"] == "b2"
+    assert "row range must be [start, end] ints with start <= end" in warning["reason"]
 
 
-def test_agentic_chunker_rejects_row_ranges_outside_table_bounds():
+def test_agentic_chunker_repairs_row_ranges_outside_table_bounds_to_full_include():
     from rag_document_parser.chunk import EvidenceUnitAgenticChunker
 
     def plan_fn(window, cfg, max_units):
@@ -1543,7 +1573,14 @@ def test_agentic_chunker_rejects_row_ranges_outside_table_bounds():
 
     assert len(chunks) == 1
     assert chunks[0].metadata["source_unit_ids"] == ["b2"]
-    assert "row range is outside table rows" in chunks[0].metadata["_fallback_reason"]
+    assert "_fallback_reason" not in chunks[0].metadata
+    assert chunks[0].metadata["operations"] == [{"unit_id": "b2", "action": "include"}]
+    assert "row 1" in chunks[0].source.text
+    assert "row 2" in chunks[0].source.text
+    warning = chunks[0].metadata["_warnings"][0]
+    assert warning["type"] == "agentic_include_rows_repaired_to_full_include"
+    assert warning["unit_id"] == "b2"
+    assert "row range is outside table rows" in warning["reason"]
 
 
 def test_agentic_chunker_rejects_full_include_and_row_subset_conflict():
