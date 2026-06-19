@@ -313,6 +313,11 @@ are not wired together automatically. If both `ocr_fn` and `ocr_llm` are omitted
 `PdfBackend` can still try local OCR for scanned pages when local OCR
 dependencies are installed; it will not call a vision model.
 
+`LlmConfig` retries transient provider failures by default. `max_retries=2`,
+`retry_backoff_seconds=0.5`, and `retry_status_codes=(429, 500, 502, 503, 504)`
+cover temporary rate-limit and 5xx responses. Authentication, request-shape, and
+JSON parsing failures are not retried.
+
 `PdfBackend` can call an OpenAI-compatible vision model before local OCR:
 
 ```python
