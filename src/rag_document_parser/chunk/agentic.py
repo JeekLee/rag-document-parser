@@ -26,12 +26,21 @@ _PROMPT = """\
 - structured_table은 include_rows로 여러 chunk에 분해할 수 있습니다.
 - include_rows row range는 겹치지 않아야 하며 table row 범위 안에 있어야 합니다.
 - include_rows의 row_ranges는 양 끝을 포함하는 inclusive [start, end] 쌍 목록입니다.
+- include_rows row range는 table payload의 rows[].index에 표시된 값만 사용합니다.
+- 0-based row index를 만들지 않습니다. 첫 row index가 1이면 [1, ...]부터 시작해야 합니다.
+- row index는 unit별로 독립적입니다. 이전 table unit의 row 번호를 이어서 계산하지 않습니다.
+- 각 include_rows operation은 해당 unit_id의 rows[].index 범위 안에서만 작성합니다.
 - include_rows를 사용하면 해당 table의 모든 실제 row index를 빠짐없이, 겹치지 않게 포함해야 합니다.
 - table row coverage에 확신이 없으면 action "include"로 전체 table을 포함합니다.
 - context_unit_ids는 선택 사항이며 이미 이전 chunk에서 evidence로 포함된 unit id만 작성합니다.
 - text, table, image를 같은 chunk에 묶을 수 있습니다.
 - summary, keywords, questions는 최종 RagChunk 확정 후 별도 enrichment 단계에서 생성합니다.
-- 한 chunk는 가능하면 unit {max_units}개 이하로 유지합니다.
+- max_units_per_chunk는 일반 chunk의 hard limit입니다. 하나의 원자적 unit 자체가 큰 경우를 제외하고 초과하지 않습니다.
+- 하나의 plan item에서 서로 다른 unit_id를 max_units_per_chunk보다 많이 포함하지 않습니다.
+- unit_ids 길이와 operations의 고유 unit_id 개수는 max_units_per_chunk 이하이어야 합니다.
+- 의미상 한 주제가 max_units_per_chunk를 넘으면 같은 title을 유지한 채 인접한 여러 plan item으로 순서대로 분할합니다.
+- 같은 장/절/표 아래라도 검색 질문이 달라지는 조문, 번호 항목, 서식 작성 항목은 분리합니다.
+- 긴 연속 목록은 의미가 이어져도 max_units_per_chunk 이하의 인접 chunk로 나눕니다.
 
 Unit 목록:
 {units}
@@ -297,7 +306,13 @@ def _materialize_window(
                 raise ValueError(f"unknown unit id: {unit_id!r}")
 
             unit = by_id[unit_id]
-            evidence_item, source_text, normalized = _materialize_operation(unit, operation)
+            (
+                evidence_item,
+                source_text,
+                normalized,
+                repair_warnings,
+            ) = _materialize_operation_with_repair(unit, operation)
+            plan_warnings.extend(repair_warnings)
             _register_assignment(unit, normalized, next_full_assigned, next_row_ranges)
             chunk_units.append(unit)
             evidence_items.append(evidence_item)
@@ -501,6 +516,12 @@ def _improve_chunk_boundaries(
     units_by_id = {unit.id: unit for unit in units}
     improved = _move_trailing_heading_units_forward(chunks, units_by_id, max_units_per_chunk)
     improved = _split_independent_form_chunks(improved, units_by_id, max_units_per_chunk)
+    improved = _split_chunks_exceeding_max_units(
+        improved,
+        units_by_id,
+        max_units_per_chunk,
+        max_tokens_per_chunk,
+    )
     return _split_large_table_chunks(
         improved,
         units_by_id,
@@ -597,6 +618,71 @@ def _split_independent_form_chunks(
                 )
             )
     return result
+
+
+def _split_chunks_exceeding_max_units(
+    chunks: list[RagChunk],
+    units_by_id: dict[str, EvidenceUnit],
+    max_units_per_chunk: int,
+    max_tokens_per_chunk: int,
+) -> list[RagChunk]:
+    result: list[RagChunk] = []
+    for chunk in chunks:
+        source_unit_ids = _strings(chunk.metadata.get("source_unit_ids"))
+        if len(source_unit_ids) <= max_units_per_chunk:
+            result.append(chunk)
+            continue
+
+        groups = _evidence_item_groups_by_max_units(
+            list(chunk.evidence.items),
+            max_units_per_chunk,
+        )
+        if len(groups) <= 1:
+            result.append(chunk)
+            continue
+
+        for group_index, group in enumerate(groups, start=1):
+            result.append(
+                _rebuild_chunk_from_items(
+                    chunk,
+                    group,
+                    units_by_id,
+                    max_units_per_chunk=max_units_per_chunk,
+                    max_tokens_per_chunk=max_tokens_per_chunk,
+                    regenerate_text_fields=True,
+                    warning={
+                        "type": "agentic_chunk_split_by_max_units",
+                        "original_source_unit_count": len(source_unit_ids),
+                        "max_units_per_chunk": max_units_per_chunk,
+                        "split_group_index": group_index,
+                        "split_group_count": len(groups),
+                    },
+                )
+            )
+    return result
+
+
+def _evidence_item_groups_by_max_units(
+    items: list[EvidenceItem],
+    max_units_per_chunk: int,
+) -> list[list[EvidenceItem]]:
+    groups: list[list[EvidenceItem]] = []
+    current: list[EvidenceItem] = []
+    current_source_unit_ids: list[str] = []
+    for item in items:
+        item_source_unit_ids = list(item.source_unit_ids)
+        next_source_unit_ids = _unique([*current_source_unit_ids, *item_source_unit_ids])
+        if current and len(next_source_unit_ids) > max_units_per_chunk:
+            groups.append(current)
+            current = [item]
+            current_source_unit_ids = _unique(item_source_unit_ids)
+            continue
+        current.append(item)
+        current_source_unit_ids = next_source_unit_ids
+
+    if current:
+        groups.append(current)
+    return groups
 
 
 def _split_large_table_chunks(
@@ -1507,6 +1593,35 @@ def _plan_unit_id_warnings(
             }
         ]
     return []
+
+
+def _materialize_operation_with_repair(
+    unit: EvidenceUnit,
+    operation: dict[str, Any],
+) -> tuple[EvidenceItem, str, dict[str, Any], list[dict[str, Any]]]:
+    try:
+        evidence_item, source_text, normalized = _materialize_operation(unit, operation)
+    except ValueError as exc:
+        if operation.get("action") != "include_rows":
+            raise
+        evidence_item, source_text, normalized = _materialize_operation(
+            unit,
+            {"unit_id": unit.id, "action": "include"},
+        )
+        return (
+            evidence_item,
+            source_text,
+            normalized,
+            [
+                {
+                    "type": "agentic_include_rows_repaired_to_full_include",
+                    "unit_id": unit.id,
+                    "reason": str(exc),
+                    "operation": _debug_value(operation),
+                }
+            ],
+        )
+    return evidence_item, source_text, normalized, []
 
 
 def _materialize_operation(

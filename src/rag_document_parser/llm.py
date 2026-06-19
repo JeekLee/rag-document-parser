@@ -111,8 +111,14 @@ def _loads_json_object(content: str) -> Any:
     try:
         return json.loads(content)
     except json.JSONDecodeError:
-        start = content.find("{")
-        end = content.rfind("}")
-        if start == -1 or end == -1 or end <= start:
+        object_start = content.find("{")
+        array_start = content.find("[")
+        starts = [index for index in (object_start, array_start) if index != -1]
+        if not starts:
+            raise
+        start = min(starts)
+        end_char = "}" if content[start] == "{" else "]"
+        end = content.rfind(end_char)
+        if end == -1 or end <= start:
             raise
         return json.loads(content[start : end + 1])
