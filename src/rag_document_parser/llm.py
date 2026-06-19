@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Literal
-from urllib import request
+from urllib import error, request
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 ChatMessage = dict[str, Any]
 GeminiThinkingMode = Literal["default", "disabled", "minimal", "low", "medium", "high"]
@@ -21,6 +22,9 @@ class LlmConfig(BaseModel):
     model: str
     temperature: float = 0.0
     timeout: float = 120.0
+    max_retries: int = Field(default=2, ge=0)
+    retry_backoff_seconds: float = Field(default=0.5, ge=0.0)
+    retry_status_codes: tuple[int, ...] = (429, 500, 502, 503, 504)
 
     def prepare_messages(self, messages: list[ChatMessage]) -> list[ChatMessage]:
         return messages
@@ -87,8 +91,7 @@ def chat_json(prompt: str, cfg: LlmConfig) -> Any:
         },
         method="POST",
     )
-    with request.urlopen(req, timeout=cfg.timeout) as response:
-        response_body = response.read().decode("utf-8")
+    response_body = _read_response_with_retries(req, cfg)
     payload = json.loads(response_body)
     content = payload["choices"][0]["message"]["content"]
     return _loads_json_object(content)
@@ -105,6 +108,27 @@ def chat_completions_url(url: str) -> str:
     if normalized.endswith("/v1"):
         return f"{normalized}/chat/completions"
     return f"{normalized}/v1/chat/completions"
+
+
+def _read_response_with_retries(req: request.Request, cfg: LlmConfig) -> str:
+    attempt = 0
+    while True:
+        try:
+            with request.urlopen(req, timeout=cfg.timeout) as response:
+                return response.read().decode("utf-8")
+        except Exception as exc:
+            if not _should_retry_llm_error(exc, cfg) or attempt >= cfg.max_retries:
+                raise
+            delay = cfg.retry_backoff_seconds * (2**attempt)
+            if delay > 0:
+                time.sleep(delay)
+            attempt += 1
+
+
+def _should_retry_llm_error(exc: Exception, cfg: LlmConfig) -> bool:
+    if isinstance(exc, error.HTTPError):
+        return exc.code in cfg.retry_status_codes
+    return isinstance(exc, (error.URLError, TimeoutError, ConnectionError))
 
 
 def _loads_json_object(content: str) -> Any:

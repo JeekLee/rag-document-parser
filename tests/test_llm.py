@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+from urllib import error
+
+import pytest
 
 
 def test_chat_json_includes_gemini_disabled_thinking_option(monkeypatch):
@@ -123,6 +126,110 @@ def test_chat_json_parses_fenced_json_array(monkeypatch):
     )
 
     assert result == [{"unit_ids": ["b1", "b2"]}]
+
+
+def test_chat_json_retries_transient_http_errors(monkeypatch):
+    import rag_document_parser.llm as llm_module
+    from rag_document_parser import LlmConfig
+
+    requests = []
+    sleeps = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {"choices": [{"message": {"content": "{\"ok\": true}"}}]}
+            ).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        requests.append((request, timeout))
+        if len(requests) == 1:
+            raise error.HTTPError(request.full_url, 503, "Service Unavailable", None, None)
+        return FakeResponse()
+
+    monkeypatch.setattr(llm_module.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr("time.sleep", sleeps.append)
+
+    result = llm_module.chat_json(
+        "return ok",
+        LlmConfig(
+            url="http://llm.test/v1",
+            api_key="secret",
+            model="model",
+            max_retries=2,
+            retry_backoff_seconds=0.01,
+        ),
+    )
+
+    assert result == {"ok": True}
+    assert len(requests) == 2
+    assert sleeps == [0.01]
+
+
+def test_chat_json_does_not_retry_non_transient_http_errors(monkeypatch):
+    import rag_document_parser.llm as llm_module
+    from rag_document_parser import LlmConfig
+
+    requests = []
+    sleeps = []
+
+    def fake_urlopen(request, timeout):
+        requests.append((request, timeout))
+        raise error.HTTPError(request.full_url, 400, "Bad Request", None, None)
+
+    monkeypatch.setattr(llm_module.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr("time.sleep", sleeps.append)
+
+    with pytest.raises(error.HTTPError):
+        llm_module.chat_json(
+            "return ok",
+            LlmConfig(
+                url="http://llm.test/v1",
+                api_key="secret",
+                model="model",
+                max_retries=2,
+                retry_backoff_seconds=0.01,
+            ),
+        )
+
+    assert len(requests) == 1
+    assert sleeps == []
+
+
+def test_chat_json_raises_after_retry_exhaustion(monkeypatch):
+    import rag_document_parser.llm as llm_module
+    from rag_document_parser import LlmConfig
+
+    requests = []
+    sleeps = []
+
+    def fake_urlopen(request, timeout):
+        requests.append((request, timeout))
+        raise error.HTTPError(request.full_url, 503, "Service Unavailable", None, None)
+
+    monkeypatch.setattr(llm_module.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr("time.sleep", sleeps.append)
+
+    with pytest.raises(error.HTTPError):
+        llm_module.chat_json(
+            "return ok",
+            LlmConfig(
+                url="http://llm.test/v1",
+                api_key="secret",
+                model="model",
+                max_retries=2,
+                retry_backoff_seconds=0.01,
+            ),
+        )
+
+    assert len(requests) == 3
+    assert sleeps == [0.01, 0.02]
 
 
 def _capture_chat_requests(monkeypatch, llm_module, *, content='{"ok": true}'):
