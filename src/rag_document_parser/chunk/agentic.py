@@ -111,6 +111,7 @@ class EvidenceUnitAgenticChunker:
         boundary_merge_fn: BoundaryMergeFn | None = None,
         final_enricher: Enricher | None = None,
         enrich_final_chunks: bool = True,
+        enrichment_batch_size: int = 1,
     ) -> None:
         self._llm = llm
         self._max_units = max(1, max_units_per_chunk)
@@ -128,6 +129,7 @@ class EvidenceUnitAgenticChunker:
                     llm=llm,
                     chat_fn=chat_json,
                     max_concurrency=self._concurrency,
+                    batch_size=enrichment_batch_size,
                 )
                 if enrich_final_chunks
                 else None

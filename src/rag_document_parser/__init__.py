@@ -6,7 +6,7 @@ from .evidence_unit_extraction.formats.hwp5 import Hwp5Backend
 from .evidence_unit_extraction.formats.hwpx import HwpxBackend
 from .evidence_unit_extraction.formats.markdown import MarkdownBackend
 from .evidence_unit_extraction.formats.pdf import PdfBackend
-from .llm import LlmConfig
+from .llm import GeminiLlmConfig, GemmaLlmConfig, LlmConfig, QwenLlmConfig
 from .models import (
     AssetRefContent,
     BoundingBox,
@@ -54,10 +54,13 @@ __all__ = [
     "EvidenceUnitAgenticChunker",
     "Hwp5Backend",
     "HwpxBackend",
+    "GeminiLlmConfig",
+    "GemmaLlmConfig",
     "LlmConfig",
     "MarkdownBackend",
     "PendingAsset",
     "PdfBackend",
+    "QwenLlmConfig",
     "ParseResult",
     "RagChunkEnricher",
     "ParsedDocument",

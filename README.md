@@ -61,6 +61,8 @@ chunker = EvidenceUnitAgenticChunker(
         api_key=os.environ["LLM_API_KEY"],
         model=os.environ["LLM_MODEL"],
     ),
+    max_concurrency=4,
+    enrichment_batch_size=8,
 )
 
 chunks = chunker.chunk(result.units)
@@ -193,8 +195,8 @@ Key boundaries:
 - `chunk/`: `EvidenceUnitAgenticChunker`, chunker protocol, and final
   `RagChunkEnricher`.
 - `renderer/`: HTML rendering for extracted evidence units and final chunks.
-- `llm.py`: shared OpenAI-compatible `LlmConfig`, JSON chat helper, and
-  chat-completions URL normalization for chunking and PDF vision OCR.
+- `llm.py`: OpenAI-compatible `LlmConfig` plus provider-specific Qwen,
+  Gemini, and Gemma config classes for chunking and PDF vision OCR.
 
 ## Rendering
 
@@ -267,16 +269,17 @@ import os
 
 from rag_document_parser import (
     EvidenceUnitAgenticChunker,
-    LlmConfig,
+    GeminiLlmConfig,
     PdfBackend,
     RagDocumentParser,
     S3Config,
 )
 
-llm = LlmConfig(
+llm = GeminiLlmConfig(
     url=os.environ["LLM_URL"],
     api_key=os.environ["LLM_API_KEY"],
     model=os.environ["LLM_MODEL"],
+    thinking="disabled",
 )
 storage = S3Config(
     endpoint=os.environ["S3_ENDPOINT"],
@@ -292,11 +295,15 @@ parser = RagDocumentParser(
     },
 )
 
-chunker = EvidenceUnitAgenticChunker(llm=llm)
+chunker = EvidenceUnitAgenticChunker(
+    llm=llm,
+    max_concurrency=4,
+    enrichment_batch_size=8,
+)
 ```
 
-These two call sites may share the same `LlmConfig` object, but they are not
-wired together automatically. If both `ocr_fn` and `ocr_llm` are omitted,
+These two call sites may share the same `LlmConfig`-compatible object, but they
+are not wired together automatically. If both `ocr_fn` and `ocr_llm` are omitted,
 `PdfBackend` can still try local OCR for scanned pages when local OCR
 dependencies are installed; it will not call a vision model.
 
@@ -305,19 +312,41 @@ dependencies are installed; it will not call a vision model.
 ```python
 import os
 
-from rag_document_parser import LlmConfig, PdfBackend
+from rag_document_parser import PdfBackend, QwenLlmConfig
 
 backend = PdfBackend(
-    ocr_llm=LlmConfig(
+    ocr_llm=QwenLlmConfig(
         url=os.environ.get("RDP_PDF_OCR_BASE_URL", "http://localhost:10080/v1"),
         api_key=os.environ["RDP_PDF_OCR_API_KEY"],
         model=os.environ.get("RDP_PDF_OCR_MODEL", "qwen3-vl-30b-a3b"),
+        thinking="disabled",
         timeout=240.0,
     ),
 )
 
 parsed = backend.parse(raw_pdf_bytes, ".pdf")
 ```
+
+For Gemini Flash-Lite OCR through Google's OpenAI-compatible endpoint:
+
+```python
+from rag_document_parser import GeminiLlmConfig, PdfBackend
+
+backend = PdfBackend(
+    ocr_llm=GeminiLlmConfig(
+        url="https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        api_key=os.environ["GEMINI_API_KEY"],
+        model="gemini-2.5-flash-lite",
+        thinking="disabled",
+        timeout=240.0,
+    ),
+)
+```
+
+`QwenLlmConfig(thinking="disabled")` uses Qwen's local OpenAI-compatible hard
+switch shape, `chat_template_kwargs.enable_thinking = false`. For DashScope's
+OpenAI-compatible endpoint, set `thinking_parameter="enable_thinking"` to send
+top-level `enable_thinking`.
 
 When both `ocr_fn` and `ocr_llm` are configured, `ocr_fn` takes precedence. If
 vision OCR fails or returns empty text, the backend falls back to the local OCR

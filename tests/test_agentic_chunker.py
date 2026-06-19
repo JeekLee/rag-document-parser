@@ -282,6 +282,61 @@ def test_agentic_chunker_uses_llm_prompt_when_no_plan_fn(monkeypatch):
     assert chunks[0].summary == "첫 문장 최종 요약"
 
 
+def test_agentic_chunker_forwards_enrichment_batch_size(monkeypatch):
+    from rag_document_parser import LlmConfig
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    calls = []
+
+    def plan_fn(window, cfg, max_units):
+        return [
+            {
+                "unit_ids": [unit.id],
+                "operations": [{"unit_id": unit.id, "action": "include"}],
+                "summary": f"{unit.id} plan summary",
+                "keywords": [unit.id],
+                "questions": [f"{unit.id} 질문은 무엇인가요?"],
+            }
+            for unit in window
+        ]
+
+    def fake_chat_json(prompt, cfg):
+        calls.append((prompt, cfg))
+        ids = [
+            line.removeprefix('      "id": "').removesuffix('",')
+            for line in prompt.splitlines()
+            if line.startswith('      "id": "')
+        ]
+        return {
+            "chunks": [
+                {
+                    "id": chunk_id,
+                    "summary": f"{chunk_id} batch summary",
+                    "keywords": [chunk_id, "batch"],
+                    "questions": [f"{chunk_id} 질문은 무엇인가요?"],
+                }
+                for chunk_id in ids
+            ]
+        }
+
+    monkeypatch.setattr("rag_document_parser.chunk.agentic.chat_json", fake_chat_json)
+    cfg = LlmConfig(url="http://llm.test/v1", api_key="key", model="model")
+    units = [_text_unit(f"b{index}", f"문장 {index}") for index in range(1, 11)]
+
+    chunks = EvidenceUnitAgenticChunker(
+        llm=cfg,
+        plan_fn=plan_fn,
+        max_concurrency=1,
+        enrichment_batch_size=8,
+    ).chunk(units)
+
+    assert len(calls) == 2
+    assert [chunk.summary for chunk in chunks] == [
+        f"chunk-{index} batch summary" for index in range(1, 11)
+    ]
+    assert all(chunk.metadata["_enrichment"]["method"] == "llm_batch" for chunk in chunks)
+
+
 def test_agentic_chunker_records_context_units_without_duplicate_evidence():
     from rag_document_parser.chunk import EvidenceUnitAgenticChunker
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from types import SimpleNamespace
 
@@ -2288,7 +2289,7 @@ def test_pdf_backend_renders_scanned_pages_at_ocr_scale(monkeypatch):
 
 
 def test_pdf_backend_uses_openai_compatible_vision_ocr(monkeypatch):
-    from rag_document_parser import LlmConfig
+    from rag_document_parser import GeminiLlmConfig
     from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
     from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
@@ -2327,10 +2328,11 @@ def test_pdf_backend_uses_openai_compatible_vision_ocr(monkeypatch):
 
     parsed = PdfBackend(
         max_ocr_workers=1,
-        ocr_llm=LlmConfig(
-            url="http://spark.test/v1",
+        ocr_llm=GeminiLlmConfig(
+            url="https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
             api_key="secret",
-            model="qwen3-vl-30b-a3b",
+            model="gemini-2.5-flash-lite",
+            thinking="disabled",
             timeout=7.0,
         ),
     ).parse(b"%PDF-1.4 fake", ".pdf")
@@ -2338,12 +2340,18 @@ def test_pdf_backend_uses_openai_compatible_vision_ocr(monkeypatch):
     assert [unit.source.text for unit in parsed.units] == ["스캔 OCR"]
     assert parsed.quality_warnings == []
     request, timeout = requests[0]
-    assert request.full_url == "http://spark.test/v1/chat/completions"
+    assert (
+        request.full_url
+        == "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+    )
     assert request.headers["Authorization"] == "Bearer secret"
     assert timeout == 7.0
-    body = request.data.decode("utf-8")
-    assert '"model": "qwen3-vl-30b-a3b"' in body
-    assert "data:image/png;base64," in body
+    body = json.loads(request.data.decode("utf-8"))
+    assert body["model"] == "gemini-2.5-flash-lite"
+    assert body["reasoning_effort"] == "none"
+    assert body["messages"][0]["content"][0]["image_url"]["url"].startswith(
+        "data:image/png;base64,"
+    )
 
 
 def test_pdf_backend_strips_vision_ocr_markdown_fences(monkeypatch):
