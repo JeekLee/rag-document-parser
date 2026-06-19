@@ -44,6 +44,37 @@ JSON object only:
 }}
 """
 
+_BATCH_CHUNK_ENRICHMENT_PROMPT = """\
+당신은 최종 RagChunk enrichment 생성기입니다.
+아래 RagChunk 목록은 EvidenceUnit chunking, boundary 보정, table row split 후 확정된 최종 검색 단위입니다.
+
+규칙:
+- 원문과 evidence에 있는 정보만 사용합니다.
+- 각 input chunk마다 하나의 enrichment object를 작성합니다.
+- id는 input chunk id를 그대로 사용합니다.
+- summary는 해당 chunk가 답할 수 있는 내용을 1-2문장으로 요약합니다.
+- keywords는 검색에 유용한 핵심 명사/표현 3-8개를 작성합니다.
+- questions는 해당 chunk 하나로 답할 수 있는 실제 검색 질문 2-5개를 작성합니다.
+- Q&A 표라면 질의 컬럼의 실제 질문을 우선 활용합니다.
+- "무엇을 알 수 있나요?" 같은 범용 질문은 피합니다.
+- JSON object만 출력합니다.
+
+RagChunks:
+{chunks}
+
+JSON object only:
+{{
+  "chunks": [
+    {{
+      "id": "chunk-id",
+      "summary": "요약",
+      "keywords": ["키워드"],
+      "questions": ["질문"]
+    }}
+  ]
+}}
+"""
+
 
 @dataclass(frozen=True)
 class _ChunkEnrichment:
@@ -60,17 +91,28 @@ class RagChunkEnricher:
         enrich_fn: ChunkEnrichmentFn | None = None,
         chat_fn: ChatJsonFn = chat_json,
         max_concurrency: int = 4,
+        batch_size: int = 1,
     ) -> None:
         self._llm = llm
         self._enrich_fn = enrich_fn
         self._chat_fn = chat_fn
         self._concurrency = max(1, max_concurrency)
+        self._batch_size = max(1, batch_size)
 
     def enrich(self, chunks: list[RagChunk]) -> list[RagChunk]:
         if not chunks:
             return []
         if self._llm is None and self._enrich_fn is None:
             return [self._heuristic_enrich_if_needed(chunk) for chunk in chunks]
+
+        if self._llm is not None and self._enrich_fn is None and self._batch_size > 1:
+            batches = _batches(chunks, self._batch_size)
+            with ThreadPoolExecutor(max_workers=self._concurrency) as executor:
+                return [
+                    enriched
+                    for batch_result in executor.map(self._enrich_batch, batches)
+                    for enriched in batch_result
+                ]
 
         with ThreadPoolExecutor(max_workers=self._concurrency) as executor:
             return list(executor.map(self._enrich_chunk, chunks))
@@ -104,10 +146,35 @@ class RagChunkEnricher:
             return _heuristic_enrichment(chunk)
         return self._chat_fn(_enrichment_prompt(chunk), self._llm)
 
+    def _enrich_batch(self, chunks: list[RagChunk]) -> list[RagChunk]:
+        try:
+            raw = self._chat_fn(_batch_enrichment_prompt(chunks), self._llm)
+            enrichment_by_id = _parse_batch_enrichment(raw, chunks)
+        except Exception:
+            return [self._enrich_chunk(chunk) for chunk in chunks]
+        return [
+            _replace_enrichment(
+                chunk,
+                enrichment_by_id[chunk.id],
+                method="llm_batch",
+            )
+            for chunk in chunks
+        ]
+
 
 def _enrichment_prompt(chunk: RagChunk) -> str:
     return _CHUNK_ENRICHMENT_PROMPT.format(
         chunk=json.dumps(_chunk_payload(chunk), ensure_ascii=False, indent=2)
+    )
+
+
+def _batch_enrichment_prompt(chunks: list[RagChunk]) -> str:
+    return _BATCH_CHUNK_ENRICHMENT_PROMPT.format(
+        chunks=json.dumps(
+            {"chunks": [_chunk_payload(chunk) for chunk in chunks]},
+            ensure_ascii=False,
+            indent=2,
+        )
     )
 
 
@@ -189,6 +256,33 @@ def _parse_enrichment(raw: Any, *, fallback: _ChunkEnrichment) -> _ChunkEnrichme
         keywords=_unique([_normalize_space(keyword) for keyword in keywords])[:8] or fallback.keywords,
         questions=_unique([_clean_question(question) for question in questions])[:5] or fallback.questions,
     )
+
+
+def _parse_batch_enrichment(raw: Any, chunks: list[RagChunk]) -> dict[str, _ChunkEnrichment]:
+    if not isinstance(raw, Mapping):
+        raise ValueError("batch chunk enrichment result must be an object")
+
+    items = raw.get("chunks")
+    if not isinstance(items, list):
+        raise ValueError("batch chunk enrichment result must contain chunks")
+
+    chunk_by_id = {chunk.id: chunk for chunk in chunks}
+    result: dict[str, _ChunkEnrichment] = {}
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        chunk_id = item.get("id")
+        if not isinstance(chunk_id, str) or chunk_id not in chunk_by_id:
+            continue
+        result[chunk_id] = _parse_enrichment(
+            item,
+            fallback=_heuristic_enrichment(chunk_by_id[chunk_id]),
+        )
+
+    missing = [chunk.id for chunk in chunks if chunk.id not in result]
+    if missing:
+        raise ValueError(f"batch chunk enrichment missing ids: {', '.join(missing)}")
+    return result
 
 
 def _replace_enrichment(
@@ -506,6 +600,13 @@ def _dicts(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, Mapping)]
+
+
+def _batches(chunks: list[RagChunk], batch_size: int) -> list[list[RagChunk]]:
+    return [
+        chunks[index : index + batch_size]
+        for index in range(0, len(chunks), batch_size)
+    ]
 
 
 def _unique(values: list[str]) -> list[str]:

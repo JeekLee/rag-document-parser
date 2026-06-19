@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 from urllib import request
 
-from ....llm import LlmConfig, chat_completions_url
+from ....llm import LlmConfig, apply_llm_request_options, chat_completions_url
 from ....models import EvidenceUnit, PendingAsset, SourceEvidence
 from ...backend import ParsedDocument
 from ...schema import (
@@ -3157,10 +3157,8 @@ _VISION_OCR_PROMPT = """\
 
 def _vision_ocr_png(png: bytes, cfg: LlmConfig) -> str:
     b64 = base64.b64encode(png).decode("ascii")
-    body = {
-        "model": cfg.model,
-        "temperature": cfg.temperature,
-        "messages": [
+    messages = cfg.prepare_messages(
+        [
             {
                 "role": "user",
                 "content": [
@@ -3171,8 +3169,14 @@ def _vision_ocr_png(png: bytes, cfg: LlmConfig) -> str:
                     {"type": "text", "text": _VISION_OCR_PROMPT},
                 ],
             }
-        ],
+        ]
+    )
+    body = {
+        "model": cfg.model,
+        "temperature": cfg.temperature,
+        "messages": messages,
     }
+    apply_llm_request_options(body, cfg)
     req = request.Request(
         chat_completions_url(cfg.url),
         data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
