@@ -282,8 +282,9 @@ def test_agentic_chunker_uses_llm_prompt_when_no_plan_fn(monkeypatch):
     assert chunks[0].summary == "첫 문장 최종 요약"
 
 
-def test_agentic_chunker_forwards_enrichment_batch_size(monkeypatch):
+def test_agentic_chunker_forwards_enrichment_batch_token_budget(monkeypatch):
     from rag_document_parser import LlmConfig
+    import rag_document_parser.chunk.enrichment as enrichment
     from rag_document_parser.chunk import EvidenceUnitAgenticChunker
 
     calls = []
@@ -305,7 +306,7 @@ def test_agentic_chunker_forwards_enrichment_batch_size(monkeypatch):
         ids = [
             line.removeprefix('      "id": "').removesuffix('",')
             for line in prompt.splitlines()
-            if line.startswith('      "id": "')
+            if line.startswith('      "id": "') and '"chunk-id"' not in line
         ]
         return {
             "chunks": [
@@ -320,6 +321,7 @@ def test_agentic_chunker_forwards_enrichment_batch_size(monkeypatch):
         }
 
     monkeypatch.setattr("rag_document_parser.chunk.agentic.chat_json", fake_chat_json)
+    monkeypatch.setattr(enrichment, "_chunk_batch_token_cost", lambda chunk: 1, raising=False)
     cfg = LlmConfig(url="http://llm.test/v1", api_key="key", model="model")
     units = [_text_unit(f"b{index}", f"문장 {index}") for index in range(1, 11)]
 
@@ -327,7 +329,7 @@ def test_agentic_chunker_forwards_enrichment_batch_size(monkeypatch):
         llm=cfg,
         plan_fn=plan_fn,
         max_concurrency=1,
-        enrichment_batch_size=8,
+        enrichment_batch_token_budget=8,
     ).chunk(units)
 
     assert len(calls) == 2

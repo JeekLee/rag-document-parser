@@ -12,6 +12,9 @@ from ..models import RagChunk
 
 ChunkEnrichmentFn = Callable[[RagChunk, LlmConfig | None], Any]
 ChatJsonFn = Callable[[str, LlmConfig], Any]
+_ENRICHMENT_OUTPUT_TOKEN_RESERVE_PER_CHUNK = 256
+_TOKEN_ENCODER: Any | None = None
+_TOKEN_ENCODER_UNAVAILABLE = False
 
 
 class Enricher(Protocol):
@@ -91,13 +94,17 @@ class RagChunkEnricher:
         enrich_fn: ChunkEnrichmentFn | None = None,
         chat_fn: ChatJsonFn = chat_json,
         max_concurrency: int = 4,
-        batch_size: int = 1,
+        batch_token_budget: int | None = None,
     ) -> None:
         self._llm = llm
         self._enrich_fn = enrich_fn
         self._chat_fn = chat_fn
         self._concurrency = max(1, max_concurrency)
-        self._batch_size = max(1, batch_size)
+        self._batch_token_budget = (
+            max(1, batch_token_budget)
+            if batch_token_budget is not None
+            else None
+        )
 
     def enrich(self, chunks: list[RagChunk]) -> list[RagChunk]:
         if not chunks:
@@ -105,8 +112,12 @@ class RagChunkEnricher:
         if self._llm is None and self._enrich_fn is None:
             return [self._heuristic_enrich_if_needed(chunk) for chunk in chunks]
 
-        if self._llm is not None and self._enrich_fn is None and self._batch_size > 1:
-            batches = _batches(chunks, self._batch_size)
+        if (
+            self._llm is not None
+            and self._enrich_fn is None
+            and self._batch_token_budget is not None
+        ):
+            batches = _token_budget_batches(chunks, self._batch_token_budget)
             with ThreadPoolExecutor(max_workers=self._concurrency) as executor:
                 return [
                     enriched
@@ -602,11 +613,74 @@ def _dicts(value: Any) -> list[dict[str, Any]]:
     return [item for item in value if isinstance(item, Mapping)]
 
 
-def _batches(chunks: list[RagChunk], batch_size: int) -> list[list[RagChunk]]:
-    return [
-        chunks[index : index + batch_size]
-        for index in range(0, len(chunks), batch_size)
-    ]
+def _token_budget_batches(
+    chunks: list[RagChunk],
+    batch_token_budget: int,
+) -> list[list[RagChunk]]:
+    batches: list[list[RagChunk]] = []
+    current: list[RagChunk] = []
+    current_cost = 0
+    budget = max(1, batch_token_budget)
+
+    for chunk in chunks:
+        cost = max(1, _chunk_batch_token_cost(chunk))
+        if current and current_cost + cost > budget:
+            batches.append(current)
+            current = []
+            current_cost = 0
+        current.append(chunk)
+        current_cost += cost
+        if cost > budget:
+            batches.append(current)
+            current = []
+            current_cost = 0
+
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _chunk_batch_token_cost(chunk: RagChunk) -> int:
+    payload = json.dumps(_chunk_payload(chunk), ensure_ascii=False, separators=(",", ":"))
+    return _llm_token_count(payload) + _ENRICHMENT_OUTPUT_TOKEN_RESERVE_PER_CHUNK
+
+
+def _llm_token_count(text: str) -> int:
+    encoder = _token_encoder()
+    if encoder is not None:
+        return len(encoder.encode(text or ""))
+    return _estimated_token_count(text)
+
+
+def _token_encoder() -> Any | None:
+    global _TOKEN_ENCODER, _TOKEN_ENCODER_UNAVAILABLE
+    if _TOKEN_ENCODER is not None:
+        return _TOKEN_ENCODER
+    if _TOKEN_ENCODER_UNAVAILABLE:
+        return None
+
+    try:
+        import tiktoken  # type: ignore[import-not-found]
+    except Exception:
+        _TOKEN_ENCODER_UNAVAILABLE = True
+        return None
+
+    try:
+        _TOKEN_ENCODER = tiktoken.get_encoding("cl100k_base")
+    except Exception:
+        _TOKEN_ENCODER_UNAVAILABLE = True
+        return None
+    return _TOKEN_ENCODER
+
+
+def _estimated_token_count(text: str) -> int:
+    count = 0
+    for token in re.findall(r"[A-Za-z0-9_]+|[가-힣]|[^\s]", text or ""):
+        if re.fullmatch(r"[A-Za-z0-9_]+", token):
+            count += max(1, (len(token) + 3) // 4)
+        else:
+            count += 1
+    return count
 
 
 def _unique(values: list[str]) -> list[str]:

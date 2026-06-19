@@ -62,7 +62,7 @@ chunker = EvidenceUnitAgenticChunker(
         model=os.environ["LLM_MODEL"],
     ),
     max_concurrency=4,
-    enrichment_batch_size=8,
+    enrichment_batch_token_budget=24000,
 )
 
 chunks = chunker.chunk(result.units)
@@ -76,6 +76,12 @@ for chunk in chunks:
         questions=chunk.questions,
     )
 ```
+
+`enrichment_batch_token_budget` enables final chunk enrichment batching by an
+estimated prompt/output token budget, not by a fixed chunk count. Leave it unset
+to enrich one chunk per LLM call. For Gemini Flash-Lite, `24000` is a practical
+fast default; lower it for stricter latency/error isolation and raise it only
+after checking provider rate limits and JSON response stability.
 
 ## Model Contract
 
@@ -298,7 +304,7 @@ parser = RagDocumentParser(
 chunker = EvidenceUnitAgenticChunker(
     llm=llm,
     max_concurrency=4,
-    enrichment_batch_size=8,
+    enrichment_batch_token_budget=24000,
 )
 ```
 
