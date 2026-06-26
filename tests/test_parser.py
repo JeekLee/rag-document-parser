@@ -372,3 +372,49 @@ def test_image_assets_are_uploaded_to_s3_and_linked_in_evidence(monkeypatch):
         "sha256": hashlib.sha256(b"png bytes").hexdigest(),
         "bytes": len(b"png bytes"),
     }
+
+
+def test_parser_registers_html_backend_and_uploads_nested_html_images(monkeypatch):
+    from rag_document_parser import RagDocumentParser
+
+    uploads = []
+
+    def fake_put_object(cfg, key, data, content_type):
+        uploads.append((key, data, content_type))
+        return f"s3://{cfg.bucket}/{cfg.prefix}/{key}"
+
+    monkeypatch.setattr(
+        "rag_document_parser.evidence_unit_extraction.assets._put_object",
+        fake_put_object,
+    )
+
+    import base64
+
+    image_bytes = b"png bytes"
+    data_uri = f"data:image/png;base64,{base64.b64encode(image_bytes).decode()}"
+    raw = f"""
+    <table>
+      <tr><th>Item</th><th>Image</th></tr>
+      <tr><td>Criteria</td><td><img src="{data_uri}" alt="cell chart"></td></tr>
+    </table>
+    """.encode()
+
+    result = RagDocumentParser(object_storage=_s3_config()).parse(
+        raw,
+        suffix=".HTML",
+    )
+    document_hash = hashlib.sha256(raw).hexdigest()
+
+    assert result.source.suffix == ".html"
+    assert uploads == [
+        (
+            f"{document_hash}/assets/img-0001.png",
+            image_bytes,
+            "image/png",
+        )
+    ]
+    image_child = result.units[0].content["rows"][0]["cells"][1]["children"][0]
+    assert image_child["content"]["uri"] == (
+        f"s3://rag-assets/documents/{document_hash}/assets/img-0001.png"
+    )
+    assert image_child["content"]["sha256"] == hashlib.sha256(image_bytes).hexdigest()

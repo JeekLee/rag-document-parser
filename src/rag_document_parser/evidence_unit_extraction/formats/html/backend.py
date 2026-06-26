@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from bs4 import BeautifulSoup
@@ -126,7 +127,7 @@ class HtmlBackend:
         )
 
     def _table_unit(self, table: Tag, state: _HtmlParseState) -> EvidenceUnit | None:
-        parsed = _parse_table_content(table)
+        parsed = _parse_table_content(table, state)
         if parsed is None:
             return None
         content, headers, row_source_values, caption = parsed
@@ -233,8 +234,14 @@ def _tag_name(tag: Tag) -> str:
     return str(tag.name or "").lower()
 
 
-def _text_with_links(node: Tag, *, preserve_pre: bool = False) -> str:
+def _text_with_links(
+    node: Tag,
+    *,
+    preserve_pre: bool = False,
+    skip_tags: set[str] | None = None,
+) -> str:
     parts: list[str] = []
+    skipped = skip_tags or set()
 
     def visit(current: object) -> None:
         if isinstance(current, NavigableString):
@@ -243,6 +250,8 @@ def _text_with_links(node: Tag, *, preserve_pre: bool = False) -> str:
         if not isinstance(current, Tag):
             return
         name = _tag_name(current)
+        if name in skipped:
+            return
         if name in {"script", "style"}:
             return
         if name == "a":
@@ -271,6 +280,7 @@ def _normalize_whitespace(text: str) -> str:
 
 def _parse_table_content(
     table: Tag,
+    state: _HtmlParseState,
 ) -> tuple[object, list[str], list[dict[str, str]], str | None] | None:
     rows = _direct_table_rows(table)
     if not rows:
@@ -305,7 +315,8 @@ def _parse_table_content(
             column_index = _next_open_column(column_index, rowspan_slots)
             if column_index >= len(columns):
                 break
-            text = _text_with_links(cell)
+            text = _text_with_links(cell, skip_tags={"figure", "img", "table"})
+            children = _cell_children(cell, state)
             rowspan = _positive_int(cell.get("rowspan"), default=1)
             colspan = _positive_int(cell.get("colspan"), default=1)
             column_id = columns[column_index]["id"]
@@ -315,10 +326,12 @@ def _parse_table_content(
                     text,
                     rowspan=rowspan,
                     colspan=colspan,
+                    children=children,
                 )
             )
-            if text:
-                source_values[headers[column_index]] = text
+            source_value = _cell_source_value(text, children)
+            if source_value:
+                source_values[headers[column_index]] = source_value
             if rowspan > 1:
                 for offset in range(colspan):
                     rowspan_slots[column_index + offset] = rowspan
@@ -335,6 +348,90 @@ def _parse_table_content(
         row_source_values,
         caption,
     )
+
+
+def _cell_children(cell: Tag, state: _HtmlParseState) -> list[dict[str, object]]:
+    children: list[dict[str, object]] = []
+    for nested in _cell_nested_tables(cell):
+        parsed = _parse_table_content(nested, state)
+        if parsed is None:
+            continue
+        nested_content, _, _, _ = parsed
+        children.append(
+            {
+                "type": "table",
+                "format": "structured_table",
+                "content": nested_content,
+            }
+        )
+    for image in _cell_images(cell):
+        caption = _image_caption_from_context(image)
+        image_ref = _image_asset_ref(image, state)
+        if image_ref is None:
+            continue
+        asset_id, alt = image_ref
+        children.append(
+            {
+                "type": "image",
+                "format": "asset_ref",
+                "content": {
+                    "asset_id": asset_id,
+                    "caption": caption or alt,
+                },
+            }
+        )
+    return children
+
+
+def _cell_nested_tables(cell: Tag) -> list[Tag]:
+    parent_table = cell.find_parent("table")
+    return [
+        table
+        for table in cell.find_all("table")
+        if table.find_parent("table") is parent_table
+    ]
+
+
+def _cell_images(cell: Tag) -> list[Tag]:
+    parent_table = cell.find_parent("table")
+    return [
+        image
+        for image in cell.find_all("img")
+        if image.find_parent("table") is parent_table
+    ]
+
+
+def _cell_source_value(text: str, children: list[dict[str, object]]) -> str:
+    parts = [text] if text else []
+    for child in children:
+        child_type = child.get("type")
+        content = child.get("content")
+        if child_type == "image" and isinstance(content, Mapping):
+            asset_id = content.get("asset_id")
+            if asset_id:
+                parts.append(f"image: {asset_id}")
+        elif child_type == "table":
+            parts.append("nested table: " + _nested_table_summary(content))
+    return "; ".join(parts)
+
+
+def _nested_table_summary(content: object) -> str:
+    if not isinstance(content, Mapping):
+        return "structured_table"
+    columns = content.get("columns")
+    rows = content.get("rows")
+    parts: list[str] = []
+    if isinstance(columns, list):
+        labels = [
+            str(column.get("text"))
+            for column in columns
+            if isinstance(column, Mapping) and column.get("text")
+        ]
+        if labels:
+            parts.append(f"columns: {' | '.join(labels)}")
+    if isinstance(rows, list):
+        parts.append(f"rows: {len(rows)}")
+    return " / ".join(parts) if parts else "structured_table"
 
 
 def _direct_table_rows(table: Tag) -> list[Tag]:
@@ -404,6 +501,13 @@ def _figure_caption(figure: Tag) -> str | None:
             text = _text_with_links(child)
             return text or None
     return None
+
+
+def _image_caption_from_context(image: Tag) -> str | None:
+    figure = image.find_parent("figure")
+    if not isinstance(figure, Tag):
+        return None
+    return _figure_caption(figure)
 
 
 def _image_asset_ref(

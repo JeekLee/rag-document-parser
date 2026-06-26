@@ -171,3 +171,58 @@ def test_html_backend_warns_for_external_and_invalid_images():
         "html_image_data_uri_invalid",
         "html_image_mime_unsupported",
     ]
+
+
+def test_html_backend_preserves_nested_table_as_table_child():
+    from rag_document_parser import HtmlBackend
+
+    raw = b"""
+    <table>
+      <tr><th>Item</th><th>Detail</th></tr>
+      <tr>
+        <td>Criteria</td>
+        <td>
+          <table>
+            <tr><th>Subitem</th><th>Value</th></tr>
+            <tr><td>A</td><td>1</td></tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+    """
+
+    parsed = HtmlBackend().parse(raw, ".html")
+
+    table = parsed.units[0]
+    nested_child = table.content["rows"][0]["cells"][1]["children"][0]
+    assert nested_child["type"] == "table"
+    assert nested_child["format"] == "structured_table"
+    assert nested_child["content"]["columns"] == [
+        {"id": "c1", "text": "Subitem"},
+        {"id": "c2", "text": "Value"},
+    ]
+    assert nested_child["content"]["rows"][0]["cells"][0]["text"] == "A"
+    assert "nested table:" in table.source.text
+
+
+def test_html_backend_preserves_table_cell_image_as_nested_asset_ref():
+    from rag_document_parser import HtmlBackend
+
+    raw = f"""
+    <table>
+      <tr><th>Item</th><th>Image</th></tr>
+      <tr><td>Criteria</td><td><img src="{_data_uri()}" alt="cell chart"></td></tr>
+    </table>
+    """.encode()
+
+    parsed = HtmlBackend().parse(raw, ".html")
+
+    table = parsed.units[0]
+    image_child = table.content["rows"][0]["cells"][1]["children"][0]
+    assert image_child == {
+        "type": "image",
+        "format": "asset_ref",
+        "content": {"asset_id": "img-0001", "caption": "cell chart"},
+    }
+    assert parsed.assets[0].id == "img-0001"
+    assert "image: img-0001" in table.source.text
