@@ -3,8 +3,8 @@ from __future__ import annotations
 from .chunk import EvidenceUnitAgenticChunker, RagChunkEnricher
 from .evidence_unit_extraction.backend import DocumentBackend
 from .evidence_unit_extraction.formats.hwp5 import Hwp5Backend
+from .evidence_unit_extraction.formats.html import HtmlBackend
 from .evidence_unit_extraction.formats.hwpx import HwpxBackend
-from .evidence_unit_extraction.formats.markdown import MarkdownBackend
 from .evidence_unit_extraction.formats.pdf import PdfBackend
 from .llm import GeminiLlmConfig, GemmaLlmConfig, LlmConfig, QwenLlmConfig
 from .models import (
@@ -53,11 +53,11 @@ __all__ = [
     "EvidenceUnit",
     "EvidenceUnitAgenticChunker",
     "Hwp5Backend",
+    "HtmlBackend",
     "HwpxBackend",
     "GeminiLlmConfig",
     "GemmaLlmConfig",
     "LlmConfig",
-    "MarkdownBackend",
     "PendingAsset",
     "PdfBackend",
     "QwenLlmConfig",

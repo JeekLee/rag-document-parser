@@ -515,6 +515,7 @@ def _improve_chunk_boundaries(
 
     units_by_id = {unit.id: unit for unit in units}
     improved = _move_trailing_heading_units_forward(chunks, units_by_id, max_units_per_chunk)
+    improved = _split_case_boundary_chunks(improved, units_by_id, max_units_per_chunk)
     improved = _split_independent_form_chunks(improved, units_by_id, max_units_per_chunk)
     improved = _split_chunks_exceeding_max_units(
         improved,
@@ -582,6 +583,59 @@ def _move_trailing_heading_units_forward(
         del result[index]
 
     return result
+
+
+def _split_case_boundary_chunks(
+    chunks: list[RagChunk],
+    units_by_id: dict[str, EvidenceUnit],
+    max_units_per_chunk: int,
+) -> list[RagChunk]:
+    result: list[RagChunk] = []
+    for chunk in chunks:
+        source_unit_ids = _strings(chunk.metadata.get("source_unit_ids"))
+        if len(source_unit_ids) <= 1:
+            result.append(chunk)
+            continue
+
+        groups = _split_case_boundary_groups(list(chunk.evidence.items), units_by_id)
+        if len(groups) <= 1:
+            result.append(chunk)
+            continue
+
+        for group_index, group in enumerate(groups, start=1):
+            result.append(
+                _rebuild_chunk_from_items(
+                    chunk,
+                    group,
+                    units_by_id,
+                    max_units_per_chunk=max_units_per_chunk,
+                    regenerate_text_fields=True,
+                    warning={
+                        "type": "agentic_case_boundary_split",
+                        "original_source_unit_count": len(source_unit_ids),
+                        "split_group_index": group_index,
+                        "split_group_count": len(groups),
+                    },
+                )
+            )
+    return result
+
+
+def _split_case_boundary_groups(
+    items: list[EvidenceItem],
+    units_by_id: dict[str, EvidenceUnit],
+) -> list[list[EvidenceItem]]:
+    groups: list[list[EvidenceItem]] = []
+    current: list[EvidenceItem] = []
+    for item in items:
+        if current and _item_starts_new_case(item, units_by_id):
+            groups.append(current)
+            current = []
+        current.append(item)
+
+    if current:
+        groups.append(current)
+    return groups
 
 
 def _split_independent_form_chunks(
@@ -1279,6 +1333,16 @@ def _item_starts_new_form(
     if re.match(r"^\(?\s*(뒷면|뒤\s*쪽|을지|앞면|앞\s*쪽)\s*\)?$", text[:20]):
         return False
     return bool(re.search(_FORM_MARKER_PATTERN, text[:300]))
+
+
+def _item_starts_new_case(
+    item: EvidenceItem,
+    units_by_id: dict[str, EvidenceUnit],
+) -> bool:
+    if item.type != "text":
+        return False
+    text = _normalize_space(_item_plain_text(item, units_by_id))
+    return bool(re.match(r"^[○●]?\s*사례\s*\d+(?:\D|$)", text))
 
 
 def _item_ends_form(

@@ -1,11 +1,12 @@
 [project]
 name = "rag-document-parser"
-version = "0.5.0"
+version = "0.6.0"
 description = "RAG-ready document parser with source evidence and LLM-enriched chunks"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
+    "beautifulsoup4>=4.12",
     "pydantic>=2",
 ]
 
