@@ -141,6 +141,7 @@ objects directly.
 Built-in parser suffixes:
 
 - `.md`, `.markdown`, `.txt`: text and Markdown backend.
+- `.html`, `.htm`: HTML backend.
 - `.hwpx`: HWPX backend.
 - `.hwp`: HWP5 backend.
 - `.pdf`: PDF backend.
@@ -150,6 +151,7 @@ Current extraction behavior by format:
 | Format | Text | Structured tables | Nested tables | Images/assets | Structured diagrams | OCR |
 | --- | --- | --- | --- | --- | --- | --- |
 | Markdown/text | yes | Markdown tables | no | no | no | no |
+| HTML | yes | yes | yes | embedded data URI images | no | no |
 | HWPX | yes | yes | yes | yes | yes | optional `ocr_fn` fallback |
 | HWP5 | yes | yes | yes | yes | yes | optional `ocr_fn` fallback |
 | PDF | yes | yes | yes | yes | vector/fallback diagrams | local or vision OCR |
