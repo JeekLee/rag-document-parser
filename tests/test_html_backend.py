@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+import base64
+
+PNG_BYTES = b"png bytes"
+
+
+def _data_uri(data: bytes = PNG_BYTES, mime: str = "image/png") -> str:
+    return f"data:{mime};base64,{base64.b64encode(data).decode()}"
+
 
 def test_html_backend_extracts_text_sections_links_and_lists():
     from rag_document_parser import HtmlBackend
@@ -113,3 +121,53 @@ def test_html_backend_extracts_structured_table_with_caption_and_spans():
         "row 1: Type=Clinic; Amount=1000\n"
         "row 2: Amount=2000"
     )
+
+
+def test_html_backend_preserves_figure_data_uri_image_asset():
+    from rag_document_parser import HtmlBackend
+
+    raw = f"""
+    <h1>Images</h1>
+    <figure>
+      <img src="{_data_uri()}" alt="chart alt">
+      <figcaption>Chart caption</figcaption>
+    </figure>
+    """.encode()
+
+    parsed = HtmlBackend().parse(raw, ".html")
+
+    assert [unit.type for unit in parsed.units] == ["image"]
+    image = parsed.units[0]
+    assert image.source.kind == "image"
+    assert image.source.text == (
+        "section: Images\n"
+        "image: img-0001\n"
+        "caption: Chart caption\n"
+        "alt: chart alt"
+    )
+    assert image.format == "asset_ref"
+    assert image.content == {"asset_id": "img-0001", "caption": "Chart caption"}
+    assert parsed.assets[0].id == "img-0001"
+    assert parsed.assets[0].data == PNG_BYTES
+    assert parsed.assets[0].mime == "image/png"
+    assert parsed.assets[0].ext == "png"
+
+
+def test_html_backend_warns_for_external_and_invalid_images():
+    from rag_document_parser import HtmlBackend
+
+    raw = b'''
+    <img src="https://example.test/image.png" alt="remote">
+    <img src="data:image/png;base64,not-valid" alt="bad">
+    <img src="data:image/svg+xml;base64,PHN2Zy8+" alt="svg">
+    '''
+
+    parsed = HtmlBackend().parse(raw, ".html")
+
+    assert parsed.units == []
+    assert parsed.assets == []
+    assert [warning["type"] for warning in parsed.quality_warnings] == [
+        "html_image_external_reference",
+        "html_image_data_uri_invalid",
+        "html_image_mime_unsupported",
+    ]

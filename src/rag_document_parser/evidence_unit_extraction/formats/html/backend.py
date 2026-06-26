@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import re
 from dataclasses import dataclass
 
 from bs4 import BeautifulSoup
 from bs4.element import NavigableString, Tag
 
-from ....models import EvidenceUnit, SourceEvidence
+from ....models import EvidenceUnit, PendingAsset, SourceEvidence
 from ...backend import ParsedDocument
 from ...schema import (
     common_metadata,
@@ -18,6 +20,13 @@ from ...schema import (
 
 _BLOCK_TEXT_TAGS = {"blockquote", "p"}
 _HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
+_DATA_URI_RE = re.compile(r"^data:([^;,]+);base64,(.*)$", re.IGNORECASE | re.DOTALL)
+_SUPPORTED_IMAGE_MIME = {
+    "image/gif": "gif",
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+}
 
 
 @dataclass
@@ -31,7 +40,11 @@ class HtmlBackend:
         state = _HtmlParseState()
         units: list[EvidenceUnit] = []
         self._walk_blocks(root, state, units)
-        return ParsedDocument(units=units)
+        return ParsedDocument(
+            units=units,
+            assets=state.assets,
+            quality_warnings=state.quality_warnings,
+        )
 
     def _walk_blocks(
         self,
@@ -60,6 +73,22 @@ class HtmlBackend:
                 table_unit = self._table_unit(child, state)
                 if table_unit is not None:
                     units.append(table_unit)
+                continue
+            if name == "figure":
+                image = child.find("img")
+                if isinstance(image, Tag):
+                    image_unit = self._image_unit(
+                        image,
+                        state,
+                        caption=_figure_caption(child),
+                    )
+                    if image_unit is not None:
+                        units.append(image_unit)
+                continue
+            if name == "img":
+                image_unit = self._image_unit(child, state)
+                if image_unit is not None:
+                    units.append(image_unit)
                 continue
             if name in {"ol", "ul"}:
                 for item in child.find_all("li", recursive=False):
@@ -130,12 +159,48 @@ class HtmlBackend:
             },
         )
 
+    def _image_unit(
+        self,
+        image: Tag,
+        state: _HtmlParseState,
+        *,
+        caption: str | None = None,
+    ) -> EvidenceUnit | None:
+        image_ref = _image_asset_ref(image, state)
+        if image_ref is None:
+            return None
+        asset_id, alt = image_ref
+        content_caption = caption or alt
+        return EvidenceUnit(
+            id=state.next_block_id(),
+            type="image",
+            source=SourceEvidence(
+                kind="image",
+                text=_image_source_text(
+                    state.section_path,
+                    asset_id,
+                    caption,
+                    alt,
+                ),
+            ),
+            format="asset_ref",
+            content={"asset_id": asset_id, "caption": content_caption},
+            metadata=common_metadata(
+                "image",
+                "asset_ref",
+                section_path=state.section_path,
+            ),
+        )
+
 
 class _HtmlParseState:
     def __init__(self) -> None:
         self._block_index = 1
         self._table_index = 1
+        self._image_index = 1
         self._headings: list[tuple[int, str]] = []
+        self.assets: list[PendingAsset] = []
+        self.quality_warnings: list[dict[str, object]] = []
 
     @property
     def section_path(self) -> list[str]:
@@ -150,6 +215,11 @@ class _HtmlParseState:
         table_id = f"t{self._table_index}"
         self._table_index += 1
         return table_id
+
+    def next_image_id(self) -> str:
+        image_id = f"img-{self._image_index:04d}"
+        self._image_index += 1
+        return image_id
 
     def set_heading(self, level: int, text: str) -> None:
         if not text:
@@ -326,6 +396,97 @@ def _table_caption(table: Tag) -> str | None:
             text = _text_with_links(child)
             return text or None
     return None
+
+
+def _figure_caption(figure: Tag) -> str | None:
+    for child in figure.children:
+        if isinstance(child, Tag) and _tag_name(child) == "figcaption":
+            text = _text_with_links(child)
+            return text or None
+    return None
+
+
+def _image_asset_ref(
+    image: Tag,
+    state: _HtmlParseState,
+) -> tuple[str, str | None] | None:
+    src = str(image.get("src") or "").strip()
+    alt = str(image.get("alt") or "").strip() or None
+    if not src:
+        state.quality_warnings.append(
+            {
+                "type": "html_image_external_reference",
+                "severity": "medium",
+                "src": src,
+                "message": "HTML image source did not contain embedded bytes.",
+            }
+        )
+        return None
+    match = _DATA_URI_RE.match(src)
+    if match is None:
+        state.quality_warnings.append(
+            {
+                "type": "html_image_external_reference",
+                "severity": "medium",
+                "src": src,
+                "message": "HTML image references external bytes and was not fetched.",
+            }
+        )
+        return None
+    mime = match.group(1).lower()
+    ext = _SUPPORTED_IMAGE_MIME.get(mime)
+    if ext is None:
+        state.quality_warnings.append(
+            {
+                "type": "html_image_mime_unsupported",
+                "severity": "medium",
+                "mime": mime,
+                "message": f"HTML embedded image MIME type is unsupported: {mime}",
+            }
+        )
+        return None
+    try:
+        data = base64.b64decode(match.group(2).strip(), validate=True)
+    except (binascii.Error, ValueError):
+        state.quality_warnings.append(
+            {
+                "type": "html_image_data_uri_invalid",
+                "severity": "medium",
+                "mime": mime,
+                "message": "HTML embedded image data URI could not be decoded.",
+            }
+        )
+        return None
+
+    asset_id = state.next_image_id()
+    state.assets.append(
+        PendingAsset(
+            id=asset_id,
+            kind="image",
+            data=data,
+            mime=mime,
+            ext=ext,
+            metadata={"source": "html_data_uri"},
+        )
+    )
+    return asset_id, alt
+
+
+def _image_source_text(
+    section_path: list[str],
+    asset_id: str,
+    caption: str | None,
+    alt: str | None,
+) -> str:
+    lines: list[str] = []
+    if section_path:
+        lines.append(f"section: {' > '.join(section_path)}")
+    lines.append(f"image: {asset_id}")
+    if caption:
+        lines.append(f"caption: {caption}")
+    if alt:
+        lines.append(f"alt: {alt}")
+    return "\n".join(lines)
 
 
 def _table_source_text(
