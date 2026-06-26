@@ -54,11 +54,19 @@ class HtmlBackend:
         units: list[EvidenceUnit],
     ) -> None:
         for child in parent.children:
+            if isinstance(child, NavigableString):
+                self._append_text_unit(units, state, _normalize_whitespace(str(child)))
+                continue
             if not isinstance(child, Tag):
                 continue
             name = _tag_name(child)
+            if name in {"script", "style"}:
+                continue
             if name in _HEADING_TAGS:
                 state.set_heading(int(name[1]), _text_with_links(child))
+                continue
+            if name == "a":
+                self._append_text_unit(units, state, _text_with_links(child))
                 continue
             if name in _BLOCK_TEXT_TAGS:
                 self._append_text_unit(units, state, _text_with_links(child))

@@ -50,6 +50,34 @@ code line 2</pre>
     )
 
 
+def test_html_backend_extracts_standalone_sectioning_text():
+    from rag_document_parser import HtmlBackend
+
+    raw = b"""
+    <main>
+      <h1>Notice</h1>
+      Loose intro text
+      <section>
+        Nested detail text
+        <a href="https://example.test/more">More detail</a>
+      </section>
+      <script>ignored()</script>
+    </main>
+    """
+
+    parsed = HtmlBackend().parse(raw, ".html")
+
+    assert [unit.content for unit in parsed.units] == [
+        "Loose intro text",
+        "Nested detail text",
+        "More detail (https://example.test/more)",
+    ]
+    assert all(
+        unit.metadata["common"]["section_path"] == ["Notice"]
+        for unit in parsed.units
+    )
+
+
 def test_html_backend_extracts_structured_table_with_caption_and_spans():
     from rag_document_parser import HtmlBackend
 
