@@ -371,6 +371,48 @@ def test_agentic_chunker_records_context_units_without_duplicate_evidence():
     assert chunks[1].evidence.items[0].source_unit_ids == ["b2"]
 
 
+def test_agentic_chunker_splits_internal_case_boundary():
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    units = [
+        _text_unit("b1", "이전 사례 검사 항목 A"),
+        _text_unit("b2", "이전 사례 검사 항목 B"),
+        _text_unit("b3", "○ 사례2(남/90세)"),
+        _text_unit("b4", "- 청구 상병명: 상세불명의 혈관성 치매"),
+        _text_unit("b5", "- 주요 청구내역:"),
+        _text_unit("b6", "나622나 F6222 치매척도검사[CDR] 1*1*1"),
+    ]
+
+    def plan_fn(window, cfg, max_units):
+        unit_ids = [unit.id for unit in window]
+        return [
+            {
+                "unit_ids": unit_ids,
+                "operations": [
+                    {"unit_id": unit_id, "action": "include"}
+                    for unit_id in unit_ids
+                ],
+                "summary": "LLM이 사례 경계를 섞은 plan",
+                "keywords": ["사례"],
+                "questions": ["사례 경계는 어떻게 나뉘나요?"],
+            }
+        ]
+
+    chunks = EvidenceUnitAgenticChunker(
+        llm=None,
+        plan_fn=plan_fn,
+        max_units_per_chunk=10,
+    ).chunk(units)
+
+    assert [chunk.metadata["source_unit_ids"] for chunk in chunks] == [
+        ["b1", "b2"],
+        ["b3", "b4", "b5", "b6"],
+    ]
+    assert "○ 사례2" not in chunks[0].source.text
+    assert chunks[1].source.text.startswith("○ 사례2")
+    assert chunks[1].metadata["_warnings"][0]["type"] == "agentic_case_boundary_split"
+
+
 def test_agentic_chunker_merges_adjacent_chunks_across_window_boundary():
     from rag_document_parser.chunk import EvidenceUnitAgenticChunker
 
