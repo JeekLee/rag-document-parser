@@ -16,7 +16,7 @@ def _s3_config():
     )
 
 
-def test_parse_text_document_returns_evidence_units_without_llm(monkeypatch):
+def test_parse_markdown_document_is_disabled_by_default_without_llm(monkeypatch):
     from rag_document_parser import RagDocumentParser
 
     def fail_chat_json(prompt, cfg):
@@ -36,90 +36,28 @@ def test_parse_text_document_returns_evidence_units_without_llm(monkeypatch):
         "| 약국 | 대면투약관리료 코드로 청구 |\n"
     ).encode()
 
-    result = RagDocumentParser(object_storage=_s3_config()).parse(
-        raw,
-        suffix=".md",
-        source_id="notice-1/attachment-1",
-        source_name="기준.md",
-    )
-
-    assert result.source.sha256 == hashlib.sha256(raw).hexdigest()
-    assert result.source.suffix == ".md"
-    assert not hasattr(result, "preview_markdown")
-    assert not hasattr(result, "chunks")
-    assert [unit.type for unit in result.units] == ["text", "table"]
-
-    text_unit, table_unit = result.units
-    assert text_unit.source.kind == "text"
-    assert text_unit.source.text == (
-        "section: 요양급여 기준\n"
-        "코로나19 대면투약관리료는 다음 기준에 따라 산정한다."
-    )
-    assert text_unit.source.to_dict() == {
-        "kind": "text",
-        "text": (
-            "section: 요양급여 기준\n"
-            "코로나19 대면투약관리료는 다음 기준에 따라 산정한다."
-        ),
-    }
-    assert not hasattr(text_unit, "summary")
-    assert not hasattr(text_unit, "keywords")
-    assert not hasattr(text_unit, "questions")
-    assert not hasattr(text_unit, "source_pointer")
-    assert text_unit.type == "text"
-    assert text_unit.format == "plain"
-    assert text_unit.content == "코로나19 대면투약관리료는 다음 기준에 따라 산정한다."
-
-    assert table_unit.source.kind == "table"
-    assert table_unit.source.text == (
-        "section: 요양급여 기준\n"
-        "columns: 대상 | 청구방법\n"
-        "row 1: 대상=약국; 청구방법=대면투약관리료 코드로 청구"
-    )
-    assert table_unit.type == "table"
-    assert table_unit.format == "structured_table"
-    assert table_unit.content == {
-        "caption": None,
-        "columns": [
-            {"id": "c1", "text": "대상"},
-            {"id": "c2", "text": "청구방법"},
-        ],
-        "rows": [
-            {
-                "index": 1,
-                "cells": [
-                    {
-                        "column_id": "c1",
-                        "text": "약국",
-                        "rowspan": 1,
-                        "colspan": 1,
-                        "children": [],
-                    },
-                    {
-                        "column_id": "c2",
-                        "text": "대면투약관리료 코드로 청구",
-                        "rowspan": 1,
-                        "colspan": 1,
-                        "children": [],
-                    },
-                ],
-            }
-        ],
-    }
-    assert table_unit.metadata["common"] == {
-        "chunk_kind": "table",
-        "section_path": ["요양급여 기준"],
-        "display_format": "structured_table",
-    }
-    assert table_unit.metadata["table"] == {
-        "table_id": "t1",
-        "headers": ["대상", "청구방법"],
-        "row_count": 1,
-    }
+    try:
+        RagDocumentParser(object_storage=_s3_config()).parse(
+            raw,
+            suffix=".md",
+            source_id="notice-1/attachment-1",
+            source_name="기준.md",
+        )
+    except ValueError as exc:
+        message = str(exc)
+        assert "Unsupported format" in message
+        assert ".md" in message
+        assert ".txt" not in message
+        assert ".markdown" not in message
+    else:
+        raise AssertionError("expected .md to be disabled by default")
 
 
 def test_markdown_backend_returns_evidence_units():
-    from rag_document_parser import EvidenceUnit, MarkdownBackend
+    from rag_document_parser import EvidenceUnit
+    from rag_document_parser.evidence_unit_extraction.formats.markdown import (
+        MarkdownBackend,
+    )
 
     raw = (
         "# Section\n\n"
@@ -159,9 +97,9 @@ def test_markdown_backend_returns_evidence_units():
 def test_parse_result_to_dict_is_json_serializable():
     from rag_document_parser import RagDocumentParser
 
-    raw = b"plain paragraph"
+    raw = b"<p>plain paragraph</p>"
     payload = RagDocumentParser(object_storage=_s3_config()).parse(
-        raw, suffix=".txt"
+        raw, suffix=".html"
     ).to_dict()
 
     assert payload["source"]["sha256"] == hashlib.sha256(raw).hexdigest()
@@ -184,9 +122,9 @@ def test_parse_result_to_dict_is_json_serializable():
 def test_source_does_not_require_position_offsets():
     from rag_document_parser import RagDocumentParser
 
-    raw = "# H\n\n한글".encode()
+    raw = "<h1>H</h1><p>한글</p>".encode()
     unit = RagDocumentParser(object_storage=_s3_config()).parse(
-        raw, suffix=".md"
+        raw, suffix=".html"
     ).units[0]
 
     assert unit.source.text == "section: H\n한글"

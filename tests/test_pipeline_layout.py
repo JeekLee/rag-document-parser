@@ -16,7 +16,6 @@ def test_pipeline_layout_exports_stage_and_format_modules():
         HtmlBackend,
         HwpxBackend,
         LlmConfig,
-        MarkdownBackend,
         PdfBackend,
         QwenLlmConfig,
         RagChunkEnricher,
@@ -36,9 +35,6 @@ def test_pipeline_layout_exports_stage_and_format_modules():
     from rag_document_parser.evidence_unit_extraction.formats.hwpx.backend import (
         HwpxBackend as StageHwpxBackend,
     )
-    from rag_document_parser.evidence_unit_extraction.formats.markdown.backend import (
-        MarkdownBackend as StageMarkdownBackend,
-    )
     from rag_document_parser.evidence_unit_extraction.formats.pdf.backend import (
         PdfBackend as StagePdfBackend,
     )
@@ -52,8 +48,8 @@ def test_pipeline_layout_exports_stage_and_format_modules():
     assert StageHwp5Backend is Hwp5Backend
     assert StageHtmlBackend is HtmlBackend
     assert StageHwpxBackend is HwpxBackend
-    assert StageMarkdownBackend is MarkdownBackend
     assert StagePdfBackend is PdfBackend
+    assert not hasattr(rag_document_parser, "MarkdownBackend")
     assert not hasattr(rag_document_parser, "PdfOcrConfig")
     assert not hasattr(pdf_format, "PdfOcrConfig")
     assert get_type_hints(PdfBackend)["ocr_llm"] == LlmConfig | None
@@ -76,8 +72,10 @@ def test_pipeline_layout_exports_stage_and_format_modules():
     assert isinstance(backends[".html"], HtmlBackend)
     assert isinstance(backends[".htm"], HtmlBackend)
     assert isinstance(backends[".hwpx"], HwpxBackend)
-    assert isinstance(backends[".md"], MarkdownBackend)
     assert isinstance(backends[".pdf"], PdfBackend)
+    assert ".markdown" not in backends
+    assert ".md" not in backends
+    assert ".txt" not in backends
 
 
 def test_legacy_import_paths_are_removed():

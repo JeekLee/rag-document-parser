@@ -140,17 +140,18 @@ objects directly.
 
 Built-in parser suffixes:
 
-- `.md`, `.markdown`, `.txt`: text and Markdown backend.
 - `.html`, `.htm`: HTML backend.
 - `.hwpx`: HWPX backend.
 - `.hwp`: HWP5 backend.
 - `.pdf`: PDF backend.
 
+Markdown/text suffixes (`.md`, `.markdown`, `.txt`) are disabled in the built-in
+parser registry as of `0.6.0` while their extraction quality is reworked.
+
 Current extraction behavior by format:
 
 | Format | Text | Structured tables | Nested tables | Images/assets | Structured diagrams | OCR |
 | --- | --- | --- | --- | --- | --- | --- |
-| Markdown/text | yes | Markdown tables | no | no | no | no |
 | HTML | yes | yes | yes | embedded data URI images | no | no |
 | HWPX | yes | yes | yes | yes | yes | optional `ocr_fn` fallback |
 | HWP5 | yes | yes | yes | yes | yes | optional `ocr_fn` fallback |
@@ -179,7 +180,8 @@ src/rag_document_parser/
     assets.py
     schema/
     formats/
-      markdown/
+      html/
+      markdown/  # internal, not registered by default in 0.6.0
       hwpx/
       hwp5/
       pdf/
