@@ -13,6 +13,7 @@ def test_pipeline_layout_exports_stage_and_format_modules():
         GeminiLlmConfig,
         GemmaLlmConfig,
         Hwp5Backend,
+        HtmlBackend,
         HwpxBackend,
         LlmConfig,
         MarkdownBackend,
@@ -28,6 +29,9 @@ def test_pipeline_layout_exports_stage_and_format_modules():
     from rag_document_parser.evidence_unit_extraction.backend import DocumentBackend
     from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import (
         Hwp5Backend as StageHwp5Backend,
+    )
+    from rag_document_parser.evidence_unit_extraction.formats.html.backend import (
+        HtmlBackend as StageHtmlBackend,
     )
     from rag_document_parser.evidence_unit_extraction.formats.hwpx.backend import (
         HwpxBackend as StageHwpxBackend,
@@ -46,6 +50,7 @@ def test_pipeline_layout_exports_stage_and_format_modules():
 
     assert StageParser is RagDocumentParser
     assert StageHwp5Backend is Hwp5Backend
+    assert StageHtmlBackend is HtmlBackend
     assert StageHwpxBackend is HwpxBackend
     assert StageMarkdownBackend is MarkdownBackend
     assert StagePdfBackend is PdfBackend
@@ -65,8 +70,11 @@ def test_pipeline_layout_exports_stage_and_format_modules():
     assert GemmaLlmConfig.__name__ == "GemmaLlmConfig"
     assert QwenLlmConfig.__name__ == "QwenLlmConfig"
     assert Hwp5Backend.supported_suffixes == (".hwp",)
+    assert HtmlBackend.supported_suffixes == (".html", ".htm")
     assert PdfBackend.supported_suffixes == (".pdf",)
     assert isinstance(backends[".hwp"], Hwp5Backend)
+    assert isinstance(backends[".html"], HtmlBackend)
+    assert isinstance(backends[".htm"], HtmlBackend)
     assert isinstance(backends[".hwpx"], HwpxBackend)
     assert isinstance(backends[".md"], MarkdownBackend)
     assert isinstance(backends[".pdf"], PdfBackend)

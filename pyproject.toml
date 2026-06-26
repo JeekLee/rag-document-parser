@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
+    "beautifulsoup4>=4.12",
     "pydantic>=2",
 ]
 
