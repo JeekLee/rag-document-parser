@@ -15,7 +15,7 @@ def test_html_backend_extracts_text_sections_links_and_lists():
     raw = b"""
     <html><body>
       <h1>Coverage Rules</h1>
-      <p>Apply the <a href="https://example.test/rule">rule</a> today.</p>
+      <p>Apply <!-- hidden comment --> the <a href="https://example.test/rule">rule</a> today.</p>
       <ul><li>First item</li><li>Second item</li></ul>
       <blockquote>Quoted guidance</blockquote>
       <pre>code line 1
@@ -76,6 +76,61 @@ def test_html_backend_extracts_standalone_sectioning_text():
         unit.metadata["common"]["section_path"] == ["Notice"]
         for unit in parsed.units
     )
+
+
+def test_html_backend_ignores_hira_popup_chrome_and_attachment_box():
+    from rag_document_parser import HtmlBackend
+
+    raw = """
+    <html><body>
+      <!-- popup header start -->
+      <div id="popHeader"><h1>보험인정기준 상세내용</h1></div>
+      <div class="btnAreaR"><a href="javascript:window.print();">인쇄</a></div>
+      <div class="viewCont">
+        <div class="title">세균배양검사의 항산균검사 수가산정방법</div>
+        <ul class="writer">
+          <li><span>분류</span>행정해석</li>
+          <li><span>관련근거</span>급여1492-59659호</li>
+        </ul>
+        <div class="fileBox">
+          <ul><li>본문내용.pdf <a href="#none">첨부파일 다운로드</a></li></ul>
+        </div>
+        <div class="view">
+          * 세균배양검사의 항산균검사 수가산정방법<br>
+          가. 도말검사는 직접도말을 실시한 경우 산정<br>
+          나. 집균도말검사는 원심분리 후 실시한 경우 산정
+        </div>
+      </div>
+      <div id="popFooter">popup footer <a href="javascript:self.close();">닫기</a></div>
+      <!-- popup header end -->
+    </body></html>
+    """.encode()
+
+    parsed = HtmlBackend().parse(raw, ".html")
+
+    assert [unit.content for unit in parsed.units] == [
+        "세균배양검사의 항산균검사 수가산정방법",
+        "분류 행정해석",
+        "관련근거 급여1492-59659호",
+        "* 세균배양검사의 항산균검사 수가산정방법",
+        "가. 도말검사는 직접도말을 실시한 경우 산정",
+        "나. 집균도말검사는 원심분리 후 실시한 경우 산정",
+    ]
+    assert parsed.units[0].metadata["common"]["section_path"] == []
+    assert all(
+        unit.metadata["common"]["section_path"]
+        == ["세균배양검사의 항산균검사 수가산정방법"]
+        for unit in parsed.units[1:]
+    )
+    assert parsed.units[3].source.text == (
+        "section: 세균배양검사의 항산균검사 수가산정방법\n"
+        "* 세균배양검사의 항산균검사 수가산정방법"
+    )
+    joined = "\n".join(str(unit.content) for unit in parsed.units)
+    assert "popup" not in joined
+    assert "인쇄" not in joined
+    assert "첨부파일 다운로드" not in joined
+    assert "닫기" not in joined
 
 
 def test_html_backend_extracts_structured_table_with_caption_and_spans():

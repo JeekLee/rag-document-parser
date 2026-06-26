@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from bs4 import BeautifulSoup
-from bs4.element import NavigableString, Tag
+from bs4.element import Comment, NavigableString, Tag
 
 from ....models import EvidenceUnit, PendingAsset, SourceEvidence
 from ...backend import ParsedDocument
@@ -37,7 +37,7 @@ class HtmlBackend:
     def parse(self, data: bytes, suffix: str) -> ParsedDocument:
         html = data.decode("utf-8", errors="replace")
         soup = BeautifulSoup(html, "html.parser")
-        root = soup.body or soup
+        root = _content_root(soup)
         state = _HtmlParseState()
         units: list[EvidenceUnit] = []
         self._walk_blocks(root, state, units)
@@ -55,12 +55,21 @@ class HtmlBackend:
     ) -> None:
         for child in parent.children:
             if isinstance(child, NavigableString):
+                if isinstance(child, Comment):
+                    continue
                 self._append_text_unit(units, state, _normalize_whitespace(str(child)))
                 continue
             if not isinstance(child, Tag):
                 continue
+            if _should_skip_element(child):
+                continue
             name = _tag_name(child)
             if name in {"script", "style"}:
+                continue
+            if _is_hira_title_element(child):
+                title = _text_with_links(child)
+                self._append_text_unit(units, state, title)
+                state.set_heading(1, title)
                 continue
             if name in _HEADING_TAGS:
                 state.set_heading(int(name[1]), _text_with_links(child))
@@ -242,6 +251,55 @@ def _tag_name(tag: Tag) -> str:
     return str(tag.name or "").lower()
 
 
+def _content_root(soup: BeautifulSoup) -> Tag:
+    for selector in (".viewCont", "main", "article"):
+        selected = soup.select_one(selector)
+        if isinstance(selected, Tag):
+            return selected
+    return soup.body or soup
+
+
+def _should_skip_element(tag: Tag) -> bool:
+    name = _tag_name(tag)
+    if name in {"footer", "header", "nav"}:
+        return True
+    marker = " ".join(
+        [
+            str(tag.get("id") or ""),
+            " ".join(str(value) for value in tag.get("class", [])),
+        ]
+    ).lower()
+    return any(
+        token in marker
+        for token in (
+            "btnarea",
+            "filebox",
+            "popfooter",
+            "popheader",
+            "popupfooter",
+            "popupheader",
+        )
+    )
+
+
+def _is_hira_title_element(tag: Tag) -> bool:
+    parent = tag.parent
+    return (
+        "title" in _class_names(tag)
+        and isinstance(parent, Tag)
+        and "viewCont" in _class_names(parent)
+    )
+
+
+def _class_names(tag: Tag) -> set[str]:
+    raw_classes = tag.get("class", [])
+    if isinstance(raw_classes, str):
+        return {raw_classes}
+    if isinstance(raw_classes, list):
+        return {str(value) for value in raw_classes}
+    return set()
+
+
 def _text_with_links(
     node: Tag,
     *,
@@ -253,6 +311,8 @@ def _text_with_links(
 
     def visit(current: object) -> None:
         if isinstance(current, NavigableString):
+            if isinstance(current, Comment):
+                return
             parts.append(str(current))
             return
         if not isinstance(current, Tag):
@@ -274,6 +334,8 @@ def _text_with_links(
             return
         for child in current.children:
             visit(child)
+            if not preserve_pre and isinstance(child, Tag):
+                parts.append(" ")
 
     visit(node)
     text = "".join(parts)
