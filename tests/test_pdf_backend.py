@@ -1446,6 +1446,81 @@ def test_pdf_backend_fills_blank_cells_from_pymupdf_table_extract(monkeypatch):
     ]
 
 
+def test_pdf_backend_splits_dotted_subrows_inside_physical_row(monkeypatch):
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
+
+    table = _FakeTable(
+        bbox=(60.0, 80.0, 480.0, 360.0),
+        row_cells=[
+            [
+                (60.0, 80.0, 90.0, 100.0),
+                (90.0, 80.0, 230.0, 100.0),
+                (230.0, 80.0, 390.0, 100.0),
+                (390.0, 80.0, 435.0, 100.0),
+                (435.0, 80.0, 480.0, 100.0),
+            ],
+            [
+                (60.0, 100.0, 90.0, 360.0),
+                (90.0, 100.0, 230.0, 360.0),
+                (230.0, 100.0, 390.0, 360.0),
+                (390.0, 100.0, 435.0, 360.0),
+                (435.0, 100.0, 480.0, 360.0),
+            ],
+        ],
+        extracted=[
+            ["연번", "항암요법", "투여대상", "투여단계", "투여요법"],
+            [
+                "9",
+                "enzalutamide(30/100) enzalutamide (제2014-211호: 2014.11.1.)",
+                "상단 투여대상 하단 투여대상",
+                "1차 2차 이상",
+                "P, S",
+            ],
+        ],
+    )
+    dotted = [
+        {"x0": x, "x1": x + 0.5, "top": 200.0, "bottom": 200.0}
+        for x in [90.0 + index * 2.0 for index in range(173)]
+    ]
+    page = _FakePage(
+        chars=[{"text": "가"} for _ in range(40)],
+        images=[],
+        tables=[table],
+        lines=dotted,
+        crop_text={
+            (90, 100, 230, 200): "enzalutamide(30/100)",
+            (90, 200, 230, 360): "enzalutamide\n(제2014-211호: 2014.11.1.)",
+            (230, 100, 390, 200): "상단 투여대상",
+            (230, 200, 390, 360): "하단 투여대상",
+            (390, 100, 435, 200): "1차",
+            (390, 200, 435, 360): "2차 이상",
+        },
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "pdfplumber",
+        SimpleNamespace(open=lambda stream: _FakePdf([page])),
+    )
+
+    parsed = PdfBackend().parse(b"%PDF-1.4 fake", ".pdf")
+
+    rows = parsed.units[0].content["rows"]
+    assert _cell_span_summary(rows) == [
+        [
+            ("c1", "9", 2, 1),
+            ("c2", "enzalutamide(30/100)", 1, 1),
+            ("c3", "상단 투여대상", 1, 1),
+            ("c4", "1차", 1, 1),
+            ("c5", "P, S", 2, 1),
+        ],
+        [
+            ("c2", "enzalutamide (제2014-211호: 2014.11.1.)", 1, 1),
+            ("c3", "하단 투여대상", 1, 1),
+            ("c4", "2차 이상", 1, 1),
+        ],
+    ]
+
+
 def test_pdf_backend_keeps_bullet_subrows_separate(monkeypatch):
     from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 

@@ -1647,6 +1647,7 @@ def _structured_table_from_pdf_table(
         rows=rows,
         header_rows=header_rows if header_rows else None,
     )
+    _split_dotted_subrows(result, page, table, header_depth)
     _repair_table_of_contents(result, page)
     _merge_blank_header_rowspans(result)
     _merge_wrapped_table_rows(result)
@@ -1654,6 +1655,256 @@ def _structured_table_from_pdf_table(
     _promote_ultrasound_code_matrix(result)
     _expand_parallel_code_action_rows(result)
     return result
+
+
+def _split_dotted_subrows(
+    table: dict[str, object],
+    page: object,
+    pdf_table: object,
+    header_depth: int,
+) -> None:
+    columns = table.get("columns")
+    rows = table.get("rows")
+    if not isinstance(columns, list) or not isinstance(rows, list):
+        return
+
+    column_count = len(columns)
+    expanded_rows: list[dict[str, object]] = []
+    changed = False
+    for row_index, row in enumerate(rows):
+        if not isinstance(row, Mapping):
+            continue
+        pdf_row_index = header_depth + row_index
+        row_cells = _pad_row_cells(_row_cells(pdf_table, pdf_row_index), column_count)
+        separators = _dotted_subrow_separators(page, row_cells)
+        if not separators:
+            copied = dict(row)
+            copied["index"] = len(expanded_rows) + 1
+            expanded_rows.append(copied)
+            continue
+
+        split_rows = _split_row_by_subrow_separators(row, page, row_cells, separators)
+        if len(split_rows) <= 1:
+            copied = dict(row)
+            copied["index"] = len(expanded_rows) + 1
+            expanded_rows.append(copied)
+            continue
+        changed = True
+        for split_row in split_rows:
+            split_row["index"] = len(expanded_rows) + 1
+            expanded_rows.append(split_row)
+
+    if changed:
+        table["rows"] = expanded_rows
+
+
+def _dotted_subrow_separators(
+    page: object,
+    row_cells: list[tuple[float, float, float, float] | None],
+    *,
+    y_tolerance: float = 1.0,
+    min_coverage_ratio: float = 0.55,
+) -> list[tuple[float, list[tuple[float, float]]]]:
+    row_bbox = _union_bboxes([cell for cell in row_cells if cell is not None])
+    if row_bbox is None:
+        return []
+    row_left, row_top, row_right, row_bottom = row_bbox
+    row_width = row_right - row_left
+    if row_width <= 0 or row_bottom - row_top <= 12:
+        return []
+
+    groups: list[tuple[float, list[tuple[float, float]]]] = []
+    for line in getattr(page, "lines", []):
+        interval = _horizontal_line_interval(line)
+        if interval is None:
+            continue
+        top, x0, x1 = interval
+        if top <= row_top + 4 or top >= row_bottom - 4:
+            continue
+        if x1 <= row_left or x0 >= row_right:
+            continue
+        clipped = (max(x0, row_left), min(x1, row_right))
+        for index, (group_y, intervals) in enumerate(groups):
+            if abs(top - group_y) <= y_tolerance:
+                intervals.append(clipped)
+                groups[index] = ((group_y + top) / 2, intervals)
+                break
+        else:
+            groups.append((top, [clipped]))
+
+    separators: list[tuple[float, list[tuple[float, float]]]] = []
+    for top, intervals in groups:
+        coverage = _intervals_coverage(intervals)
+        span = _intervals_span(intervals)
+        crossed_columns = _separator_crossed_column_count(top, intervals, row_cells)
+        if (
+            max(coverage, span) / row_width >= min_coverage_ratio
+            and 2 <= crossed_columns < len(row_cells)
+        ):
+            separators.append((top, intervals))
+    return sorted(separators, key=lambda separator: separator[0])
+
+
+def _horizontal_line_interval(line: object) -> tuple[float, float, float] | None:
+    if not isinstance(line, Mapping):
+        return None
+    try:
+        top = float(line.get("top", 0.0))
+        bottom = float(line.get("bottom", top))
+        x0 = float(line.get("x0", 0.0))
+        x1 = float(line.get("x1", 0.0))
+    except (TypeError, ValueError):
+        return None
+    if abs(bottom - top) > 1.0 or x1 <= x0:
+        return None
+    return (top, x0, x1)
+
+
+def _union_bboxes(
+    bboxes: list[tuple[float, float, float, float]],
+) -> tuple[float, float, float, float] | None:
+    if not bboxes:
+        return None
+    return (
+        min(bbox[0] for bbox in bboxes),
+        min(bbox[1] for bbox in bboxes),
+        max(bbox[2] for bbox in bboxes),
+        max(bbox[3] for bbox in bboxes),
+    )
+
+
+def _intervals_coverage(intervals: list[tuple[float, float]]) -> float:
+    if not intervals:
+        return 0.0
+    merged: list[list[float]] = []
+    for start, end in sorted(intervals):
+        if end <= start:
+            continue
+        if not merged or start > merged[-1][1]:
+            merged.append([start, end])
+            continue
+        merged[-1][1] = max(merged[-1][1], end)
+    return sum(end - start for start, end in merged)
+
+
+def _intervals_span(intervals: list[tuple[float, float]]) -> float:
+    intervals = [(start, end) for start, end in intervals if end > start]
+    if not intervals:
+        return 0.0
+    return max(end for _, end in intervals) - min(start for start, _ in intervals)
+
+
+def _split_row_by_subrow_separators(
+    row: dict[str, object],
+    page: object,
+    row_cells: list[tuple[float, float, float, float] | None],
+    separators: list[tuple[float, list[tuple[float, float]]]],
+) -> list[dict[str, object]]:
+    row_bbox = _union_bboxes([cell for cell in row_cells if cell is not None])
+    if row_bbox is None:
+        return [row]
+    band_edges = [row_bbox[1], *[separator[0] for separator in separators], row_bbox[3]]
+    if len(band_edges) < 3:
+        return [row]
+
+    cells = row.get("cells")
+    if not isinstance(cells, list):
+        return [row]
+    if any(
+        isinstance(cell, Mapping) and cell.get("children")
+        for cell in cells
+    ):
+        return [row]
+    cells_by_column = {
+        str(cell.get("column_id")): cell
+        for cell in cells
+        if isinstance(cell, Mapping)
+    }
+
+    split_rows = [{"index": 0, "cells": []} for _ in range(len(band_edges) - 1)]
+    for column_index, cell_bbox in enumerate(row_cells):
+        column_id = f"c{column_index + 1}"
+        cell = cells_by_column.get(column_id)
+        if not isinstance(cell, Mapping):
+            continue
+        if cell_bbox is None or not _cell_is_crossed_by_separator(cell_bbox, separators):
+            copied = dict(cell)
+            copied["rowspan"] = int(copied.get("rowspan", 1) or 1) + len(split_rows) - 1
+            split_rows[0]["cells"].append(copied)
+            continue
+
+        for band_index, (band_top, band_bottom) in enumerate(
+            zip(band_edges[:-1], band_edges[1:], strict=True)
+        ):
+            text = _join_lines(
+                _crop_text(page, cell_bbox[0], band_top, cell_bbox[2], band_bottom)
+            )
+            if not text:
+                continue
+            split_rows[band_index]["cells"].append(
+                {
+                    "column_id": column_id,
+                    "text": text,
+                    "rowspan": 1,
+                    "colspan": int(cell.get("colspan", 1) or 1),
+                    "children": [],
+                }
+            )
+
+    return [
+        split_row
+        for split_row in split_rows
+        if any(_cell_has_content(cell) for cell in split_row["cells"])
+    ]
+
+
+def _cell_is_crossed_by_separator(
+    cell_bbox: tuple[float, float, float, float],
+    separators: list[tuple[float, list[tuple[float, float]]]],
+    *,
+    tolerance: float = 1.0,
+    min_horizontal_ratio: float = 0.5,
+) -> bool:
+    return any(
+        cell_bbox[1] + tolerance < separator < cell_bbox[3] - tolerance
+        and _intervals_overlap_span_ratio(cell_bbox, intervals) >= min_horizontal_ratio
+        for separator, intervals in separators
+    )
+
+
+def _intervals_overlap_span_ratio(
+    cell_bbox: tuple[float, float, float, float],
+    intervals: list[tuple[float, float]],
+) -> float:
+    cell_left, _, cell_right, _ = cell_bbox
+    cell_width = cell_right - cell_left
+    if cell_width <= 0:
+        return 0.0
+    clipped = [
+        (max(start, cell_left), min(end, cell_right))
+        for start, end in intervals
+        if end > cell_left and start < cell_right
+    ]
+    return _intervals_span(clipped) / cell_width
+
+
+def _separator_crossed_column_count(
+    separator: float,
+    intervals: list[tuple[float, float]],
+    row_cells: list[tuple[float, float, float, float] | None],
+    *,
+    tolerance: float = 1.0,
+) -> int:
+    return sum(
+        1
+        for cell_bbox in row_cells
+        if cell_bbox is not None
+        and _cell_is_crossed_by_separator(
+            cell_bbox,
+            [(separator, intervals)],
+            tolerance=tolerance,
+        )
+    )
 
 
 def _merge_blank_header_rowspans(table: dict[str, object]) -> None:
