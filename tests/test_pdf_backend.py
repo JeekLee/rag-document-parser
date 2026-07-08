@@ -1063,6 +1063,62 @@ def test_pdf_backend_restores_pdf_body_rowspans_from_missing_slots(monkeypatch):
     ] == [("c3", "추가 답변", 1, 1)]
 
 
+def test_pdf_backend_keeps_extracted_values_in_covered_vertical_slots(monkeypatch):
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
+
+    table = _FakeTable(
+        bbox=(0.0, 80.0, 300.0, 180.0),
+        row_cells=[
+            [
+                (0.0, 80.0, 40.0, 100.0),
+                (40.0, 80.0, 210.0, 100.0),
+                (210.0, 80.0, 300.0, 100.0),
+            ],
+            [
+                (0.0, 100.0, 40.0, 180.0),
+                (40.0, 100.0, 210.0, 125.0),
+                (210.0, 100.0, 300.0, 180.0),
+            ],
+            [
+                None,
+                (40.0, 125.0, 210.0, 150.0),
+                None,
+            ],
+            [
+                None,
+                (40.0, 150.0, 210.0, 180.0),
+                None,
+            ],
+        ],
+        extracted=[
+            ["연번", "항암요법", "투여요법"],
+            ["8", "enzalutamide + ADT", "P"],
+            ["9", "enzalutamide(30/100)", "P, S"],
+            ["10", "abiraterone", "S"],
+        ],
+    )
+    page = _FakePage(chars=[{"text": "가"} for _ in range(40)], images=[], tables=[table])
+    monkeypatch.setitem(
+        sys.modules,
+        "pdfplumber",
+        SimpleNamespace(open=lambda stream: _FakePdf([page])),
+    )
+
+    parsed = PdfBackend().parse(b"%PDF-1.4 fake", ".pdf")
+
+    rows = parsed.units[0].content["rows"]
+    assert [
+        [cell["text"] for cell in row["cells"]]
+        for row in rows
+    ] == [
+        ["8", "enzalutamide + ADT", "P"],
+        ["9", "enzalutamide(30/100)", "P, S"],
+        ["10", "abiraterone", "S"],
+    ]
+    assert rows[0]["cells"][0]["rowspan"] == 1
+    assert rows[0]["cells"][2]["rowspan"] == 1
+
+
 def test_pdf_backend_uses_semantic_source_label_for_mixed_colspan_headers():
     from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
 
@@ -1257,6 +1313,137 @@ def test_pdf_backend_merges_wrapped_table_rows(monkeypatch):
         "다. 그 밖의 세부 기준"
     )
     assert parsed.units[0].metadata["table"]["row_count"] == 1
+
+
+def test_pdf_backend_does_not_merge_all_rows_when_leading_column_is_empty(monkeypatch):
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
+
+    table = _FakeTable(
+        bbox=(0.0, 80.0, 300.0, 180.0),
+        row_cells=[
+            [
+                (0.0, 80.0, 40.0, 100.0),
+                (40.0, 80.0, 220.0, 100.0),
+                (220.0, 80.0, 300.0, 100.0),
+            ],
+            [
+                (0.0, 100.0, 40.0, 125.0),
+                (40.0, 100.0, 220.0, 125.0),
+                (220.0, 100.0, 300.0, 125.0),
+            ],
+            [
+                (0.0, 125.0, 40.0, 150.0),
+                (40.0, 125.0, 220.0, 150.0),
+                (220.0, 125.0, 300.0, 150.0),
+            ],
+            [
+                (0.0, 150.0, 40.0, 180.0),
+                (40.0, 150.0, 220.0, 180.0),
+                (220.0, 150.0, 300.0, 180.0),
+            ],
+        ],
+        extracted=[
+            ["연번", "항암요법", "투여요법"],
+            ["", "enzalutamide + ADT", "P"],
+            ["", "enzalutamide(30/100)", "P, S"],
+            ["", "abiraterone", "S"],
+        ],
+    )
+    page = _FakePage(chars=[{"text": "가"} for _ in range(40)], images=[], tables=[table])
+    monkeypatch.setitem(
+        sys.modules,
+        "pdfplumber",
+        SimpleNamespace(open=lambda stream: _FakePdf([page])),
+    )
+
+    parsed = PdfBackend().parse(b"%PDF-1.4 fake", ".pdf")
+
+    rows = parsed.units[0].content["rows"]
+    assert [
+        [cell["text"] for cell in row["cells"]]
+        for row in rows
+    ] == [
+        ["", "enzalutamide + ADT", "P"],
+        ["", "enzalutamide(30/100)", "P, S"],
+        ["", "abiraterone", "S"],
+    ]
+    assert parsed.units[0].metadata["table"]["row_count"] == 3
+
+
+def test_pdf_backend_fills_blank_cells_from_pymupdf_table_extract(monkeypatch):
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
+
+    table = _FakeTable(
+        bbox=(60.0, 80.0, 480.0, 180.0),
+        row_cells=[
+            [
+                (60.0, 80.0, 90.0, 100.0),
+                (90.0, 80.0, 230.0, 100.0),
+                (230.0, 80.0, 390.0, 100.0),
+                (390.0, 80.0, 435.0, 100.0),
+                (435.0, 80.0, 480.0, 100.0),
+            ],
+            [
+                None,
+                (90.0, 100.0, 230.0, 125.0),
+                (230.0, 100.0, 390.0, 125.0),
+                (390.0, 100.0, 435.0, 125.0),
+                None,
+            ],
+            [
+                None,
+                (90.0, 125.0, 230.0, 150.0),
+                (230.0, 125.0, 390.0, 150.0),
+                (390.0, 125.0, 435.0, 150.0),
+                None,
+            ],
+            [
+                None,
+                (90.0, 150.0, 230.0, 180.0),
+                (230.0, 150.0, 390.0, 180.0),
+                (390.0, 150.0, 435.0, 180.0),
+                None,
+            ],
+        ],
+        extracted=[
+            ["연번", "항암요법", "투여대상", "투여단계", "투여요법"],
+            ["", "enzalutamide + ADT", "전립선암", "1차", ""],
+            ["", "enzalutamide(30/100)", "전립선암", "1차 2차 이상", ""],
+            ["", "abiraterone", "전립선암", "1차", ""],
+        ],
+    )
+    page = _FakePage(chars=[{"text": "가"} for _ in range(40)], images=[], tables=[table])
+    monkeypatch.setitem(
+        sys.modules,
+        "pdfplumber",
+        SimpleNamespace(open=lambda stream: _FakePdf([page])),
+    )
+    monkeypatch.setattr(
+        pdf_backend,
+        "_pymupdf_table_rows_by_pdfplumber_index",
+        lambda data, page_idx, tables: {
+            0: [
+                ["연번", "항암요법", "투여대상", "투여단계", "투여요법"],
+                ["8", "enzalutamide + ADT", "전립선암", "1차", "P"],
+                ["9", "enzalutamide(30/100)", "전립선암", "1차 2차 이상", "P, S"],
+                ["10", "abiraterone", "전립선암", "1차", "P"],
+            ]
+        },
+        raising=False,
+    )
+
+    parsed = PdfBackend().parse(b"%PDF-1.4 fake", ".pdf")
+
+    rows = parsed.units[0].content["rows"]
+    assert [
+        [cell["text"] for cell in row["cells"]]
+        for row in rows
+    ] == [
+        ["8", "enzalutamide + ADT", "전립선암", "1차", "P"],
+        ["9", "enzalutamide(30/100)", "전립선암", "1차 2차 이상", "P, S"],
+        ["10", "abiraterone", "전립선암", "1차", "P"],
+    ]
 
 
 def test_pdf_backend_keeps_bullet_subrows_separate(monkeypatch):

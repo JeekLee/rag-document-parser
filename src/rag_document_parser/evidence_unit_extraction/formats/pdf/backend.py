@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import io
 import base64
 import json
@@ -126,6 +127,11 @@ class PdfBackend:
                     continue
 
                 tables = _find_tables(page, warnings, page_idx)
+                table_text_fallbacks = (
+                    _pymupdf_table_rows_by_pdfplumber_index(data, page_idx, tables)
+                    if _needs_pymupdf_blank_cell_fallback(tables)
+                    else {}
+                )
                 img_items: list[tuple[float, object]] = []
                 if getattr(page, "images", None):
                     try:
@@ -194,6 +200,7 @@ class PdfBackend:
                         image_segments,
                         diagram_segments,
                         cell_image_children,
+                        table_text_fallbacks,
                     )
                 )
 
@@ -277,6 +284,138 @@ def _find_tables(page: object, warnings: list[dict[str, Any]], page_idx: int) ->
             }
         )
         return []
+
+
+def _needs_pymupdf_blank_cell_fallback(tables: list[object]) -> bool:
+    for table in tables:
+        rows = _table_rows(table)
+        if len(rows) < 2:
+            continue
+        column_count = max((len(row) for row in rows), default=0)
+        if column_count < 2:
+            continue
+        header = _pad_row(rows[0], column_count)
+        for column_index in (0, column_count - 1):
+            if not header[column_index].strip():
+                continue
+            for row in rows[1:]:
+                padded = _pad_row(row, column_count)
+                if not any(cell.strip() for cell in padded):
+                    continue
+                if not padded[column_index].strip():
+                    return True
+    return False
+
+
+def _pymupdf_table_rows_by_pdfplumber_index(
+    data: bytes,
+    page_idx: int,
+    pdfplumber_tables: list[object],
+) -> dict[int, list[list[str]]]:
+    if not pdfplumber_tables:
+        return {}
+    try:
+        import fitz
+    except ImportError:
+        return {}
+
+    try:
+        with fitz.open(stream=data, filetype="pdf") as doc:
+            page = doc.load_page(page_idx)
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                table_finder = page.find_tables()
+            pymupdf_tables = list(getattr(table_finder, "tables", table_finder) or [])
+    except Exception:
+        return {}
+
+    candidates: list[tuple[int, object, list[list[str]]]] = []
+    for candidate_idx, table in enumerate(pymupdf_tables):
+        rows = _pymupdf_table_rows(table)
+        if rows:
+            candidates.append((candidate_idx, table, rows))
+
+    result: dict[int, list[list[str]]] = {}
+    used: set[int] = set()
+    for pdfplumber_idx, table in enumerate(pdfplumber_tables):
+        match = _best_pymupdf_table_match(table, candidates, used)
+        if match is None:
+            continue
+        used.add(candidates[match][0])
+        result[pdfplumber_idx] = candidates[match][2]
+    return result
+
+
+def _pymupdf_table_rows(table: object) -> list[list[str]]:
+    try:
+        rows = table.extract() or []
+    except Exception:
+        return []
+    result: list[list[str]] = []
+    for row in rows:
+        if row is None:
+            continue
+        result.append([_clean_cell(cell) for cell in row])
+    return result
+
+
+def _best_pymupdf_table_match(
+    pdfplumber_table: object,
+    candidates: list[tuple[int, object, list[list[str]]]],
+    used: set[int],
+) -> int | None:
+    raw_rows = _table_rows(pdfplumber_table)
+    if not raw_rows:
+        return None
+    pdfplumber_bbox = _coerce_bbox(getattr(pdfplumber_table, "bbox", None))
+    best_index: int | None = None
+    best_score = 0.0
+    for candidate_list_index, (candidate_idx, table, rows) in enumerate(candidates):
+        if candidate_idx in used:
+            continue
+        if not _fallback_rows_are_compatible(raw_rows, rows):
+            continue
+        candidate_bbox = _coerce_bbox(getattr(table, "bbox", None))
+        score = _bbox_overlap_ratio(pdfplumber_bbox, candidate_bbox)
+        if score > best_score:
+            best_index = candidate_list_index
+            best_score = score
+
+    if best_index is None:
+        compatible = [
+            candidate_list_index
+            for candidate_list_index, (candidate_idx, _table, rows) in enumerate(candidates)
+            if candidate_idx not in used
+            and _fallback_rows_are_compatible(raw_rows, rows)
+        ]
+        return compatible[0] if len(compatible) == 1 else None
+    return best_index if best_score >= 0.5 else None
+
+
+def _coerce_bbox(value: object) -> tuple[float, float, float, float] | None:
+    if not isinstance(value, (tuple, list)) or len(value) != 4:
+        return None
+    try:
+        return tuple(float(part) for part in value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _bbox_overlap_ratio(
+    first: tuple[float, float, float, float] | None,
+    second: tuple[float, float, float, float] | None,
+) -> float:
+    if first is None or second is None:
+        return 0.0
+    left = max(first[0], second[0])
+    top = max(first[1], second[1])
+    right = min(first[2], second[2])
+    bottom = min(first[3], second[3])
+    intersection = max(0.0, right - left) * max(0.0, bottom - top)
+    smaller_area = min(_bbox_area(first), _bbox_area(second))
+    return intersection / smaller_area if smaller_area else 0.0
 
 
 def _append_pdf_image_asset(
@@ -698,6 +837,7 @@ def _page_segments_ordered(
     image_segments: list[_Segment],
     diagram_segments: list[_Segment],
     cell_image_children: dict[int, dict[tuple[int, int], list[dict[str, object]]]],
+    table_text_fallbacks: dict[int, list[list[str]]] | None = None,
 ) -> list[_Segment]:
     segments: list[_Segment] = []
     nested = _resolve_nested_tables(tables)
@@ -711,6 +851,7 @@ def _page_segments_ordered(
             nested,
             seen=set(),
             cell_image_children=cell_image_children,
+            fallback_rows=(table_text_fallbacks or {}).get(table_idx),
         )
         if structured is None:
             continue
@@ -1437,6 +1578,7 @@ def _structured_table_from_pdf_table(
     seen: set[int],
     *,
     cell_image_children: dict[int, dict[tuple[int, int], list[dict[str, object]]]] | None = None,
+    fallback_rows: list[list[str]] | None = None,
 ) -> dict[str, object] | None:
     if table_idx in seen:
         return None
@@ -1444,6 +1586,7 @@ def _structured_table_from_pdf_table(
     raw_rows = _table_rows(table)
     if not raw_rows:
         return None
+    raw_rows = _fill_blank_cells_from_fallback_rows(raw_rows, fallback_rows)
     raw_rows = _trim_empty_trailing_columns(raw_rows)
     column_count = max((len(row) for row in raw_rows), default=0)
     if column_count == 0:
@@ -1458,6 +1601,7 @@ def _structured_table_from_pdf_table(
         table,
         row_count=len(normalized_rows),
         column_count=column_count,
+        raw_rows=normalized_rows,
     )
     header_rows: list[dict[str, object]] = []
     for header_index, raw_row in enumerate(normalized_rows[:header_depth]):
@@ -1565,6 +1709,8 @@ def _merge_wrapped_table_rows(table: dict[str, object]) -> None:
     rows = table.get("rows")
     if not isinstance(rows, list) or len(rows) < 2:
         return
+    if not _has_leading_column_content(rows):
+        return
 
     merged: list[dict[str, object]] = []
     for row in rows:
@@ -1577,6 +1723,23 @@ def _merge_wrapped_table_rows(table: dict[str, object]) -> None:
         merged.append(row)
 
     table["rows"] = merged
+
+
+def _has_leading_column_content(rows: list[object]) -> bool:
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        cells = row.get("cells")
+        if not isinstance(cells, list):
+            continue
+        for cell in cells:
+            if (
+                isinstance(cell, Mapping)
+                and str(cell.get("column_id", "")) == "c1"
+                and _cell_has_content(cell)
+            ):
+                return True
+    return False
 
 
 def _is_table_of_contents(table: dict[str, object]) -> bool:
@@ -2163,6 +2326,7 @@ def _table_cell_spans(
     *,
     row_count: int,
     column_count: int,
+    raw_rows: list[list[str]] | None = None,
 ) -> _TableCellSpans:
     cell_rows = [
         _pad_row_cells(_row_cells(table, row_index), column_count)
@@ -2186,6 +2350,12 @@ def _table_cell_spans(
                 bbox,
                 column_boundaries,
             )
+            colspan = _limit_span_colspan_by_extracted_text(
+                raw_rows,
+                row_index,
+                column_index,
+                colspan,
+            )
             rowspan = _pdf_cell_rowspan(
                 cell_rows,
                 row_bottoms,
@@ -2193,6 +2363,13 @@ def _table_cell_spans(
                 column_index,
                 colspan,
                 bbox,
+            )
+            rowspan = _limit_span_rowspan_by_extracted_text(
+                raw_rows,
+                row_index,
+                column_index,
+                rowspan,
+                colspan,
             )
             spans[(row_index, column_index)] = (rowspan, colspan)
             for covered_row in range(row_index, row_index + rowspan):
@@ -2203,6 +2380,74 @@ def _table_cell_spans(
                     if _slot_is_covered_by_cell(covered_bbox, bbox):
                         covered.add((covered_row, covered_column))
     return _TableCellSpans(spans=spans, covered=covered)
+
+
+def _limit_span_colspan_by_extracted_text(
+    raw_rows: list[list[str]] | None,
+    row_index: int,
+    column_index: int,
+    colspan: int,
+) -> int:
+    if colspan <= 1:
+        return colspan
+    for covered_column in range(column_index + 1, column_index + colspan):
+        if _covered_slot_has_distinct_extracted_text(
+            raw_rows,
+            row_index,
+            column_index,
+            row_index,
+            covered_column,
+        ):
+            return covered_column - column_index
+    return colspan
+
+
+def _limit_span_rowspan_by_extracted_text(
+    raw_rows: list[list[str]] | None,
+    row_index: int,
+    column_index: int,
+    rowspan: int,
+    colspan: int,
+) -> int:
+    if rowspan <= 1:
+        return rowspan
+    for covered_row in range(row_index + 1, row_index + rowspan):
+        for covered_column in range(column_index, column_index + colspan):
+            if _covered_slot_has_distinct_extracted_text(
+                raw_rows,
+                row_index,
+                column_index,
+                covered_row,
+                covered_column,
+            ):
+                return covered_row - row_index
+    return rowspan
+
+
+def _covered_slot_has_distinct_extracted_text(
+    raw_rows: list[list[str]] | None,
+    anchor_row: int,
+    anchor_column: int,
+    covered_row: int,
+    covered_column: int,
+) -> bool:
+    if raw_rows is None:
+        return False
+    covered_text = _span_extracted_text(raw_rows, covered_row, covered_column)
+    if not covered_text:
+        return False
+    anchor_text = _span_extracted_text(raw_rows, anchor_row, anchor_column)
+    return covered_text != anchor_text
+
+
+def _span_extracted_text(
+    raw_rows: list[list[str]],
+    row_index: int,
+    column_index: int,
+) -> str:
+    if row_index >= len(raw_rows) or column_index >= len(raw_rows[row_index]):
+        return ""
+    return _normalize_header_text(raw_rows[row_index][column_index])
 
 
 def _pad_row_cells(
@@ -2538,6 +2783,62 @@ def _table_rows(table: object) -> list[list[str]]:
             continue
         result.append([_clean_cell(cell) for cell in row])
     return result
+
+
+def _fill_blank_cells_from_fallback_rows(
+    rows: list[list[str]],
+    fallback_rows: list[list[str]] | None,
+) -> list[list[str]]:
+    if fallback_rows is None or not _fallback_rows_are_compatible(rows, fallback_rows):
+        return rows
+
+    column_count = max((len(row) for row in rows), default=0)
+    merged: list[list[str]] = []
+    for row, fallback_row in zip(rows, fallback_rows, strict=True):
+        padded = _pad_row(row, column_count)
+        fallback_padded = _pad_row(
+            [_clean_cell(cell) for cell in fallback_row],
+            column_count,
+        )
+        merged.append(
+            [
+                padded[index] if padded[index].strip() else fallback_padded[index]
+                for index in range(column_count)
+            ]
+        )
+    return merged
+
+
+def _fallback_rows_are_compatible(
+    rows: list[list[str]],
+    fallback_rows: list[list[str]],
+) -> bool:
+    if not rows or len(rows) != len(fallback_rows):
+        return False
+    column_count = max((len(row) for row in rows), default=0)
+    fallback_column_count = max((len(row) for row in fallback_rows), default=0)
+    if column_count == 0 or column_count != fallback_column_count:
+        return False
+    return _table_headers_are_compatible(
+        _pad_row(rows[0], column_count),
+        _pad_row([_clean_cell(cell) for cell in fallback_rows[0]], column_count),
+    )
+
+
+def _table_headers_are_compatible(
+    headers: list[str],
+    fallback_headers: list[str],
+) -> bool:
+    shared = 0
+    for header, fallback_header in zip(headers, fallback_headers, strict=True):
+        normalized = _normalize_header_text(header)
+        fallback_normalized = _normalize_header_text(fallback_header)
+        if not normalized or not fallback_normalized:
+            continue
+        if normalized != fallback_normalized:
+            return False
+        shared += 1
+    return shared > 0
 
 
 def _trim_empty_trailing_columns(rows: list[list[str]]) -> list[list[str]]:
