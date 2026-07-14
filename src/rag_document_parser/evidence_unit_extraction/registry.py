@@ -5,6 +5,7 @@ from .formats.hwp5 import Hwp5Backend
 from .formats.html import HtmlBackend
 from .formats.hwpx import HwpxBackend
 from .formats.pdf import PdfBackend
+from .formats.xlsx import XlsxBackend
 
 
 def default_backends() -> dict[str, DocumentBackend]:
@@ -12,10 +13,12 @@ def default_backends() -> dict[str, DocumentBackend]:
     html_backend = HtmlBackend()
     hwpx_backend = HwpxBackend()
     pdf_backend = PdfBackend()
+    xlsx_backend = XlsxBackend()
     return {
         ".hwp": hwp5_backend,
         ".html": html_backend,
         ".htm": html_backend,
         ".hwpx": hwpx_backend,
         ".pdf": pdf_backend,
+        ".xlsx": xlsx_backend,
     }
