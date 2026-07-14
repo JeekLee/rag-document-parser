@@ -1,8 +1,8 @@
 # rag-document-parser
 
 RAG-ready document parser for producing source-preserving evidence units,
-structured evidence payloads, and final retrieval chunks from HWP, HWPX, PDF,
-Markdown, and plain text documents.
+structured evidence payloads, and final retrieval chunks from HWP, HWPX, XLSX,
+PDF, Markdown, and plain text documents.
 
 The parser is not a Markdown converter. Its primary output is a typed evidence
 contract that downstream systems can use for indexing, retrieval, LLM grounding,
@@ -143,6 +143,7 @@ Built-in parser suffixes:
 - `.html`, `.htm`: HTML backend.
 - `.hwpx`: HWPX backend.
 - `.hwp`: HWP5 backend.
+- `.xlsx`: Excel workbook backend.
 - `.pdf`: PDF backend.
 
 Markdown/text suffixes (`.md`, `.markdown`, `.txt`) are disabled in the built-in
@@ -155,6 +156,7 @@ Current extraction behavior by format:
 | HTML | yes | yes | yes | embedded data URI images | no | no |
 | HWPX | yes | yes | yes | yes | yes | optional `ocr_fn` fallback |
 | HWP5 | yes | yes | yes | yes | yes | optional `ocr_fn` fallback |
+| XLSX | yes | yes | no | no | no | no |
 | PDF | yes | yes | yes | yes | vector/fallback diagrams | local or vision OCR |
 
 Notes:
@@ -164,8 +166,9 @@ Notes:
 - Binary assets are uploaded to S3-compatible object storage by
   `RagDocumentParser` and represented as `asset_ref` evidence instead of being
   embedded into text or content payloads.
-- Backend classes such as `HwpxBackend`, `Hwp5Backend`, and `PdfBackend` return
-  `ParsedDocument` directly and do not upload assets by themselves.
+- Backend classes such as `HwpxBackend`, `Hwp5Backend`, `XlsxBackend`, and
+  `PdfBackend` return `ParsedDocument` directly and do not upload assets by
+  themselves.
 
 ## Package Layout
 
@@ -184,6 +187,7 @@ src/rag_document_parser/
       markdown/  # internal, not registered by default in 0.6.0
       hwpx/
       hwp5/
+      xlsx/
       pdf/
   chunk/
     backend.py
@@ -247,6 +251,7 @@ Install only the format dependencies you need:
 
 ```bash
 uv sync --extra hwp5
+uv sync --extra xlsx
 uv sync --extra pdf
 uv sync --extra pdf-ocr
 ```
@@ -261,6 +266,49 @@ uv run pytest -q
 `pdf-ocr` installs Python bindings for local OCR fallback. The host still needs
 the local Tesseract binary, Korean language data, and Poppler when
 pytesseract/pdf2image OCR fallback is used.
+
+`xlsx` installs `openpyxl` for workbook reading, `defusedxml` for hardened XML
+parsing, and Pillow so embedded images can be detected and reported as
+unsupported instead of being silently dropped by the workbook reader.
+
+## XLSX
+
+Install the optional extra in a consuming project with
+`pip install "rag-document-parser[xlsx]"`. Parse workbook bytes through the
+normal public parser with `suffix=".xlsx"`, or use `XlsxBackend` directly when
+asset upload is not needed:
+
+```python
+from pathlib import Path
+
+from rag_document_parser import XlsxBackend
+
+document = XlsxBackend().parse(Path("workbook.xlsx").read_bytes(), ".xlsx")
+```
+
+The backend emits sheet prose as text units and detected data regions as
+structured tables. Table detection uses declared Excel tables/filters plus
+header heuristics; one-row, one-column, or ambiguous regions remain text. It
+keeps adjacent and headerless declared tables distinct, and prevents surrounding
+inferred regions from duplicating their cells. It preserves sheet/range
+coordinates, multi-row headers, merged-cell spans, cached formula values,
+formula expressions, hyperlinks, and hidden state. Formulas are never
+recalculated: cached values are the workbook's last saved results and may be
+stale, while a missing cache falls back to the expression with a quality
+warning. Hidden sheets, rows, and columns are included by default, which should
+be considered when indexing sensitive workbooks.
+
+Before normal workbook loading, ZIP size/member checks and streaming XML
+preflight require one standard `/xl/workbook.xml` part, reject ambiguous package
+relationships, and cap sheets, relationships, physical cells, merged
+footprints, hyperlink ranges, and comment-linked cells.
+`XlsxBackend` exposes `max_uncompressed_bytes`, `max_archive_members`,
+`max_cells`, and `max_worksheets` for deployment-specific limits. For hostile
+public uploads, combine conservative values with process memory/time limits.
+
+Legacy `.xls`, binary `.xlsb`, macro-enabled `.xlsm`, charts, drawings, and
+images are not extracted by this backend. Charts/images that the reader can
+identify are reported through quality warnings.
 
 ## OCR
 

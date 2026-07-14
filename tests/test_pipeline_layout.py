@@ -20,6 +20,7 @@ def test_pipeline_layout_exports_stage_and_format_modules():
         QwenLlmConfig,
         RagChunkEnricher,
         RagDocumentParser,
+        XlsxBackend,
     )
     from rag_document_parser.chunk import EvidenceUnitAgenticChunker as StageAgenticChunker
     from rag_document_parser.chunk.backend import Chunker
@@ -38,6 +39,9 @@ def test_pipeline_layout_exports_stage_and_format_modules():
     from rag_document_parser.evidence_unit_extraction.formats.pdf.backend import (
         PdfBackend as StagePdfBackend,
     )
+    from rag_document_parser.evidence_unit_extraction.formats.xlsx.backend import (
+        XlsxBackend as StageXlsxBackend,
+    )
     from rag_document_parser.evidence_unit_extraction.registry import default_backends
     from rag_document_parser.models import ParsedDocument
     from rag_document_parser.pipeline.parser import RagDocumentParser as StageParser
@@ -49,6 +53,7 @@ def test_pipeline_layout_exports_stage_and_format_modules():
     assert StageHtmlBackend is HtmlBackend
     assert StageHwpxBackend is HwpxBackend
     assert StagePdfBackend is PdfBackend
+    assert StageXlsxBackend is XlsxBackend
     assert not hasattr(rag_document_parser, "MarkdownBackend")
     assert not hasattr(rag_document_parser, "PdfOcrConfig")
     assert not hasattr(pdf_format, "PdfOcrConfig")
@@ -68,11 +73,13 @@ def test_pipeline_layout_exports_stage_and_format_modules():
     assert Hwp5Backend.supported_suffixes == (".hwp",)
     assert HtmlBackend.supported_suffixes == (".html", ".htm")
     assert PdfBackend.supported_suffixes == (".pdf",)
+    assert XlsxBackend.supported_suffixes == (".xlsx",)
     assert isinstance(backends[".hwp"], Hwp5Backend)
     assert isinstance(backends[".html"], HtmlBackend)
     assert isinstance(backends[".htm"], HtmlBackend)
     assert isinstance(backends[".hwpx"], HwpxBackend)
     assert isinstance(backends[".pdf"], PdfBackend)
+    assert isinstance(backends[".xlsx"], XlsxBackend)
     assert ".markdown" not in backends
     assert ".md" not in backends
     assert ".txt" not in backends

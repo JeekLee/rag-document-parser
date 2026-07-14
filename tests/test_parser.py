@@ -119,6 +119,45 @@ def test_parse_result_to_dict_is_json_serializable():
     assert json.loads(json.dumps(payload, ensure_ascii=False)) == payload
 
 
+def test_parser_routes_uppercase_xlsx_and_preserves_source_metadata():
+    from io import BytesIO
+
+    from openpyxl import Workbook
+
+    from rag_document_parser import RagDocumentParser
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Benefits"
+    sheet.append(["Item", "Amount"])
+    sheet.append(["Clinic", 1000])
+    output = BytesIO()
+    workbook.save(output)
+    raw = output.getvalue()
+
+    result = RagDocumentParser(object_storage=_s3_config()).parse(
+        raw,
+        suffix=".XLSX",
+        source_id="benefits-2026",
+        source_name="benefits.xlsx",
+    )
+
+    assert result.source.suffix == ".xlsx"
+    assert result.source.sha256 == hashlib.sha256(raw).hexdigest()
+    assert result.source.bytes == len(raw)
+    assert result.source.id == "benefits-2026"
+    assert result.source.name == "benefits.xlsx"
+    assert result.assets == []
+    assert [unit.type for unit in result.units] == ["table"]
+    table = result.units[0]
+    assert [column["text"] for column in table.content["columns"]] == [
+        "Item",
+        "Amount",
+    ]
+    assert table.content["rows"][0]["cells"][0]["text"] == "Clinic"
+    assert table.metadata["spreadsheet"]["sheet_name"] == "Benefits"
+
+
 def test_source_does_not_require_position_offsets():
     from rag_document_parser import RagDocumentParser
 

@@ -6,6 +6,7 @@ from .evidence_unit_extraction.formats.hwp5 import Hwp5Backend
 from .evidence_unit_extraction.formats.html import HtmlBackend
 from .evidence_unit_extraction.formats.hwpx import HwpxBackend
 from .evidence_unit_extraction.formats.pdf import PdfBackend
+from .evidence_unit_extraction.formats.xlsx import XlsxBackend
 from .llm import GeminiLlmConfig, GemmaLlmConfig, LlmConfig, QwenLlmConfig
 from .models import (
     AssetRefContent,
@@ -60,6 +61,7 @@ __all__ = [
     "LlmConfig",
     "PendingAsset",
     "PdfBackend",
+    "XlsxBackend",
     "QwenLlmConfig",
     "ParseResult",
     "RagChunkEnricher",
