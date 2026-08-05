@@ -244,6 +244,104 @@ def _single_row_table_unit(id: str):
     )
 
 
+def _image_unit(id: str, asset_id: str):
+    from rag_document_parser import EvidenceUnit, SourceEvidence
+
+    return EvidenceUnit(
+        id=id,
+        type="image",
+        format="asset_ref",
+        source=SourceEvidence(kind="image", text=f"image: {asset_id}"),
+        content={"asset_id": asset_id},
+        metadata={
+            "common": {
+                "chunk_kind": "image",
+                "section_path": [],
+                "display_format": "asset_ref",
+            },
+            "asset": {"asset_id": asset_id},
+        },
+    )
+
+
+def _diagram_unit(id: str, marker: str):
+    from rag_document_parser import EvidenceUnit, SourceEvidence
+
+    first_node = f"{marker}-node-a"
+    second_node = f"{marker}-node-b"
+    edge_label = f"{marker}-edge"
+    return EvidenceUnit(
+        id=id,
+        type="diagram",
+        format="structured_diagram",
+        source=SourceEvidence(
+            kind="diagram",
+            text=(
+                f"{first_node}\n{second_node}\n"
+                f"relations:\nn1 -> n2: {edge_label}"
+            ),
+        ),
+        content={
+            "nodes": [
+                {
+                    "id": "n1",
+                    "shape_type": "rectangle",
+                    "text": first_node,
+                },
+                {
+                    "id": "n2",
+                    "shape_type": "rectangle",
+                    "text": second_node,
+                },
+            ],
+            "edges": [
+                {
+                    "from": "n1",
+                    "to": "n2",
+                    "label": edge_label,
+                }
+            ],
+        },
+        metadata={
+            "common": {
+                "chunk_kind": "diagram",
+                "section_path": [],
+                "display_format": "structured_diagram",
+            },
+            "diagram": {"confidence": "high"},
+        },
+    )
+
+
+def _chunk_units_together(
+    units,
+    *,
+    target_tokens_per_chunk: int = 45,
+    max_tokens_per_chunk: int = 90,
+):
+    from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+
+    unit_ids = [unit.id for unit in units]
+
+    def plan_fn(window, cfg, max_units):
+        return [
+            {
+                "unit_ids": unit_ids,
+                "operations": [
+                    {"unit_id": unit_id, "action": "include"}
+                    for unit_id in unit_ids
+                ],
+            }
+        ]
+
+    return EvidenceUnitAgenticChunker(
+        llm=None,
+        plan_fn=plan_fn,
+        target_tokens_per_chunk=target_tokens_per_chunk,
+        max_tokens_per_chunk=max_tokens_per_chunk,
+    ).chunk(units)
+
+
 def test_agentic_chunker_uses_llm_prompt_when_no_plan_fn(monkeypatch):
     from rag_document_parser import LlmConfig
     from rag_document_parser.chunk import EvidenceUnitAgenticChunker
@@ -1369,6 +1467,142 @@ def test_agentic_chunker_splits_large_table_by_token_budget_rows():
     assert "row 1:" in chunks[0].source.text
     assert "row 6:" in chunks[-1].source.text
     assert chunks[0].metadata["_warnings"][0]["type"] == "agentic_table_split_by_token_budget"
+
+
+def test_agentic_chunker_preserves_pending_table_source_when_splitting_large_table():
+    marker = "docetaxel-only-in-pending-table"
+    pending_table = _table_unit_with_text("small", marker)
+    repeated = " ".join(["의료급여", "심사결정", "본인부담금", "청구금액"] * 5)
+    large_table = _table_unit_with_rows(
+        "large",
+        [f"{repeated} {index}" for index in range(1, 7)],
+    )
+
+    chunks = _chunk_units_together([pending_table, large_table])
+
+    assert len(chunks) > 1
+    assert [item.source_unit_ids for item in chunks[0].evidence.items] == [
+        ["small"],
+        ["large"],
+    ]
+    assert marker in chunks[0].source.text
+    for chunk in chunks:
+        table_item = next(item for item in chunk.evidence.items if item.type == "table")
+        for row in table_item.content["rows"]:
+            assert f"항목: 항목 {row['index']}" in chunk.source.text
+
+
+def test_agentic_chunker_preserves_pending_image_source_when_splitting_large_table():
+    asset_id = "img-pending-before-table"
+    image = _image_unit("img1", asset_id)
+    repeated = " ".join(["의료급여", "심사결정", "본인부담금", "청구금액"] * 5)
+    large_table = _table_unit_with_rows(
+        "large",
+        [f"{repeated} {index}" for index in range(1, 7)],
+    )
+
+    chunks = _chunk_units_together([image, large_table])
+
+    assert len(chunks) > 1
+    assert [item.source_unit_ids for item in chunks[0].evidence.items] == [
+        ["img1"],
+        ["large"],
+    ]
+    assert f"image: {asset_id}" in chunks[0].source.text
+
+
+def test_agentic_chunker_preserves_all_text_context_when_splitting_large_table():
+    first_marker = "first-long-context-marker"
+    later_marker = "later-long-context-marker"
+    units = [
+        _text_unit("t1", "첫 번째 긴 문맥 " * 180 + first_marker),
+        _text_unit("t2", "두 번째 긴 문맥 " * 40 + later_marker),
+    ]
+    repeated = " ".join(["의료급여", "심사결정", "본인부담금", "청구금액"] * 5)
+    large_table = _table_unit_with_rows(
+        "large",
+        [f"{repeated} {index}" for index in range(1, 4)],
+    )
+    units.append(large_table)
+
+    chunks = _chunk_units_together(units)
+
+    assert len(chunks) > 1
+    assert [item.source_unit_ids for item in chunks[0].evidence.items] == [
+        ["t1"],
+        ["t2"],
+        ["large"],
+    ]
+    assert all(first_marker in chunk.source.text for chunk in chunks)
+    assert all(later_marker in chunk.source.text for chunk in chunks)
+    for chunk in chunks:
+        table_item = next(item for item in chunk.evidence.items if item.type == "table")
+        assert any(
+            warning["type"] == "agentic_table_row_group_exceeds_max_tokens"
+            for warning in table_item.metadata["_warnings"]
+        )
+        assert any(
+            warning["type"] == "agentic_chunk_exceeds_max_tokens"
+            for warning in chunk.metadata["_warnings"]
+        )
+
+
+def test_agentic_chunker_preserves_pending_diagram_source_when_splitting_large_table():
+    marker = "diagram-semantic-node-marker"
+    diagram = _diagram_unit("diagram1", marker)
+    repeated = " ".join(["의료급여", "심사결정", "본인부담금", "청구금액"] * 5)
+    large_table = _table_unit_with_rows(
+        "large",
+        [f"{repeated} {index}" for index in range(1, 7)],
+    )
+
+    chunks = _chunk_units_together([diagram, large_table])
+
+    assert len(chunks) > 1
+    assert [item.source_unit_ids for item in chunks[0].evidence.items] == [
+        ["diagram1"],
+        ["large"],
+    ]
+    assert f"{marker}-node-a" in chunks[0].source.text
+    assert f"{marker}-node-b" in chunks[0].source.text
+    assert f"n1 -> n2: {marker}-edge" in chunks[0].source.text
+
+
+def test_agentic_chunker_budgets_first_table_split_with_pending_source_prefix():
+    marker = "pending-prefix-marker " + "semantic diagram context " * 80
+    diagram = _diagram_unit("diagram1", marker)
+    large_table = _table_unit_with_rows(
+        "large",
+        [f"short row {index}" for index in range(1, 9)],
+    )
+
+    chunks = _chunk_units_together(
+        [diagram, large_table],
+        target_tokens_per_chunk=70,
+        max_tokens_per_chunk=100,
+    )
+
+    assert len(chunks) > 1
+    first_table = chunks[0].evidence.items[-1]
+    assert first_table.metadata["row_ranges"] == [[1, 1]]
+    assert any(
+        row_range[1] > row_range[0]
+        for chunk in chunks[1:]
+        for row_range in chunk.evidence.items[0].metadata["row_ranges"]
+    )
+
+    table_warning = next(
+        warning
+        for warning in first_table.metadata["_warnings"]
+        if warning["type"] == "agentic_table_row_group_exceeds_max_tokens"
+    )
+    chunk_warning = next(
+        warning
+        for warning in chunks[0].metadata["_warnings"]
+        if warning["type"] == "agentic_chunk_exceeds_max_tokens"
+    )
+    assert table_warning["type"] == "agentic_table_row_group_exceeds_max_tokens"
+    assert table_warning["token_count"] == chunk_warning["token_count"]
 
 
 def test_agentic_chunker_carries_rowspan_context_when_splitting_large_table():

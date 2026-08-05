@@ -798,6 +798,7 @@ def _split_large_table_chunk(
                 split.item,
                 split.context_text,
                 split.rows,
+                source_prefix_text=split.source_prefix_text,
             )
             result.append(
                 _rebuild_chunk_from_items(
@@ -840,6 +841,7 @@ class _TableRowSplit:
     rows: list[dict[str, Any]]
     row_ranges: list[list[int]]
     context_text: str
+    source_prefix_text: str = ""
 
 
 def _is_splittable_table_item(item: EvidenceItem) -> bool:
@@ -871,21 +873,44 @@ def _split_table_item_by_rows(
             )
         ]
 
-    context_text = _table_context_text(item, context_items, units_by_id)
+    repeated_context_text = _table_context_text(item, context_items, units_by_id)
+    first_context_text = _table_context_text(item, [], units_by_id)
+    first_source_prefix_text = _table_pending_source_text(context_items, units_by_id)
     current_rows: list[dict[str, Any]] = []
     splits: list[_TableRowSplit] = []
 
     for row in rows:
         candidate_rows = [*current_rows, row]
-        candidate_text = _table_split_source_text(item, context_text, candidate_rows)
+        candidate_context_text = first_context_text if not splits else repeated_context_text
+        candidate_source_prefix_text = first_source_prefix_text if not splits else ""
+        candidate_text = _table_split_source_text(
+            item,
+            candidate_context_text,
+            candidate_rows,
+            source_prefix_text=candidate_source_prefix_text,
+        )
         if current_rows and _llm_token_count(candidate_text) > target_tokens_per_chunk:
-            splits.append(_table_row_split(item, current_rows, context_text))
+            splits.append(
+                _table_row_split(
+                    item,
+                    current_rows,
+                    first_context_text if not splits else repeated_context_text,
+                    source_prefix_text=first_source_prefix_text if not splits else "",
+                )
+            )
             current_rows = [row]
             continue
         current_rows = candidate_rows
 
     if current_rows:
-        splits.append(_table_row_split(item, current_rows, context_text))
+        splits.append(
+            _table_row_split(
+                item,
+                current_rows,
+                first_context_text if not splits else repeated_context_text,
+                source_prefix_text=first_source_prefix_text if not splits else "",
+            )
+        )
 
     if len(splits) <= 1:
         return splits
@@ -900,6 +925,8 @@ def _table_row_split(
     item: EvidenceItem,
     rows: list[dict[str, Any]],
     context_text: str,
+    *,
+    source_prefix_text: str = "",
 ) -> _TableRowSplit:
     table = item.content if isinstance(item.content, Mapping) else {}
     row_ranges = _row_ranges_from_rows(rows)
@@ -929,6 +956,7 @@ def _table_row_split(
         rows=subset_rows,
         row_ranges=row_ranges,
         context_text=context_text,
+        source_prefix_text=source_prefix_text,
     )
 
 
@@ -936,7 +964,14 @@ def _with_large_row_warning(
     split: _TableRowSplit,
     max_tokens_per_chunk: int,
 ) -> _TableRowSplit:
-    token_count = _llm_token_count(_table_split_source_text(split.item, split.context_text, split.rows))
+    token_count = _llm_token_count(
+        _table_split_source_text(
+            split.item,
+            split.context_text,
+            split.rows,
+            source_prefix_text=split.source_prefix_text,
+        )
+    )
     if token_count <= max_tokens_per_chunk:
         return split
 
@@ -962,6 +997,7 @@ def _with_large_row_warning(
         rows=split.rows,
         row_ranges=split.row_ranges,
         context_text=split.context_text,
+        source_prefix_text=split.source_prefix_text,
     )
 
 
@@ -993,8 +1029,19 @@ def _table_context_text(
     if compact_columns:
         context_parts.append(compact_columns)
 
-    context = " | ".join(_unique([part for part in context_parts if part]))
-    return _truncate(context, 1200)
+    return " | ".join(_unique([part for part in context_parts if part]))
+
+
+def _table_pending_source_text(
+    context_items: list[EvidenceItem],
+    units_by_id: dict[str, EvidenceUnit],
+) -> str:
+    source_parts = [
+        source_text
+        for context_item in context_items
+        if (source_text := _source_text_for_evidence_item(context_item, units_by_id))
+    ]
+    return "\n\n".join(source_parts)
 
 
 def _compact_table_columns(columns: Any) -> str:
@@ -1020,6 +1067,8 @@ def _table_split_source_text(
     item: EvidenceItem,
     context_text: str,
     rows: list[dict[str, Any]],
+    *,
+    source_prefix_text: str = "",
 ) -> str:
     table = item.content if isinstance(item.content, Mapping) else {}
     columns = table.get("columns", [])
@@ -1034,7 +1083,12 @@ def _table_split_source_text(
         lines.append(f"context: {context_text}")
     for row in rows:
         lines.append(_compact_table_row_text(row, columns))
-    return "\n".join(line for line in lines if line)
+    table_text = "\n".join(line for line in lines if line)
+    return "\n\n".join(
+        part
+        for part in (source_prefix_text, table_text)
+        if part
+    )
 
 
 def _compact_table_row_text(row: dict[str, Any], columns: list[Any]) -> str:
