@@ -5,6 +5,7 @@ import binascii
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from itertools import pairwise
 
 from bs4 import BeautifulSoup
 from bs4.element import Comment, NavigableString, Tag
@@ -21,6 +22,27 @@ from ...schema import (
 
 _BLOCK_TEXT_TAGS = {"blockquote", "p"}
 _HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
+# Normal HTML whitespace still collapses. Preserve it only when multiple nearby
+# <br>-delimited rows repeatedly contain table-like horizontal gaps.
+_ALIGNMENT_GAP_RE = re.compile(
+    r"(?<=\S)(?:[ \u00a0]*\t[ \t\u00a0]*|[ \u00a0]{3,})(?=\S)"
+)
+_ALIGNMENT_MIN_ROWS = 2
+_ALIGNMENT_INLINE_TAGS = {
+    "a",
+    "abbr",
+    "b",
+    "em",
+    "font",
+    "i",
+    "mark",
+    "small",
+    "span",
+    "strong",
+    "sub",
+    "sup",
+    "u",
+}
 _DATA_URI_RE = re.compile(r"^data:([^;,]+);base64,(.*)$", re.IGNORECASE | re.DOTALL)
 _SUPPORTED_IMAGE_MIME = {
     "image/gif": "gif",
@@ -53,7 +75,18 @@ class HtmlBackend:
         state: _HtmlParseState,
         units: list[EvidenceUnit],
     ) -> None:
-        for child in parent.children:
+        children = list(parent.children)
+        aligned_text = _aligned_text_selection(children)
+        for child_index, child in enumerate(children):
+            if child_index in aligned_text.rows_by_start_index:
+                self._append_text_unit(
+                    units,
+                    state,
+                    aligned_text.rows_by_start_index[child_index],
+                )
+                continue
+            if child_index in aligned_text.child_indexes:
+                continue
             if isinstance(child, NavigableString):
                 if isinstance(child, Comment):
                     continue
@@ -75,10 +108,22 @@ class HtmlBackend:
                 state.set_heading(int(name[1]), _text_with_links(child))
                 continue
             if name == "a":
-                self._append_text_unit(units, state, _text_with_links(child))
+                if _contains_aligned_text(child):
+                    first_link_unit = len(units)
+                    self._walk_blocks(child, state, units)
+                    _append_link_href(
+                        units[first_link_unit:],
+                        state.section_path,
+                        str(child.get("href") or "").strip(),
+                    )
+                else:
+                    self._append_text_unit(units, state, _text_with_links(child))
                 continue
             if name in _BLOCK_TEXT_TAGS:
-                self._append_text_unit(units, state, _text_with_links(child))
+                if _contains_aligned_text(child):
+                    self._walk_blocks(child, state, units)
+                else:
+                    self._append_text_unit(units, state, _text_with_links(child))
                 continue
             if name == "pre":
                 self._append_text_unit(
@@ -346,6 +391,228 @@ def _text_with_links(
 
 def _normalize_whitespace(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
+
+
+@dataclass
+class _HtmlTextRow:
+    child_indexes: list[int]
+    text: str
+
+
+@dataclass
+class _AlignedTextSelection:
+    rows_by_start_index: dict[int, str]
+    child_indexes: set[int]
+
+
+def _aligned_text_selection(children: list[object]) -> _AlignedTextSelection:
+    rows_by_start_index: dict[int, str] = {}
+    child_indexes: set[int] = set()
+    for rows in _direct_text_row_groups(children):
+        aligned_row_indexes = _aligned_row_indexes(rows)
+        if not aligned_row_indexes:
+            continue
+        for row_index, row in enumerate(rows):
+            if not row.child_indexes:
+                continue
+            rows_by_start_index[row.child_indexes[0]] = (
+                row.text
+                if row_index in aligned_row_indexes
+                else _normalize_whitespace(row.text)
+            )
+            child_indexes.update(row.child_indexes)
+    return _AlignedTextSelection(rows_by_start_index, child_indexes)
+
+
+def _contains_aligned_text(tag: Tag) -> bool:
+    if _aligned_text_selection(list(tag.children)).rows_by_start_index:
+        return True
+    return any(
+        isinstance(child, Tag)
+        and _tag_name(child) in _ALIGNMENT_INLINE_TAGS
+        and _contains_aligned_text(child)
+        for child in tag.children
+    )
+
+
+def _direct_text_row_groups(children: list[object]) -> list[list[_HtmlTextRow]]:
+    """Build logical rows without mistaking comments or inline tags for rows."""
+    groups: list[list[_HtmlTextRow]] = []
+    rows: list[_HtmlTextRow] = []
+    row_child_indexes: list[int] = []
+    row_parts: list[str] = []
+    has_line_break = False
+
+    def flush_row(*, include_empty: bool = False) -> None:
+        nonlocal row_child_indexes, row_parts
+        if row_child_indexes or include_empty:
+            rows.append(
+                _HtmlTextRow(
+                    child_indexes=row_child_indexes,
+                    text=_preserve_alignment_whitespace("".join(row_parts)),
+                )
+            )
+        row_child_indexes = []
+        row_parts = []
+
+    def flush_group() -> None:
+        nonlocal rows, has_line_break
+        flush_row()
+        if has_line_break and rows:
+            groups.append(rows)
+        rows = []
+        has_line_break = False
+
+    for child_index, child in enumerate(children):
+        if isinstance(child, Comment):
+            continue
+        if isinstance(child, NavigableString):
+            row_child_indexes.append(child_index)
+            row_parts.append(str(child))
+            continue
+        if isinstance(child, Tag) and _tag_name(child) == "br":
+            has_line_break = True
+            flush_row(include_empty=True)
+            continue
+        if isinstance(child, Tag) and _is_alignment_inline_tag(child):
+            row_child_indexes.append(child_index)
+            row_parts.append(_alignment_inline_text(child))
+            continue
+        flush_group()
+    flush_group()
+    return groups
+
+
+def _is_alignment_inline_tag(tag: Tag) -> bool:
+    if _tag_name(tag) not in _ALIGNMENT_INLINE_TAGS:
+        return False
+    return not any(
+        isinstance(descendant, Tag)
+        and _tag_name(descendant) in {"br", "figure", "img", "script", "style", "table"}
+        for descendant in tag.descendants
+    )
+
+
+def _alignment_inline_text(tag: Tag) -> str:
+    parts: list[str] = []
+    for child in tag.children:
+        if isinstance(child, Comment):
+            continue
+        if isinstance(child, NavigableString):
+            parts.append(str(child))
+        elif isinstance(child, Tag):
+            parts.append(_alignment_inline_text(child))
+    text = "".join(parts)
+    if _tag_name(tag) != "a":
+        return text
+    label = _normalize_whitespace(text)
+    href = str(tag.get("href") or "").strip()
+    if label and href:
+        return f"{label} ({href})"
+    return label or href
+
+
+def _aligned_row_indexes(rows: list[_HtmlTextRow]) -> set[int]:
+    candidate_indexes = [
+        index for index, row in enumerate(rows) if _alignment_gap_count(row.text) >= 2
+    ]
+    if len(candidate_indexes) < _ALIGNMENT_MIN_ROWS:
+        return set()
+
+    preserved: set[int] = set()
+    cluster = [candidate_indexes[0]]
+    for candidate_index in candidate_indexes[1:]:
+        if _rows_share_alignment_cluster(rows, cluster[-1], candidate_index):
+            cluster.append(candidate_index)
+            continue
+        _add_alignment_cluster(rows, cluster, preserved)
+        cluster = [candidate_index]
+    _add_alignment_cluster(rows, cluster, preserved)
+    return preserved
+
+
+def _rows_share_alignment_cluster(
+    rows: list[_HtmlTextRow],
+    left_index: int,
+    right_index: int,
+) -> bool:
+    intervening = rows[left_index + 1 : right_index]
+    if any(
+        not left.text.strip() and not right.text.strip()
+        for left, right in pairwise(intervening)
+    ):
+        return False
+    content_rows = [row for row in intervening if row.text.strip()]
+    if len(content_rows) > 2:
+        return False
+    if not content_rows:
+        return len(intervening) <= 1
+    return len(intervening) <= 5
+
+
+def _add_alignment_cluster(
+    rows: list[_HtmlTextRow],
+    candidate_indexes: list[int],
+    preserved: set[int],
+) -> None:
+    if len(candidate_indexes) < _ALIGNMENT_MIN_ROWS:
+        return
+    start = _adjacent_weak_alignment_row(rows, candidate_indexes[0], -1)
+    end = _adjacent_weak_alignment_row(rows, candidate_indexes[-1], 1)
+    for row_index in range(start, end + 1):
+        preserved.add(row_index)
+
+
+def _adjacent_weak_alignment_row(
+    rows: list[_HtmlTextRow],
+    boundary_index: int,
+    direction: int,
+) -> int:
+    index = boundary_index + direction
+    skipped_blank_rows = 0
+    while 0 <= index < len(rows) and not rows[index].text.strip():
+        skipped_blank_rows += 1
+        if skipped_blank_rows > 1:
+            return boundary_index
+        index += direction
+    if 0 <= index < len(rows) and _alignment_gap_count(rows[index].text) >= 1:
+        return index
+    return boundary_index
+
+
+def _alignment_gap_count(text: str) -> int:
+    return max(
+        (
+            len(_ALIGNMENT_GAP_RE.findall(line.strip()))
+            for line in text.splitlines()
+            if line.strip()
+        ),
+        default=0,
+    )
+
+
+def _preserve_alignment_whitespace(text: str) -> str:
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return "\n".join(line.rstrip() for line in lines)
+
+
+def _append_link_href(
+    units: list[EvidenceUnit],
+    section_path: list[str],
+    href: str,
+) -> None:
+    if not href:
+        return
+    for unit in units:
+        if unit.type != "text" or not isinstance(unit.content, str):
+            continue
+        linked_text = f"{unit.content} ({href})"
+        unit.content = linked_text
+        unit.source.text = _with_section(section_path, linked_text)
 
 
 def _parse_table_content(
