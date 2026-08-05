@@ -133,6 +133,221 @@ def test_html_backend_ignores_hira_popup_chrome_and_attachment_box():
     assert "닫기" not in joined
 
 
+def test_html_backend_preserves_repeated_space_aligned_text_rows():
+    from rag_document_parser import HtmlBackend
+
+    header = "항목" + " " * 20 + "성인" + " " * 6 + "소아"
+    first_row = "자601 흉부에서 전박" + " " * 6 + "23" + " " * 8 + "12"
+    second_row = "자602 상박에서 전박" + " " * 7 + "4" + " " * 9 + "2"
+    raw = (
+        '<html><body><div class="view">\n'
+        f"{header}<br />\n"
+        f"{first_row}<br />\n"
+        f"{second_row}<br />\n"
+        "</div></body></html>"
+    ).encode()
+
+    parsed = HtmlBackend().parse(raw, ".html")
+
+    assert [unit.content for unit in parsed.units] == [
+        header,
+        first_row,
+        second_row,
+    ]
+    assert [unit.source.text for unit in parsed.units] == [
+        header,
+        first_row,
+        second_row,
+    ]
+
+
+def test_html_backend_preserves_multilevel_alignment_under_unknown_tag():
+    from rag_document_parser import HtmlBackend
+
+    adult_header = " " * 78 + "성인" + " " * 19 + "만8세미만소아"
+    cast_header = (
+        " " * 72
+        + "Circular"
+        + " " * 4
+        + "Splint"
+        + " " * 9
+        + "Circular"
+        + " " * 4
+        + "Splint"
+    )
+    type_header = (
+        " " * 73 + "Cast" + " " * 8 + "Cast" + " " * 10 + "Cast" + " " * 6 + "Cast"
+    )
+    value_row = (
+        "자601 흉부에서 전박 및 수부에 미치는것"
+        + " " * 23
+        + "23"
+        + " " * 10
+        + "8"
+        + " " * 15
+        + "12"
+        + " " * 8
+        + "4"
+    )
+    annotation = " " * 9 + "(Shoulder spica)"
+    weak_row = "자606 하퇴에서 족부에 미치는것"
+    second_value_row = (
+        "자602 상박에서 전박 및 수부에 미치는것"
+        + " " * 24
+        + "4"
+        + " " * 11
+        + "2"
+        + " " * 16
+        + "2"
+        + " " * 9
+        + "1"
+    )
+    raw = (
+        '<div class="view"><IASIS 900 부위별 사용기준>'
+        " (3인치 2야드 기준)<br><br>\r\n"
+        f"{adult_header}<br><br>\r\n"
+        f"{cast_header}<br><br>\r\n"
+        f"{type_header}<br><br>\r\n"
+        f"{value_row}<br><br>\r\n"
+        f"{annotation}<br><br>\r\n"
+        f"{weak_row}<br><br>\r\n"
+        f"{second_value_row}<br><br>\r\n"
+        "★ 세부사항 고시 삭제됨</div>"
+    ).encode()
+
+    parsed = HtmlBackend().parse(raw, ".html")
+
+    assert len(parsed.units) == 9
+    assert parsed.units[0].content == "(3인치 2야드 기준)"
+    assert [unit.content for unit in parsed.units[1:8]] == [
+        adult_header,
+        cast_header,
+        type_header,
+        value_row,
+        annotation,
+        weak_row,
+        second_value_row,
+    ]
+    assert [unit.source.text for unit in parsed.units[1:8]] == [
+        adult_header,
+        cast_header,
+        type_header,
+        value_row,
+        annotation,
+        weak_row,
+        second_value_row,
+    ]
+    assert parsed.units[-1].content == "★ 세부사항 고시 삭제됨"
+
+
+def test_html_backend_keeps_normal_whitespace_normalization_outside_alignment_runs():
+    from rag_document_parser import HtmlBackend
+
+    raw = ("<p>\n    가. 일반  산문  간격<br>\n    나. 다음  산문  간격\n</p>").encode()
+
+    parsed = HtmlBackend().parse(raw, ".html")
+
+    assert [unit.content for unit in parsed.units] == [
+        "가. 일반 산문 간격 나. 다음 산문 간격",
+    ]
+
+
+def test_html_backend_preserves_repeated_nbsp_alignment_runs():
+    from rag_document_parser import HtmlBackend
+
+    raw = (
+        "<div>항목&nbsp;&nbsp;&nbsp;성인&nbsp;&nbsp;&nbsp;소아<br>"
+        "건수&nbsp;&nbsp;&nbsp;23&nbsp;&nbsp;&nbsp;12</div>"
+    ).encode()
+
+    parsed = HtmlBackend().parse(raw, ".html")
+
+    gap = "\N{NO-BREAK SPACE}" * 3
+    assert [unit.content for unit in parsed.units] == [
+        f"항목{gap}성인{gap}소아",
+        f"건수{gap}23{gap}12",
+    ]
+
+
+def test_html_backend_preserves_aligned_rows_inside_paragraph():
+    from rag_document_parser import HtmlBackend
+
+    intro = "안내 문서 (/guide) 참고"
+    header = "항목" + " " * 8 + "성인" + " " * 8 + "소아"
+    count_row = "건수" + " " * 8 + "23 (/adult)" + " " * 8 + "12"
+    cost_row = "비용" + " " * 8 + "4" + " " * 8 + "2"
+    outro = "끝 주의 문장"
+    raw = (
+        '<p>안내 <a href="/guide">문서</a> 참고<br>'
+        f'{header}<br>건수        <a href="/adult">23</a>        12'
+        f"<br>비용        <span>4</span>        2"
+        "<br>끝 <strong>주의</strong> 문장</p>"
+    ).encode()
+
+    parsed = HtmlBackend().parse(raw, ".html")
+
+    expected = [intro, header, count_row, cost_row, outro]
+    assert [unit.content for unit in parsed.units] == expected
+    assert [unit.source.text for unit in parsed.units] == expected
+
+
+def test_html_backend_preserves_alignment_inside_inline_wrapper():
+    from rag_document_parser import HtmlBackend
+
+    header = "항목" + " " * 8 + "성인" + " " * 8 + "소아"
+    row = "건수" + " " * 8 + "23" + " " * 8 + "12"
+    raw = f"<p><span>{header}<br>{row}</span></p>".encode()
+
+    parsed = HtmlBackend().parse(raw, ".html")
+
+    assert [unit.content for unit in parsed.units] == [header, row]
+
+
+def test_html_backend_preserves_link_for_aligned_anchor_wrapper():
+    from rag_document_parser import HtmlBackend
+
+    header = "항목" + " " * 8 + "성인" + " " * 8 + "소아"
+    row = "건수" + " " * 8 + "23" + " " * 8 + "12"
+    raw = f'<p><a href="/table">{header}<br>{row}</a></p>'.encode()
+
+    parsed = HtmlBackend().parse(raw, ".html")
+
+    assert [unit.content for unit in parsed.units] == [
+        f"{header} (/table)",
+        f"{row} (/table)",
+    ]
+
+
+def test_html_backend_does_not_count_comment_fragments_as_multiple_alignment_rows():
+    from rag_document_parser import HtmlBackend
+
+    raw = b"<div>A   B   C<!-- split -->D   E   F<br>tail</div>"
+
+    parsed = HtmlBackend().parse(raw, ".html")
+
+    assert [unit.content for unit in parsed.units] == ["A B C", "D E F", "tail"]
+
+
+def test_html_backend_does_not_join_alignment_candidates_across_multiple_blank_rows():
+    from rag_document_parser import HtmlBackend
+
+    raw = b"<div>A   B   C<br><br><br>D   E   F</div>"
+
+    parsed = HtmlBackend().parse(raw, ".html")
+
+    assert [unit.content for unit in parsed.units] == ["A B C", "D E F"]
+
+
+def test_html_backend_does_not_bridge_weak_text_across_multiple_blank_rows():
+    from rag_document_parser import HtmlBackend
+
+    raw = b"<div>A   B   C<br><br><br>note<br>D   E   F</div>"
+
+    parsed = HtmlBackend().parse(raw, ".html")
+
+    assert [unit.content for unit in parsed.units] == ["A B C", "note", "D E F"]
+
+
 def test_html_backend_extracts_structured_table_with_caption_and_spans():
     from rag_document_parser import HtmlBackend
 
