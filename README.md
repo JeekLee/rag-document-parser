@@ -316,6 +316,19 @@ HWPX and HWP5 backends accept an optional `ocr_fn` callback for image fallback
 OCR. PDF supports `ocr_fn`, OpenAI-compatible vision OCR, and local OCR
 fallback.
 
+The backends intentionally use different OCR trigger policies. HWP5 invokes an
+explicitly configured `ocr_fn` for every embedded image, even when native text
+exists, so that text carried only by diagrams or screenshots is preserved. OCR
+text that duplicates native evidence is discarded. HWPX invokes `ocr_fn` only
+when no native text, table, or diagram evidence exists. PDF applies OCR to pages
+identified as scanned.
+
+For HWP5 and HWPX, an OCR callback that returns `None`, an empty string, or only
+whitespace emits a low-severity `hwp5_ocr_empty` or `hwpx_ocr_empty` warning.
+Callback exceptions remain medium-severity `hwp5_ocr_failed` or
+`hwpx_ocr_failed` warnings. This distinction lets consumers treat images with
+no readable text separately from OCR service failures.
+
 PDF OCR configuration is independent from chunk enrichment configuration.
 Passing `LlmConfig` to `EvidenceUnitAgenticChunker(llm=...)` does not enable PDF
 vision OCR in `RagDocumentParser`. The parser's default backend registry uses

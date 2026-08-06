@@ -4,6 +4,7 @@ import hashlib
 import io
 import zipfile
 
+import pytest
 
 HP = "http://www.hancom.co.kr/hwpml/2011/paragraph"
 OPF = "http://www.idpf.org/2007/opf/"
@@ -986,6 +987,35 @@ def test_hwpx_image_only_document_uses_ocr_fallback_without_duplicate_native_tex
         "image: img-0001",
     ]
     assert calls == []
+
+
+@pytest.mark.parametrize("ocr_result", [None, "", " \n\t "])
+def test_hwpx_empty_ocr_result_is_not_reported_as_failure(
+    ocr_result: str | None,
+):
+    from rag_document_parser import HwpxBackend
+
+    xml = (
+        f'<hp:sec xmlns:hp="{HP}" xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core">'
+        '<hp:p><hp:run><hp:pic><hc:img binaryItemIDRef="img1" /></hp:pic></hp:run></hp:p>'
+        "</hp:sec>"
+    )
+
+    parsed = HwpxBackend(ocr_fn=lambda data, image_index: ocr_result).parse(
+        _make_hwpx(xml, image_bytes=PNG_BYTES),
+        ".hwpx",
+    )
+
+    assert [unit.type for unit in parsed.units] == ["image"]
+    assert parsed.quality_warnings == [
+        {
+            "type": "hwpx_ocr_empty",
+            "severity": "low",
+            "image_index": 1,
+            "asset_id": "img-0001",
+            "message": "empty OCR result",
+        }
+    ]
 
 
 def test_hwpx_ocr_failure_is_reported_as_quality_warning():

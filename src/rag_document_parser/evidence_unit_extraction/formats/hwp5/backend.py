@@ -56,7 +56,7 @@ _SHAPE_CTRL_TYPES = {
 @dataclass(frozen=True)
 class Hwp5Backend:
     supported_suffixes = (".hwp",)
-    ocr_fn: Callable[[bytes, int], str] | None = None
+    ocr_fn: Callable[[bytes, int], str | None] | None = None
 
     def parse(self, data: bytes, suffix: str) -> ParsedDocument:
         try:
@@ -167,7 +167,7 @@ class _ParsedBlocks:
 
     def to_document(
         self,
-        ocr_fn: Callable[[bytes, int], str] | None = None,
+        ocr_fn: Callable[[bytes, int], str | None] | None = None,
     ) -> ParsedDocument:
         return _apply_ocr_fallback(_to_document(self), ocr_fn)
 
@@ -940,7 +940,7 @@ def _connector_resolution_failure(
 
 def _apply_ocr_fallback(
     document: ParsedDocument,
-    ocr_fn: Callable[[bytes, int], str] | None,
+    ocr_fn: Callable[[bytes, int], str | None] | None,
 ) -> ParsedDocument:
     if ocr_fn is None or not document.assets:
         return document
@@ -955,10 +955,10 @@ def _apply_ocr_fallback(
         try:
             text = _clean_text(ocr_fn(asset.data, image_index) or "")
         except Exception as exc:
-            warnings.append(_hwp5_ocr_warning(asset.id, str(exc)))
+            warnings.append(_hwp5_ocr_failed_warning(asset.id, str(exc)))
             continue
         if not text:
-            warnings.append(_hwp5_ocr_warning(asset.id, "empty OCR result"))
+            warnings.append(_hwp5_ocr_empty_warning(asset.id))
             continue
         if _ocr_text_duplicates_native_text(text, native_texts):
             continue
@@ -1013,13 +1013,23 @@ def _compact_text_for_ocr_dedupe(text: str) -> str:
     return re.sub(r"\s+", "", text)
 
 
-def _hwp5_ocr_warning(asset_id: str, message: str) -> dict[str, Any]:
+def _hwp5_ocr_failed_warning(asset_id: str, message: str) -> dict[str, Any]:
     return {
         "type": "hwp5_ocr_failed",
         "severity": "medium",
         "asset_id": asset_id,
         "stage": "ocr",
         "message": message,
+    }
+
+
+def _hwp5_ocr_empty_warning(asset_id: str) -> dict[str, Any]:
+    return {
+        "type": "hwp5_ocr_empty",
+        "severity": "low",
+        "asset_id": asset_id,
+        "stage": "ocr",
+        "message": "empty OCR result",
     }
 
 
