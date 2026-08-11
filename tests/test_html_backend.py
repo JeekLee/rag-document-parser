@@ -46,7 +46,9 @@ def test_html_backend_repair_leaves_valid_markup_and_raw_text_elements_unchanged
     <style>.note::before { content: "a<T-score≤b"; }</style>
     <p>
       before <strong>bold</strong>
+      <STRONG>upper</STRONG>
       <my-widget>custom</my-widget>
+      <legacy>paired</legacy>
       <a href="/compare?x<y">link</a>
     </p>
     """.encode()
@@ -54,9 +56,75 @@ def test_html_backend_repair_leaves_valid_markup_and_raw_text_elements_unchanged
     parsed = HtmlBackend().parse(raw, ".html")
 
     assert [unit.content for unit in parsed.units] == [
-        "before bold custom link (/compare?x<y)"
+        "before bold upper custom paired link (/compare?x<y)"
     ]
     assert parsed.quality_warnings == []
+
+
+def test_html_backend_repairs_iasis_pseudo_heading():
+    from rag_document_parser import HtmlBackend
+
+    raw = (FIXTURE_DIR / "iasis-pseudo-heading.html").read_bytes()
+
+    parsed = HtmlBackend().parse(raw, ".html")
+
+    assert [unit.content for unit in parsed.units] == [
+        "개수 <IASIS 900 부위별 사용기준>",
+        "후속 내용",
+    ]
+    assert parsed.quality_warnings == [
+        {
+            "type": "html_pseudo_tag_repaired",
+            "severity": "medium",
+            "count": 1,
+            "message": (
+                "Repaired unpaired tag-like text before HTML parsing to prevent "
+                "content loss."
+            ),
+        }
+    ]
+
+
+def test_html_backend_repairs_spanier_pseudo_heading():
+    from rag_document_parser import HtmlBackend
+
+    raw = (FIXTURE_DIR / "spanier-pseudo-heading.html").read_bytes()
+
+    parsed = HtmlBackend().parse(raw, ".html")
+
+    assert [unit.content for unit in parsed.units] == [
+        "※ 참고 <Spanier 아분류>",
+        "E1: Tumor touches periosteum",
+    ]
+    assert parsed.quality_warnings == [
+        {
+            "type": "html_pseudo_tag_repaired",
+            "severity": "medium",
+            "count": 1,
+            "message": (
+                "Repaired unpaired tag-like text before HTML parsing to prevent "
+                "content loss."
+            ),
+        }
+    ]
+
+
+def test_html_backend_counts_multiple_pseudo_tag_repairs():
+    from rag_document_parser import HtmlBackend
+
+    raw = (
+        "<div><IASIS 900 부위별 사용기준><br>"
+        "<Spanier 아분류></div>"
+    ).encode()
+
+    parsed = HtmlBackend().parse(raw, ".html")
+
+    assert [unit.content for unit in parsed.units] == [
+        "<IASIS 900 부위별 사용기준>",
+        "<Spanier 아분류>",
+    ]
+    assert parsed.quality_warnings[0]["type"] == "html_pseudo_tag_repaired"
+    assert parsed.quality_warnings[0]["count"] == 2
 
 
 def test_html_backend_extracts_text_sections_links_and_lists():
@@ -211,7 +279,7 @@ def test_html_backend_preserves_repeated_space_aligned_text_rows():
     ]
 
 
-def test_html_backend_preserves_multilevel_alignment_under_unknown_tag():
+def test_html_backend_preserves_multilevel_alignment_after_pseudo_heading():
     from rag_document_parser import HtmlBackend
 
     adult_header = " " * 78 + "성인" + " " * 19 + "만8세미만소아"
@@ -268,7 +336,9 @@ def test_html_backend_preserves_multilevel_alignment_under_unknown_tag():
     parsed = HtmlBackend().parse(raw, ".html")
 
     assert len(parsed.units) == 9
-    assert parsed.units[0].content == "(3인치 2야드 기준)"
+    assert parsed.units[0].content == (
+        "<IASIS 900 부위별 사용기준> (3인치 2야드 기준)"
+    )
     assert [unit.content for unit in parsed.units[1:8]] == [
         adult_header,
         cast_header,
@@ -288,6 +358,17 @@ def test_html_backend_preserves_multilevel_alignment_under_unknown_tag():
         second_value_row,
     ]
     assert parsed.units[-1].content == "★ 세부사항 고시 삭제됨"
+    assert parsed.quality_warnings == [
+        {
+            "type": "html_pseudo_tag_repaired",
+            "severity": "medium",
+            "count": 1,
+            "message": (
+                "Repaired unpaired tag-like text before HTML parsing to prevent "
+                "content loss."
+            ),
+        }
+    ]
 
 
 def test_html_backend_keeps_normal_whitespace_normalization_outside_alignment_runs():
