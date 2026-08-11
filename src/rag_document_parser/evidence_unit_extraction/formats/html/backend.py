@@ -58,9 +58,22 @@ class HtmlBackend:
 
     def parse(self, data: bytes, suffix: str) -> ParsedDocument:
         html = data.decode("utf-8", errors="replace")
+        html, repaired_less_than_count = _repair_unescaped_less_than(html)
         soup = BeautifulSoup(html, "html.parser")
         root = _content_root(soup)
         state = _HtmlParseState()
+        if repaired_less_than_count:
+            state.quality_warnings.append(
+                {
+                    "type": "html_unescaped_less_than_repaired",
+                    "severity": "medium",
+                    "count": repaired_less_than_count,
+                    "message": (
+                        "Repaired unescaped less-than text before HTML parsing to "
+                        "prevent content loss."
+                    ),
+                }
+            )
         units: list[EvidenceUnit] = []
         self._walk_blocks(root, state, units)
         return ParsedDocument(
@@ -294,6 +307,82 @@ class _HtmlParseState:
 
 def _tag_name(tag: Tag) -> str:
     return str(tag.name or "").lower()
+
+
+def _repair_unescaped_less_than(html: str) -> tuple[str, int]:
+    """Escape tag-like less-than text that ``html.parser`` would discard.
+
+    A less-than sign followed by an ASCII letter enters HTML's tag parsing
+    path. If that would-be tag runs into another ``<`` (usually a real closing
+    tag), reaches EOF, or contains a comparison glyph in its name, it cannot be
+    safely treated as markup. Escaping only that delimiter preserves the source
+    text while leaving complete standard and custom elements untouched.
+    """
+    chunks: list[str] = []
+    copy_from = 0
+    search_from = 0
+    repair_count = 0
+
+    while (less_than := html.find("<", search_from)) >= 0:
+        should_repair, search_from = _less_than_scan_result(html, less_than)
+        if should_repair:
+            chunks.extend((html[copy_from:less_than], "&lt;"))
+            copy_from = less_than + 1
+            repair_count += 1
+
+    if not repair_count:
+        return html, 0
+    chunks.append(html[copy_from:])
+    return "".join(chunks), repair_count
+
+
+def _less_than_scan_result(html: str, less_than: int) -> tuple[bool, int]:
+    name_start = less_than + 1
+    if name_start >= len(html):
+        return False, len(html)
+
+    if html.startswith("<!--", less_than):
+        comment_end = html.find("-->", name_start + 3)
+        return False, len(html) if comment_end < 0 else comment_end + 3
+
+    first = html[name_start]
+    if first in {"!", "?", "/"}:
+        markup_end = html.find(">", name_start + 1)
+        return False, len(html) if markup_end < 0 else markup_end + 1
+    if not first.isascii() or not first.isalpha():
+        return False, name_start
+
+    quote: str | None = None
+    position = name_start
+    while position < len(html):
+        char = html[position]
+        if quote is not None:
+            if char == quote:
+                quote = None
+        elif char in {'"', "'"}:
+            quote = char
+        elif char == "<":
+            return True, name_start
+        elif char == ">":
+            raw_name = html[name_start:position]
+            tag_name = re.split(r"[\s/]", raw_name, maxsplit=1)[0]
+            if "≤" in tag_name or "≥" in tag_name:
+                return True, name_start
+            if (
+                tag_name.lower() in {"script", "style"}
+                and not raw_name.rstrip().endswith("/")
+            ):
+                closing_tag = re.search(
+                    rf"</\s*{re.escape(tag_name)}\b",
+                    html[position + 1 :],
+                    re.IGNORECASE,
+                )
+                if closing_tag is None:
+                    return False, len(html)
+                return False, position + 1 + closing_tag.start()
+            return False, position + 1
+        position += 1
+    return True, name_start
 
 
 def _content_root(soup: BeautifulSoup) -> Tag:
