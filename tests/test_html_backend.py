@@ -1,12 +1,62 @@
 from __future__ import annotations
 
 import base64
+from pathlib import Path
 
 PNG_BYTES = b"png bytes"
+FIXTURE_DIR = Path(__file__).parent / "fixtures" / "html"
 
 
 def _data_uri(data: bytes = PNG_BYTES, mime: str = "image/png") -> str:
     return f"data:{mime};base64,{base64.b64encode(data).decode()}"
+
+
+def test_html_backend_repairs_unescaped_less_than_comparison():
+    from rag_document_parser import HtmlBackend
+
+    raw = (FIXTURE_DIR / "unescaped-less-than-comparison.html").read_bytes()
+
+    parsed = HtmlBackend().parse(raw, ".html")
+
+    expected = (
+        "범위(-2.5<T-score≤-2.0)에 해당될 경우 "
+        "1년(2회) 추가투여를 급여 인정함."
+    )
+    assert [unit.content for unit in parsed.units] == [expected]
+    assert [unit.source.text for unit in parsed.units] == [expected]
+    assert parsed.quality_warnings == [
+        {
+            "type": "html_unescaped_less_than_repaired",
+            "severity": "medium",
+            "count": 1,
+            "message": (
+                "Repaired unescaped less-than text before HTML parsing to prevent "
+                "content loss."
+            ),
+        }
+    ]
+
+
+def test_html_backend_repair_leaves_valid_markup_and_raw_text_elements_unchanged():
+    from rag_document_parser import HtmlBackend
+
+    raw = """
+    <!-- ignored 1<T-score≤2 comparison -->
+    <script>if (a<T-score≤b) ignored();</script>
+    <style>.note::before { content: "a<T-score≤b"; }</style>
+    <p>
+      before <strong>bold</strong>
+      <my-widget>custom</my-widget>
+      <a href="/compare?x<y">link</a>
+    </p>
+    """.encode()
+
+    parsed = HtmlBackend().parse(raw, ".html")
+
+    assert [unit.content for unit in parsed.units] == [
+        "before bold custom link (/compare?x<y)"
+    ]
+    assert parsed.quality_warnings == []
 
 
 def test_html_backend_extracts_text_sections_links_and_lists():
