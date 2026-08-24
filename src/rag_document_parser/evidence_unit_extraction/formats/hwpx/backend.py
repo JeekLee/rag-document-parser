@@ -5,11 +5,12 @@ import re
 import zipfile
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 from xml.etree import ElementTree as ET
 
 from ....models import EvidenceUnit, PendingAsset, SourceEvidence
 from ...backend import ParsedDocument
+from ...ocr import OcrFn, OcrResult, coerce_ocr_result
 from ...schema import (
     structured_diagram as _structured_diagram_content,
     structured_table as _structured_table_content,
@@ -66,7 +67,7 @@ class _DrawingResult:
 @dataclass
 class HwpxBackend:
     supported_suffixes = (".hwpx",)
-    ocr_fn: Callable[[bytes, int], str | None] | None = None
+    ocr_fn: OcrFn | None = None
 
     def parse(self, data: bytes, suffix: str) -> ParsedDocument:
         units: list[EvidenceUnit] = []
@@ -1595,7 +1596,7 @@ def _append_ocr_fallback_units(
     units: list[EvidenceUnit],
     assets: list[PendingAsset],
     warnings: list[dict[str, Any]],
-    ocr_fn: Callable[[bytes, int], str | None] | None,
+    ocr_fn: OcrFn | None,
     block_index: int,
 ) -> int:
     if ocr_fn is None or not assets or _has_native_source_text(units):
@@ -1603,12 +1604,29 @@ def _append_ocr_fallback_units(
 
     for image_index, asset in enumerate(assets):
         try:
-            text = _clean_text(ocr_fn(asset.data, image_index) or "")
+            raw_result = ocr_fn(asset.data, image_index)
+            result = coerce_ocr_result(raw_result)
         except Exception as exc:
             warnings.append(
                 _hwpx_ocr_failed_warning(image_index + 1, asset.id, str(exc))
             )
             continue
+        if result.status == "no_text":
+            warning = _hwpx_ocr_empty_warning(image_index + 1, asset.id)
+            if isinstance(raw_result, OcrResult):
+                warning["reason"] = result.reason
+            warnings.append(warning)
+            continue
+        if result.status == "uncertain":
+            warnings.append(
+                _hwpx_ocr_uncertain_warning(
+                    image_index + 1,
+                    asset.id,
+                    result.reason,
+                )
+            )
+            continue
+        text = _clean_text(result.text)
         if not text:
             warnings.append(_hwpx_ocr_empty_warning(image_index + 1, asset.id))
             continue
@@ -1641,6 +1659,21 @@ def _hwpx_ocr_empty_warning(
         "image_index": image_number,
         "asset_id": asset_id,
         "message": "empty OCR result",
+    }
+
+
+def _hwpx_ocr_uncertain_warning(
+    image_number: int,
+    asset_id: str,
+    reason: str,
+) -> dict[str, Any]:
+    return {
+        "type": "hwpx_ocr_uncertain",
+        "severity": "medium",
+        "image_index": image_number,
+        "asset_id": asset_id,
+        "reason": reason,
+        "message": "OCR could not determine whether the image contains readable text.",
     }
 
 

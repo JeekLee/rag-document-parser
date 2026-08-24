@@ -2,18 +2,16 @@ from __future__ import annotations
 
 import contextlib
 import io
-import base64
-import json
 import re
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any, Callable
-from urllib import request
 
-from ....llm import LlmConfig, apply_llm_request_options, chat_completions_url
+from ....llm import LlmConfig
 from ....models import EvidenceUnit, PendingAsset, SourceEvidence
 from ...backend import ParsedDocument
+from ...ocr import OcrFn, OcrOutput, OcrResult, request_vision_ocr
 from ...schema import (
     structured_diagram as _structured_diagram_content,
     structured_table as _structured_table_content,
@@ -77,7 +75,7 @@ class _OcrResults(dict[int, str]):
 class PdfBackend:
     supported_suffixes = (".pdf",)
     max_ocr_workers: int = 4
-    ocr_fn: Callable[[bytes, int], str] | None = None
+    ocr_fn: OcrFn | None = None
     ocr_llm: LlmConfig | None = None
 
     def parse(self, data: bytes, suffix: str) -> ParsedDocument:
@@ -3415,13 +3413,13 @@ def _ocr_pages(
     scanned: list[tuple[int, bytes]],
     data: bytes,
     max_workers: int | None,
-    ocr_fn: Callable[[bytes, int], str] | None,
+    ocr_fn: OcrFn | None,
     ocr_llm: LlmConfig | None,
 ) -> _OcrResults:
     if not scanned:
         return _OcrResults()
 
-    def run_ocr(png: bytes, page_idx: int) -> str:
+    def run_ocr(png: bytes, page_idx: int) -> OcrOutput:
         if ocr_fn is not None:
             return ocr_fn(png, page_idx)
         if ocr_llm is not None:
@@ -3451,10 +3449,25 @@ def _ocr_pages(
 def _record_ocr_result(
     results: _OcrResults,
     page_idx: int,
-    get_text: Callable[[], str],
+    get_text: Callable[[], OcrOutput],
 ) -> None:
     try:
-        results[page_idx] = get_text() or ""
+        raw_result = get_text()
+        if isinstance(raw_result, OcrResult):
+            if raw_result.status == "extracted":
+                results[page_idx] = raw_result.text
+                return
+            results[page_idx] = ""
+            results.failed_pages.append(
+                {
+                    "page": page_idx,
+                    "stage": "ocr",
+                    "status": raw_result.status,
+                    "reason": raw_result.reason,
+                }
+            )
+            return
+        results[page_idx] = raw_result or ""
         if not results[page_idx].strip():
             results.failed_pages.append(
                 {"page": page_idx, "stage": "ocr", "message": "empty OCR result"}
@@ -3470,6 +3483,26 @@ def _ocr_warnings(failed_pages: list[dict[str, object]]) -> list[dict[str, Any]]
     warnings: list[dict[str, Any]] = []
     for failure in failed_pages:
         page = int(failure.get("page", 0))
+        status = failure.get("status")
+        if status in {"no_text", "uncertain"}:
+            warning_type = (
+                "pdf_ocr_empty" if status == "no_text" else "pdf_ocr_uncertain"
+            )
+            warnings.append(
+                {
+                    "type": warning_type,
+                    "severity": "low" if status == "no_text" else "medium",
+                    "page": page + 1,
+                    "stage": failure.get("stage", "ocr"),
+                    "reason": str(failure.get("reason", "")),
+                    "message": (
+                        "Structured OCR reported no readable text."
+                        if status == "no_text"
+                        else "Structured OCR could not determine whether text is readable."
+                    ),
+                }
+            )
+            continue
         warnings.append(
             {
                 "type": "pdf_ocr_failed",
@@ -3688,64 +3721,34 @@ def _ocr_page_with_vision(
     png: bytes,
     page_idx: int,
     cfg: LlmConfig,
-) -> str:
+) -> OcrOutput:
     if png:
-        text = _vision_ocr_png(png, cfg)
-        if text:
-            return text
+        try:
+            result = _vision_ocr_png(png, cfg)
+        except Exception:
+            result = None
+        if isinstance(result, OcrResult):
+            if result.status != "uncertain":
+                return result
+            fallback_text = _ocr_page(data, png, page_idx)
+            return fallback_text or result
+        if result:
+            return result
     return _ocr_page(data, png, page_idx)
 
 
-_VISION_OCR_PROMPT = """\
-이 이미지는 스캔된 문서 페이지입니다.
-이미지에서 텍스트와 표를 읽어 문서 구조를 보존해 추출해 주세요.
-
-지침:
-- 원문의 줄바꿈과 문단 구조를 최대한 유지
-- 표는 가능하면 Markdown pipe table 형식으로 출력
-- 표가 아닌 본문은 일반 텍스트로 출력
-- 텍스트 내용만 출력, 설명 없이"""
-
-
-def _vision_ocr_png(png: bytes, cfg: LlmConfig) -> str:
-    b64 = base64.b64encode(png).decode("ascii")
-    messages = cfg.prepare_messages(
-        [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{b64}"},
-                    },
-                    {"type": "text", "text": _VISION_OCR_PROMPT},
-                ],
-            }
-        ]
-    )
-    body = {
-        "model": cfg.model,
-        "temperature": cfg.temperature,
-        "messages": messages,
-    }
-    apply_llm_request_options(body, cfg)
-    req = request.Request(
-        chat_completions_url(cfg.url),
-        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {cfg.api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with request.urlopen(req, timeout=cfg.timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        return _clean_vision_ocr_text(
-            str(payload["choices"][0]["message"]["content"])
+def _vision_ocr_png(png: bytes, cfg: LlmConfig) -> OcrResult:
+    result = request_vision_ocr(png, cfg)
+    if result.status != "extracted":
+        return result
+    cleaned = _clean_vision_ocr_text(result.text)
+    if not cleaned:
+        return OcrResult(
+            status="uncertain",
+            text="",
+            reason="structured OCR returned empty extracted text",
         )
-    except Exception:
-        return ""
+    return OcrResult(status="extracted", text=cleaned, reason=result.reason)
 
 
 def _clean_vision_ocr_text(text: str) -> str:

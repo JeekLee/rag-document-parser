@@ -6,10 +6,11 @@ import struct
 import zlib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from ....models import EvidenceUnit, PendingAsset, SourceEvidence
 from ...backend import ParsedDocument
+from ...ocr import OcrFn, OcrResult, coerce_ocr_result
 from ...schema import (
     structured_diagram as _structured_diagram_content,
     structured_table as _structured_table_content,
@@ -56,7 +57,7 @@ _SHAPE_CTRL_TYPES = {
 @dataclass(frozen=True)
 class Hwp5Backend:
     supported_suffixes = (".hwp",)
-    ocr_fn: Callable[[bytes, int], str | None] | None = None
+    ocr_fn: OcrFn | None = None
 
     def parse(self, data: bytes, suffix: str) -> ParsedDocument:
         try:
@@ -167,7 +168,7 @@ class _ParsedBlocks:
 
     def to_document(
         self,
-        ocr_fn: Callable[[bytes, int], str | None] | None = None,
+        ocr_fn: OcrFn | None = None,
     ) -> ParsedDocument:
         return _apply_ocr_fallback(_to_document(self), ocr_fn)
 
@@ -940,7 +941,7 @@ def _connector_resolution_failure(
 
 def _apply_ocr_fallback(
     document: ParsedDocument,
-    ocr_fn: Callable[[bytes, int], str | None] | None,
+    ocr_fn: OcrFn | None,
 ) -> ParsedDocument:
     if ocr_fn is None or not document.assets:
         return document
@@ -953,10 +954,21 @@ def _apply_ocr_fallback(
         if asset.kind != "image":
             continue
         try:
-            text = _clean_text(ocr_fn(asset.data, image_index) or "")
+            raw_result = ocr_fn(asset.data, image_index)
+            result = coerce_ocr_result(raw_result)
         except Exception as exc:
             warnings.append(_hwp5_ocr_failed_warning(asset.id, str(exc)))
             continue
+        if result.status == "no_text":
+            warning = _hwp5_ocr_empty_warning(asset.id)
+            if isinstance(raw_result, OcrResult):
+                warning["reason"] = result.reason
+            warnings.append(warning)
+            continue
+        if result.status == "uncertain":
+            warnings.append(_hwp5_ocr_uncertain_warning(asset.id, result.reason))
+            continue
+        text = _clean_text(result.text)
         if not text:
             warnings.append(_hwp5_ocr_empty_warning(asset.id))
             continue
@@ -1030,6 +1042,20 @@ def _hwp5_ocr_empty_warning(asset_id: str) -> dict[str, Any]:
         "asset_id": asset_id,
         "stage": "ocr",
         "message": "empty OCR result",
+    }
+
+
+def _hwp5_ocr_uncertain_warning(
+    asset_id: str,
+    reason: str,
+) -> dict[str, Any]:
+    return {
+        "type": "hwp5_ocr_uncertain",
+        "severity": "medium",
+        "asset_id": asset_id,
+        "stage": "ocr",
+        "reason": reason,
+        "message": "OCR could not determine whether the image contains readable text.",
     }
 
 

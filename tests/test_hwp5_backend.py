@@ -1544,6 +1544,49 @@ def test_hwp5_ocr_fallback_keeps_image_text_when_native_text_exists():
     assert calls == [0]
 
 
+def test_hwp5_ocr_fallback_accepts_structured_no_text_result():
+    from rag_document_parser import OcrResult
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5.backend import (
+        _BinEntry,
+        _parse_section,
+    )
+
+    picture_payload = bytearray(80)
+    struct.pack_into("<H", picture_payload, 71, 1)
+    records = b""
+    records += _make_record(0x43, 0, _u16("네이티브 본문"))
+    records += _make_record(0x47, 0, b" osg" + b"\x00" * 8)
+    records += _make_record(0x55, 1, bytes(picture_payload))
+
+    parsed = _parse_section(
+        records,
+        bin_entries={1: _BinEntry(storage_id=7, ext="png")},
+        bin_streams={7: (PNG_BYTES, "png")},
+    )
+    document = parsed.to_document(
+        ocr_fn=lambda image, index: OcrResult(
+            status="no_text",
+            text="",
+            reason="decorative arrow only",
+        )
+    )
+
+    assert [unit.source.text for unit in document.units] == [
+        "네이티브 본문",
+        "image: img-0001",
+    ]
+    assert document.quality_warnings == [
+        {
+            "type": "hwp5_ocr_empty",
+            "severity": "low",
+            "asset_id": "img-0001",
+            "stage": "ocr",
+            "message": "empty OCR result",
+            "reason": "decorative arrow only",
+        }
+    ]
+
+
 @pytest.mark.parametrize("ocr_result", [None, "", " \n\t "])
 def test_hwp5_empty_ocr_result_is_not_reported_as_failure(
     ocr_result: str | None,
