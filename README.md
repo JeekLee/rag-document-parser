@@ -329,6 +329,13 @@ Callback exceptions remain medium-severity `hwp5_ocr_failed` or
 `hwpx_ocr_failed` warnings. This distinction lets consumers treat images with
 no readable text separately from OCR service failures.
 
+OCR callbacks may also return the structured `OcrResult` model. Only an
+`extracted` result can become evidence; `no_text` and `uncertain` results are
+excluded and reported as quality warnings. The `VisionOcr` callback requests
+this model with a strict JSON schema, sends OCR instructions as a system message,
+and sends only the image in the user message. Existing string callbacks remain
+supported for compatibility.
+
 PDF OCR configuration is independent from chunk enrichment configuration.
 Passing `LlmConfig` to `EvidenceUnitAgenticChunker(llm=...)` does not enable PDF
 vision OCR in `RagDocumentParser`. The parser's default backend registry uses

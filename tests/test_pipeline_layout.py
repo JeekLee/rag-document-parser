@@ -16,10 +16,12 @@ def test_pipeline_layout_exports_stage_and_format_modules():
         HtmlBackend,
         HwpxBackend,
         LlmConfig,
+        OcrResult,
         PdfBackend,
         QwenLlmConfig,
         RagChunkEnricher,
         RagDocumentParser,
+        VisionOcr,
         XlsxBackend,
     )
     from rag_document_parser.chunk import EvidenceUnitAgenticChunker as StageAgenticChunker
@@ -67,9 +69,11 @@ def test_pipeline_layout_exports_stage_and_format_modules():
     assert StageRagChunkEnricher is RagChunkEnricher
     assert Enricher.__name__ == "Enricher"
     assert LlmConfig.__name__ == "LlmConfig"
+    assert OcrResult.__name__ == "OcrResult"
     assert GeminiLlmConfig.__name__ == "GeminiLlmConfig"
     assert GemmaLlmConfig.__name__ == "GemmaLlmConfig"
     assert QwenLlmConfig.__name__ == "QwenLlmConfig"
+    assert VisionOcr.__name__ == "VisionOcr"
     assert Hwp5Backend.supported_suffixes == (".hwp",)
     assert HtmlBackend.supported_suffixes == (".html", ".htm")
     assert PdfBackend.supported_suffixes == (".pdf",)

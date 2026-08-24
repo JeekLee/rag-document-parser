@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .chunk import EvidenceUnitAgenticChunker, RagChunkEnricher
 from .evidence_unit_extraction.backend import DocumentBackend
+from .evidence_unit_extraction.ocr import OcrResult, VisionOcr
 from .evidence_unit_extraction.formats.hwp5 import Hwp5Backend
 from .evidence_unit_extraction.formats.html import HtmlBackend
 from .evidence_unit_extraction.formats.hwpx import HwpxBackend
@@ -59,6 +60,7 @@ __all__ = [
     "GeminiLlmConfig",
     "GemmaLlmConfig",
     "LlmConfig",
+    "OcrResult",
     "PendingAsset",
     "PdfBackend",
     "XlsxBackend",
@@ -73,6 +75,7 @@ __all__ = [
     "SourceInfo",
     "StructuredDiagramContent",
     "StructuredTableContent",
+    "VisionOcr",
     "public_url_for_s3_uri",
     "TableCell",
     "TableColumn",

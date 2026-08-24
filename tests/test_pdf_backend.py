@@ -2519,6 +2519,48 @@ def test_pdf_backend_isolates_ocr_failures_as_quality_warnings(monkeypatch):
     ]
 
 
+def test_pdf_backend_accepts_structured_no_text_ocr_result(monkeypatch):
+    from rag_document_parser import OcrResult
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
+
+    scanned_page = _FakePage(
+        chars=[],
+        images=[{"x0": 0, "x1": 300, "y0": 0, "y1": 400}],
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "pdfplumber",
+        SimpleNamespace(open=lambda stream: _FakePdf([scanned_page])),
+    )
+    monkeypatch.setattr(
+        pdf_backend,
+        "_render_page_to_png",
+        lambda data, page_idx, bbox, scale=2.0: b"rendered-page",
+    )
+
+    parsed = PdfBackend(
+        max_ocr_workers=1,
+        ocr_fn=lambda png, page_idx: OcrResult(
+            status="no_text",
+            text="",
+            reason="decorative arrow only",
+        ),
+    ).parse(b"%PDF-1.4 fake", ".pdf")
+
+    assert parsed.units == []
+    assert parsed.quality_warnings == [
+        {
+            "type": "pdf_ocr_empty",
+            "severity": "low",
+            "page": 1,
+            "stage": "ocr",
+            "reason": "decorative arrow only",
+            "message": "Structured OCR reported no readable text.",
+        }
+    ]
+
+
 def test_pdf_backend_renders_scanned_pages_at_ocr_scale(monkeypatch):
     from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
 
@@ -2552,6 +2594,7 @@ def test_pdf_backend_renders_scanned_pages_at_ocr_scale(monkeypatch):
 
 def test_pdf_backend_uses_openai_compatible_vision_ocr(monkeypatch):
     from rag_document_parser import GeminiLlmConfig
+    from rag_document_parser.evidence_unit_extraction import ocr as ocr_module
     from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
     from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
@@ -2569,24 +2612,34 @@ def test_pdf_backend_uses_openai_compatible_vision_ocr(monkeypatch):
     monkeypatch.setattr(
         pdf_backend,
         "_render_page_to_png",
-        lambda data, page_idx, bbox, scale=2.0: b"rendered-page",
+        lambda data, page_idx, bbox, scale=2.0: b"\x89PNG\r\n\x1a\nrendered-page",
     )
 
-    class FakeResponse:
-        def __enter__(self):
-            return self
+    def fake_read_response(req, cfg):
+        requests.append((req, cfg.timeout))
+        return json.dumps(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "status": "extracted",
+                                    "text": "스캔 OCR",
+                                    "reason": "readable Korean text",
+                                }
+                            )
+                        }
+                    }
+                ]
+            }
+        )
 
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def read(self):
-            return '{"choices":[{"message":{"content":"스캔 OCR"}}]}'.encode("utf-8")
-
-    def fake_urlopen(request, timeout):
-        requests.append((request, timeout))
-        return FakeResponse()
-
-    monkeypatch.setattr(pdf_backend.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        ocr_module,
+        "_read_response_with_retries",
+        fake_read_response,
+    )
 
     parsed = PdfBackend(
         max_ocr_workers=1,
@@ -2611,13 +2664,18 @@ def test_pdf_backend_uses_openai_compatible_vision_ocr(monkeypatch):
     body = json.loads(request.data.decode("utf-8"))
     assert body["model"] == "gemini-2.5-flash-lite"
     assert body["reasoning_effort"] == "none"
-    assert body["messages"][0]["content"][0]["image_url"]["url"].startswith(
+    assert body["response_format"]["type"] == "json_schema"
+    assert body["response_format"]["json_schema"]["strict"] is True
+    assert body["messages"][0]["role"] == "system"
+    assert body["messages"][1]["content"][0]["image_url"]["url"].startswith(
         "data:image/png;base64,"
     )
+    assert len(body["messages"][1]["content"]) == 1
 
 
 def test_pdf_backend_strips_vision_ocr_markdown_fences(monkeypatch):
     from rag_document_parser import LlmConfig
+    from rag_document_parser.evidence_unit_extraction import ocr as ocr_module
     from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
     from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
@@ -2633,30 +2691,36 @@ def test_pdf_backend_strips_vision_ocr_markdown_fences(monkeypatch):
     monkeypatch.setattr(
         pdf_backend,
         "_render_page_to_png",
-        lambda data, page_idx, bbox, scale=2.0: b"rendered-page",
+        lambda data, page_idx, bbox, scale=2.0: b"\x89PNG\r\n\x1a\nrendered-page",
     )
 
-    class FakeResponse:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def read(self):
-            return (
-                '{"choices":[{"message":{"content":"```markdown\\n'
-                '# 직인생략\\n'
-                '| 구분 | 금액 |\\n'
-                '| --- | --- |\\n'
-                '| 외래 | 1000 |\\n'
-                '```"}}]}'
-            ).encode("utf-8")
-
     monkeypatch.setattr(
-        pdf_backend.request,
-        "urlopen",
-        lambda request, timeout: FakeResponse(),
+        ocr_module,
+        "_read_response_with_retries",
+        lambda req, cfg: json.dumps(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "status": "extracted",
+                                    "text": (
+                                        "```markdown\n"
+                                        "# 직인생략\n"
+                                        "| 구분 | 금액 |\n"
+                                        "| --- | --- |\n"
+                                        "| 외래 | 1000 |\n"
+                                        "```"
+                                    ),
+                                    "reason": "readable text and table",
+                                }
+                            )
+                        }
+                    }
+                ]
+            }
+        ),
     )
 
     parsed = PdfBackend(
