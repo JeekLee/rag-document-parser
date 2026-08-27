@@ -186,8 +186,23 @@ src/rag_document_parser/
     schema/
     formats/
       html/
+        backend.py
+        document_parser.py
+        repair.py
+        text.py
+        state.py
+        assets.py
+        table_extraction.py
+        source_projection.py
       markdown/  # internal, not registered by default in 0.6.0
       hwpx/
+        backend.py
+        package_reader.py
+        xml_utils.py
+        table_extraction.py
+        diagram.py
+        source_projection.py
+        document_assembly.py
       hwp5/
         backend.py
         binary_reader.py
@@ -205,7 +220,14 @@ src/rag_document_parser/
         source_projection.py
       pdf/
         backend.py
+        models.py
+        geometry.py
+        embedded_images.py
+        diagram.py
         ocr.py
+        ocr_text.py
+        segment_processing.py
+        table_extraction.py
         source_projection.py
         table_normalization.py
   chunk/
@@ -236,18 +258,21 @@ Key boundaries:
 - `chunk/`: `EvidenceUnitAgenticChunker`, typed LLM response contracts,
   prompt construction, `ChunkPlanMaterializer`, shared token accounting, and
   final `RagChunkEnricher`.
-- `evidence_unit_extraction/formats/pdf/ocr.py`: PDF scan classification, OCR
-  execution/fallback policy, and OCR failure reporting.
-- `evidence_unit_extraction/formats/pdf/table_normalization.py`: semantic table
-  repair rules applied after raw PDF table extraction.
-- `evidence_unit_extraction/formats/pdf/source_projection.py`: deterministic
-  source-text projection for canonical PDF table evidence.
+- `evidence_unit_extraction/formats/html/`: unsafe-source repair, DOM text
+  interpretation, nested table and embedded image extraction, source
+  projection, and document traversal behind a thin backend.
+- `evidence_unit_extraction/formats/hwpx/`: package/BinData reading, XML text,
+  table and diagram construction, source projection, and document/OCR assembly
+  behind a thin backend.
 - `evidence_unit_extraction/formats/xlsx/`: workbook orchestration separated
   from package validation, worksheet parsing, region detection, and table
   source-text projection.
 - `evidence_unit_extraction/formats/hwp5/`: OLE/BinData reading, section-record
   parsing, intermediate blocks, table and diagram construction, source-text
   projection, and final document/OCR assembly behind a thin backend.
+- `evidence_unit_extraction/formats/pdf/`: page orchestration separated from
+  embedded images, vector diagrams, OCR text parsing, segment processing, raw
+  table reconstruction, semantic table normalization, and source projection.
 - `renderer/`: HTML rendering for extracted evidence units and final chunks.
 - `llm.py`: OpenAI-compatible `LlmGateway` adapter plus provider-specific Qwen,
   Gemini, and Gemma config classes for chunking and PDF vision OCR.
