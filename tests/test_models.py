@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
+from pydantic import ValidationError
+
 
 def test_evidence_unit_carries_direct_format_and_content():
     from rag_document_parser import EvidenceUnit, SourceEvidence
@@ -163,4 +167,66 @@ def test_parsed_document_is_a_canonical_model():
         "units": [],
         "assets": [],
         "quality_warnings": [],
+    }
+
+
+@pytest.mark.parametrize(
+    ("model", "payload"),
+    [
+        ("table_cell", {"column_id": "c1", "rowspan": 0}),
+        ("bounding_box", {"x": 0, "y": 0, "width": -1, "height": 1}),
+    ],
+)
+def test_domain_value_objects_reject_invalid_dimensions(model, payload):
+    from rag_document_parser import BoundingBox, TableCell
+
+    model_type = {"table_cell": TableCell, "bounding_box": BoundingBox}[model]
+
+    with pytest.raises(ValidationError):
+        model_type(**payload)
+
+
+def test_evidence_unit_rejects_mismatched_type_format_and_content():
+    from rag_document_parser import EvidenceUnit, SourceEvidence
+
+    with pytest.raises(ValidationError, match="requires StructuredTableContent"):
+        EvidenceUnit(
+            id="b1",
+            type="table",
+            format="structured_table",
+            source=SourceEvidence(kind="table", text="not a table"),
+            content="not a table",
+        )
+
+
+def test_domain_models_reject_undeclared_fields():
+    from rag_document_parser import SourceEvidence
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        SourceEvidence(kind="text", text="source", unexpected=True)
+
+
+def test_quality_warning_types_core_fields_and_preserves_flat_payload():
+    from rag_document_parser.models import ParsedDocument, QualityWarning
+
+    parsed = ParsedDocument(
+        units=[],
+        quality_warnings=[
+            {
+                "type": "document_degraded",
+                "severity": "medium",
+                "message": "Some content could not be extracted.",
+                "page": 3,
+            }
+        ],
+    )
+
+    warning = parsed.quality_warnings[0]
+    assert isinstance(warning, QualityWarning)
+    assert warning["page"] == 3
+    assert warning.to_dict() == {
+        "type": "document_degraded",
+        "severity": "medium",
+        "message": "Some content could not be extracted.",
+        "page": 3,
     }

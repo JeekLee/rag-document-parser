@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
-from typing import Any
+from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 
 def _plain(value: Any) -> Any:
@@ -22,10 +22,9 @@ def _plain(value: Any) -> Any:
 
 class RdpModel(BaseModel):
     model_config = ConfigDict(
-        extra="allow",
+        extra="forbid",
         populate_by_name=True,
         validate_assignment=True,
-        arbitrary_types_allowed=True,
     )
 
     def to_dict(self) -> dict[str, Any]:
@@ -33,9 +32,6 @@ class RdpModel(BaseModel):
         for name, field in self.__class__.model_fields.items():
             key = field.alias or name
             payload[key] = _plain(getattr(self, name))
-        if self.model_extra:
-            for key, value in self.model_extra.items():
-                payload[key] = _plain(value)
         return payload
 
     def _field_name(self, key: str) -> str:
@@ -50,12 +46,14 @@ class RdpModel(BaseModel):
         field_name = self._field_name(key)
         if field_name in self.__class__.model_fields:
             return getattr(self, field_name)
-        if self.model_extra and key in self.model_extra:
-            return self.model_extra[key]
         raise KeyError(key)
 
     def __setitem__(self, key: str, value: Any) -> None:
-        setattr(self, self._field_name(key), value)
+        """Keep legacy mapping writes while validating declared fields only."""
+        field_name = self._field_name(key)
+        if field_name not in self.__class__.model_fields:
+            raise KeyError(key)
+        setattr(self, field_name, value)
 
     def get(self, key: str, default: Any = None) -> Any:
         try:
@@ -90,15 +88,79 @@ class RdpModel(BaseModel):
 Mapping.register(RdpModel)
 
 
+EvidenceType = Literal["text", "table", "image", "diagram", "asset"]
+SourceEvidenceKind = Literal["text", "table", "image", "diagram", "chunk"]
+WarningSeverity = Literal["low", "medium", "high"]
+
+
+class QualityWarning(RdpModel):
+    """Typed warning envelope with a compatibility-preserving detail payload."""
+
+    type: str = Field(min_length=1)
+    severity: WarningSeverity | None = None
+    message: str | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def collect_details(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        known = {"type", "severity", "message", "details"}
+        details = dict(value.get("details", {}))
+        details.update({key: item for key, item in value.items() if key not in known})
+        return {
+            "type": value.get("type"),
+            "severity": value.get("severity"),
+            "message": value.get("message"),
+            "details": details,
+        }
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {"type": self.type}
+        if self.severity is not None:
+            payload["severity"] = self.severity
+        if self.message is not None:
+            payload["message"] = self.message
+        payload.update(_plain(self.details))
+        return payload
+
+    def __getitem__(self, key: str) -> Any:
+        if key in self.details:
+            return self.details[key]
+        return super().__getitem__(key)
+
+
 class AssetRefContent(RdpModel):
-    asset_id: str
+    asset_id: str = Field(min_length=1)
     caption: str | None = None
+    uri: str | None = Field(default=None, min_length=1)
+    mime: str | None = Field(default=None, min_length=1)
+    ext: str | None = Field(default=None, min_length=1)
+    sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    bytes: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_resolved_asset(self) -> Self:
+        resolved = (self.uri, self.mime, self.ext, self.sha256, self.bytes)
+        if any(value is not None for value in resolved) and not all(
+            value is not None for value in resolved
+        ):
+            raise ValueError("resolved asset references require uri, mime, ext, sha256, and bytes")
+        return self
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = super().to_dict()
+        for field_name in ("uri", "mime", "ext", "sha256", "bytes"):
+            if getattr(self, field_name) is None:
+                payload.pop(field_name, None)
+        return payload
 
 
 class CommonMetadata(RdpModel):
-    chunk_kind: str
+    chunk_kind: str = Field(min_length=1)
     section_path: list[str] = Field(default_factory=list)
-    display_format: str
+    display_format: str = Field(min_length=1)
 
 
 class CommonMetadataPayload(RdpModel):
@@ -106,21 +168,57 @@ class CommonMetadataPayload(RdpModel):
 
 
 class TableColumn(RdpModel):
-    id: str
+    id: str = Field(min_length=1)
     text: str
 
 
 class TableCell(RdpModel):
-    column_id: str
+    column_id: str = Field(min_length=1)
     text: str = ""
-    rowspan: int = 1
-    colspan: int = 1
+    rowspan: int = Field(default=1, ge=1)
+    colspan: int = Field(default=1, ge=1)
     children: list[EvidenceChild] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    row_addr: int | None = Field(default=None, ge=0)
+    col_addr: int | None = Field(default=None, ge=0)
+    address: str | None = None
+    formula: str | None = None
+    number_format: str | None = None
+    hyperlink: str | None = None
+    hidden: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = super().to_dict()
+        if not self.metadata:
+            payload.pop("metadata", None)
+        for field_name in (
+            "row_addr",
+            "col_addr",
+            "address",
+            "formula",
+            "number_format",
+            "hyperlink",
+        ):
+            if getattr(self, field_name) is None:
+                payload.pop(field_name, None)
+        if not self.hidden:
+            payload.pop("hidden", None)
+        return payload
 
 
 class TableRow(RdpModel):
-    index: int
+    index: int = Field(ge=1)
     cells: list[TableCell] = Field(default_factory=list)
+    source_row: int | None = Field(default=None, ge=1)
+    hidden: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = super().to_dict()
+        if self.source_row is None:
+            payload.pop("source_row", None)
+        if not self.hidden:
+            payload.pop("hidden", None)
+        return payload
 
 
 class StructuredTableContent(RdpModel):
@@ -145,8 +243,15 @@ Number = int | float
 class BoundingBox(RdpModel):
     x: Number
     y: Number
-    width: Number
-    height: Number
+    width: Number = Field(ge=0)
+    height: Number = Field(ge=0)
+    unit: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = super().to_dict()
+        if self.unit is None:
+            payload.pop("unit", None)
+        return payload
 
 
 class DiagramPoint(RdpModel):
@@ -155,16 +260,16 @@ class DiagramPoint(RdpModel):
 
 
 class DiagramNode(RdpModel):
-    id: str
-    shape_type: str
+    id: str = Field(min_length=1)
+    shape_type: str = Field(min_length=1)
     text: str
     bbox: BoundingBox | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class DiagramEdge(RdpModel):
-    from_: str = Field(alias="from")
-    to: str
+    from_: str = Field(alias="from", min_length=1)
+    to: str = Field(min_length=1)
     type: str = "line"
     label: str = ""
     confidence: str = ""
@@ -172,8 +277,8 @@ class DiagramEdge(RdpModel):
 
 
 class DiagramConnector(RdpModel):
-    id: str
-    type: str
+    id: str = Field(min_length=1)
+    type: str = Field(min_length=1)
     bbox: BoundingBox | None = None
     points: list[DiagramPoint] = Field(default_factory=list)
     arrow: bool = False
@@ -202,10 +307,15 @@ EvidenceContent = str | AssetRefContent | StructuredTableContent | StructuredDia
 
 
 class EvidenceChild(RdpModel):
-    type: str
-    format: str
+    type: EvidenceType = Field(validation_alias=AliasChoices("type", "kind"))
+    format: str = Field(min_length=1)
     content: EvidenceContent
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_content_variant(self) -> Self:
+        _validate_evidence_variant(self.type, self.format, self.content)
+        return self
 
     def to_dict(self) -> dict[str, Any]:
         payload = super().to_dict()
@@ -215,11 +325,19 @@ class EvidenceChild(RdpModel):
 
 
 class EvidenceItem(RdpModel):
-    type: str
+    type: EvidenceType
     content: EvidenceContent
-    format: str | None = None
+    format: str | None = Field(default=None, min_length=1)
     source_unit_ids: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_content_variant(self) -> Self:
+        if self.format is not None:
+            _validate_evidence_variant(self.type, self.format, self.content)
+        elif self.type != "text" or not isinstance(self.content, str):
+            raise ValueError("non-text evidence items require a format")
+        return self
 
     def to_dict(self) -> dict[str, Any]:
         payload = super().to_dict()
@@ -241,50 +359,59 @@ class Evidence(RdpModel):
 
 
 class SourceInfo(RdpModel):
-    sha256: str
-    suffix: str
-    bytes: int
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    suffix: str = Field(pattern=r"^\.[^.]+$")
+    bytes: int = Field(ge=0)
     id: str | None = None
     name: str | None = None
     url: str | None = None
 
 
 class PendingAsset(RdpModel):
-    id: str
-    kind: str
+    id: str = Field(min_length=1)
+    kind: str = Field(min_length=1)
     data: bytes
-    mime: str
-    ext: str
+    mime: str = Field(min_length=1)
+    ext: str = Field(min_length=1)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class DocumentAsset(RdpModel):
-    id: str
-    kind: str
-    uri: str
-    mime: str
-    ext: str
-    sha256: str
-    bytes: int
+    id: str = Field(min_length=1)
+    kind: str = Field(min_length=1)
+    uri: str = Field(min_length=1)
+    mime: str = Field(min_length=1)
+    ext: str = Field(min_length=1)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    bytes: int = Field(ge=0)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class SourceEvidence(RdpModel):
-    kind: str
+    kind: SourceEvidenceKind
     text: str
 
 
 class EvidenceUnit(RdpModel):
-    id: str
-    type: str
-    format: str
+    id: str = Field(min_length=1)
+    type: EvidenceType
+    format: str = Field(min_length=1)
     source: SourceEvidence
     content: EvidenceContent
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def validate_content_variant(self) -> Self:
+        _validate_evidence_variant(self.type, self.format, self.content)
+        if self.source.kind != self.type:
+            raise ValueError(
+                f"source kind {self.source.kind!r} does not match evidence type {self.type!r}"
+            )
+        return self
+
 
 class RagChunk(RdpModel):
-    id: str
+    id: str = Field(min_length=1)
     source: SourceEvidence
     evidence: Evidence
     summary: str
@@ -297,13 +424,43 @@ class ParseResult(RdpModel):
     source: SourceInfo
     units: list[EvidenceUnit]
     assets: list[DocumentAsset] = Field(default_factory=list)
-    quality_warnings: list[dict[str, Any]] = Field(default_factory=list)
+    quality_warnings: list[QualityWarning] = Field(default_factory=list)
 
 
 class ParsedDocument(RdpModel):
     units: list[EvidenceUnit]
     assets: list[PendingAsset] = Field(default_factory=list)
-    quality_warnings: list[dict[str, Any]] = Field(default_factory=list)
+    quality_warnings: list[QualityWarning] = Field(default_factory=list)
+
+
+def _validate_evidence_variant(
+    evidence_type: EvidenceType,
+    evidence_format: str,
+    content: EvidenceContent,
+) -> None:
+    expected_content: type[str] | type[RdpModel]
+    expected_format: str | None
+    if evidence_type == "text":
+        expected_content = str
+        expected_format = "plain"
+    elif evidence_type == "table":
+        expected_content = StructuredTableContent
+        expected_format = "structured_table"
+    elif evidence_type == "diagram":
+        expected_content = StructuredDiagramContent
+        expected_format = "structured_diagram"
+    else:
+        expected_content = AssetRefContent
+        expected_format = None
+
+    if not isinstance(content, expected_content):
+        raise ValueError(
+            f"{evidence_type!r} evidence requires {expected_content.__name__} content"
+        )
+    if expected_format is not None and evidence_format != expected_format:
+        raise ValueError(
+            f"{evidence_type!r} evidence requires format {expected_format!r}"
+        )
 
 
 TableCell.model_rebuild()
