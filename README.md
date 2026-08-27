@@ -189,7 +189,20 @@ src/rag_document_parser/
       markdown/  # internal, not registered by default in 0.6.0
       hwpx/
       hwp5/
+        backend.py
+        binary_reader.py
+        section_parser.py
+        blocks.py
+        table_extraction.py
+        diagram.py
+        source_projection.py
+        document_assembly.py
       xlsx/
+        backend.py
+        package_validation.py
+        worksheet_parser.py
+        regions.py
+        source_projection.py
       pdf/
         backend.py
         ocr.py
@@ -229,6 +242,12 @@ Key boundaries:
   repair rules applied after raw PDF table extraction.
 - `evidence_unit_extraction/formats/pdf/source_projection.py`: deterministic
   source-text projection for canonical PDF table evidence.
+- `evidence_unit_extraction/formats/xlsx/`: workbook orchestration separated
+  from package validation, worksheet parsing, region detection, and table
+  source-text projection.
+- `evidence_unit_extraction/formats/hwp5/`: OLE/BinData reading, section-record
+  parsing, intermediate blocks, table and diagram construction, source-text
+  projection, and final document/OCR assembly behind a thin backend.
 - `renderer/`: HTML rendering for extracted evidence units and final chunks.
 - `llm.py`: OpenAI-compatible `LlmGateway` adapter plus provider-specific Qwen,
   Gemini, and Gemma config classes for chunking and PDF vision OCR.
