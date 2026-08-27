@@ -2749,6 +2749,7 @@ def test_pdf_backend_strips_vision_ocr_markdown_fences(monkeypatch):
 def test_pdf_backend_falls_back_when_vision_ocr_is_empty(monkeypatch):
     from rag_document_parser import LlmConfig
     from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import ocr as pdf_ocr
     from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     scanned_page = _FakePage(
@@ -2766,13 +2767,13 @@ def test_pdf_backend_falls_back_when_vision_ocr_is_empty(monkeypatch):
         lambda data, page_idx, bbox, scale=2.0: b"rendered-page",
     )
     monkeypatch.setattr(
-        pdf_backend,
-        "_vision_ocr_png",
+        pdf_ocr,
+        "vision_ocr_png",
         lambda png, gateway, page_idx: "",
     )
     monkeypatch.setattr(
-        pdf_backend,
-        "_ocr_page",
+        pdf_ocr,
+        "ocr_page",
         lambda data, png, page_idx: "fallback OCR",
     )
 
@@ -2790,6 +2791,7 @@ def test_pdf_backend_falls_back_when_vision_ocr_is_empty(monkeypatch):
 
 def test_pdf_backend_does_not_render_scanned_pages_without_image_ocr(monkeypatch):
     from rag_document_parser.evidence_unit_extraction.formats.pdf import backend as pdf_backend
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import ocr as pdf_ocr
     from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
     scanned_page = _FakePage(
@@ -2808,8 +2810,8 @@ def test_pdf_backend_does_not_render_scanned_pages_without_image_ocr(monkeypatch
 
     monkeypatch.setattr(pdf_backend, "_render_page_to_png", fail_render)
     monkeypatch.setattr(
-        pdf_backend,
-        "_ocr_page",
+        pdf_ocr,
+        "ocr_page",
         lambda data, png, page_idx: "embedded-image OCR",
     )
 

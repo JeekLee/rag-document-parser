@@ -191,10 +191,18 @@ src/rag_document_parser/
       hwp5/
       xlsx/
       pdf/
+        backend.py
+        ocr.py
   chunk/
     backend.py
     agentic.py
+    contracts.py
     enrichment.py
+    planning_prompt.py
+    tokens.py
+  ports/
+    asset_store.py
+    llm.py
   pipeline/
     parser.py
   renderer/
@@ -209,8 +217,10 @@ Key boundaries:
   helpers, table source text helpers, and asset upload/resolve support.
 - `pipeline/parser.py`: public parser orchestration.
 - `ports/`: application-facing `AssetStore` and `LlmGateway` protocols.
-- `chunk/`: `EvidenceUnitAgenticChunker`, chunker protocol, and final
-  `RagChunkEnricher`.
+- `chunk/`: `EvidenceUnitAgenticChunker`, typed LLM response contracts,
+  prompt construction, shared token accounting, and final `RagChunkEnricher`.
+- `evidence_unit_extraction/formats/pdf/ocr.py`: PDF scan classification, OCR
+  execution/fallback policy, and OCR failure reporting.
 - `renderer/`: HTML rendering for extracted evidence units and final chunks.
 - `llm.py`: OpenAI-compatible `LlmGateway` adapter plus provider-specific Qwen,
   Gemini, and Gemma config classes for chunking and PDF vision OCR.
