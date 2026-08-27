@@ -11,16 +11,13 @@ OPF = "http://www.idpf.org/2007/opf/"
 PNG_BYTES = b"\x89PNG\r\n\x1a\nfake-png"
 
 
-def _s3_config():
-    from rag_document_parser import S3Config
+class _RecordingAssetStore:
+    def __init__(self) -> None:
+        self.uploads: list[tuple[str, bytes, str]] = []
 
-    return S3Config(
-        endpoint="http://minio.test",
-        bucket="rag-assets",
-        access_key="access",
-        secret_key="secret",
-        prefix="documents",
-    )
+    def put(self, key: str, data: bytes, content_type: str) -> str:
+        self.uploads.append((key, data, content_type))
+        return f"s3://rag-assets/documents/{key}"
 
 
 def _run(text: str) -> str:
@@ -224,16 +221,10 @@ def test_hwpx_backend_parses_text_table_nested_table_and_image_asset():
     assert parsed.assets[0].ext == "png"
 
 
-def test_parser_registers_hwpx_backend_and_uploads_hwpx_images(monkeypatch):
+def test_parser_registers_hwpx_backend_and_uploads_hwpx_images():
     from rag_document_parser import RagDocumentParser
 
-    uploads = []
-
-    def fake_put_object(cfg, key, data, content_type):
-        uploads.append((key, data, content_type))
-        return f"s3://{cfg.bucket}/{cfg.prefix}/{key}"
-
-    monkeypatch.setattr("rag_document_parser.evidence_unit_extraction.assets._put_object", fake_put_object)
+    asset_store = _RecordingAssetStore()
 
     xml = (
         f'<hp:sec xmlns:hp="{HP}">'
@@ -243,12 +234,12 @@ def test_parser_registers_hwpx_backend_and_uploads_hwpx_images(monkeypatch):
     raw = _make_hwpx(xml, image_bytes=PNG_BYTES)
     document_hash = hashlib.sha256(raw).hexdigest()
 
-    result = RagDocumentParser(object_storage=_s3_config()).parse(
+    result = RagDocumentParser(asset_store=asset_store).parse(
         raw,
         suffix=".hwpx",
     )
 
-    assert uploads == [
+    assert asset_store.uploads == [
         (
             f"{document_hash}/assets/img-0001.png",
             PNG_BYTES,
@@ -288,16 +279,10 @@ def test_hwpx_table_cell_image_is_preserved_as_nested_asset_ref():
     assert "image: img-0001" in table_unit.source.text
 
 
-def test_nested_asset_refs_are_uploaded_and_resolved_in_table_evidence(monkeypatch):
+def test_nested_asset_refs_are_uploaded_and_resolved_in_table_evidence():
     from rag_document_parser import RagDocumentParser
 
-    uploads = []
-
-    def fake_put_object(cfg, key, data, content_type):
-        uploads.append((key, data, content_type))
-        return f"s3://{cfg.bucket}/{cfg.prefix}/{key}"
-
-    monkeypatch.setattr("rag_document_parser.evidence_unit_extraction.assets._put_object", fake_put_object)
+    asset_store = _RecordingAssetStore()
 
     table = _table(
         [_text_cell("구분"), _text_cell("이미지")],
@@ -311,12 +296,12 @@ def test_nested_asset_refs_are_uploaded_and_resolved_in_table_evidence(monkeypat
     raw = _make_hwpx(xml, image_bytes=PNG_BYTES)
     document_hash = hashlib.sha256(raw).hexdigest()
 
-    result = RagDocumentParser(object_storage=_s3_config()).parse(
+    result = RagDocumentParser(asset_store=asset_store).parse(
         raw,
         suffix=".hwpx",
     )
 
-    assert uploads == [
+    assert asset_store.uploads == [
         (
             f"{document_hash}/assets/img-0001.png",
             PNG_BYTES,

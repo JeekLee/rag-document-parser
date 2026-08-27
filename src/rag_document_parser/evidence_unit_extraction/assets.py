@@ -5,19 +5,23 @@ from collections.abc import Mapping
 from typing import Any
 
 from ..models import DocumentAsset, EvidenceUnit, PendingAsset
-from ..storage import S3Config, put_object as _put_object
+from ..ports.asset_store import AssetStore
 
 
 def upload_assets(
     assets: list[PendingAsset],
-    object_storage: S3Config,
+    asset_store: AssetStore | None,
     document_sha256: str,
 ) -> list[DocumentAsset]:
+    if assets and asset_store is None:
+        raise ValueError("asset_store is required when a document contains assets")
     uploaded: list[DocumentAsset] = []
     for asset in assets:
         ext = asset.ext.lstrip(".")
         key = f"{document_sha256}/assets/{asset.id}.{ext}"
-        uri = _put_object(object_storage, key, asset.data, asset.mime)
+        if asset_store is None:  # pragma: no cover - guarded above
+            raise AssertionError("asset store guard failed")
+        uri = asset_store.put(key, asset.data, asset.mime)
         uploaded.append(
             DocumentAsset(
                 id=asset.id,

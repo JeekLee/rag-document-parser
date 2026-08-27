@@ -1,20 +1,13 @@
 from __future__ import annotations
 
 import base64
-import json
-from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Literal, Self, TypeAlias
-from urllib import request
+from typing import Literal, Protocol, Self, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ..llm import (
-    LlmConfig,
-    _read_response_with_retries,
-    apply_llm_request_options,
-    chat_completions_url,
-)
+from ..llm import LlmConfig, as_llm_gateway
+from ..ports.llm import LlmGateway
 
 
 OcrStatus = Literal["extracted", "no_text", "uncertain"]
@@ -37,7 +30,14 @@ class OcrResult(BaseModel):
 
 
 OcrOutput: TypeAlias = str | OcrResult | None
-OcrFn: TypeAlias = Callable[[bytes, int], OcrOutput]
+
+
+class OcrGateway(Protocol):
+    def __call__(self, image: bytes, image_index: int) -> OcrOutput:
+        ...
+
+
+OcrFn: TypeAlias = OcrGateway
 
 
 _VISION_OCR_SYSTEM_PROMPT = """\
@@ -57,7 +57,7 @@ _VISION_OCR_SYSTEM_PROMPT = """\
 
 @dataclass(frozen=True)
 class VisionOcr:
-    llm: LlmConfig
+    llm: LlmConfig | LlmGateway
     system_prompt: str = _VISION_OCR_SYSTEM_PROMPT
 
     def __call__(self, image: bytes, _image_index: int) -> OcrResult:
@@ -66,56 +66,32 @@ class VisionOcr:
 
 def request_vision_ocr(
     image: bytes,
-    cfg: LlmConfig,
+    llm: LlmConfig | LlmGateway,
     *,
     system_prompt: str = _VISION_OCR_SYSTEM_PROMPT,
 ) -> OcrResult:
-    messages = cfg.prepare_messages(
-        [
-            {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": (
-                                f"data:{_image_mime_type(image)};base64,"
-                                f"{base64.b64encode(image).decode('ascii')}"
-                            )
-                        },
-                    }
-                ],
-            },
-        ]
-    )
-    body: dict[str, Any] = {
-        "model": cfg.model,
-        "temperature": cfg.temperature,
-        "messages": messages,
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "ocr_result",
-                "strict": True,
-                "schema": OcrResult.model_json_schema(),
-            },
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": (
+                            f"data:{_image_mime_type(image)};base64,"
+                            f"{base64.b64encode(image).decode('ascii')}"
+                        )
+                    },
+                }
+            ],
         },
-    }
-    apply_llm_request_options(body, cfg)
-    req = request.Request(
-        chat_completions_url(cfg.url),
-        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {cfg.api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
+    ]
+    return as_llm_gateway(llm).complete_model(
+        messages,
+        OcrResult,
+        schema_name="ocr_result",
     )
-    response_body = _read_response_with_retries(req, cfg)
-    payload = json.loads(response_body)
-    content = payload["choices"][0]["message"]["content"]
-    return OcrResult.model_validate_json(content)
 
 
 def coerce_ocr_result(value: OcrOutput) -> OcrResult:

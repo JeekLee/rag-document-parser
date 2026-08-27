@@ -7,7 +7,8 @@ from ..evidence_unit_extraction.assets import resolve_units, upload_assets
 from ..evidence_unit_extraction.backend import DocumentBackend
 from ..evidence_unit_extraction.registry import default_backends
 from ..models import ParseResult, SourceInfo
-from ..storage import S3Config
+from ..ports.asset_store import AssetStore
+from ..storage import S3Config, as_asset_store
 
 
 def _normalize_source(source: bytes | str) -> bytes:
@@ -25,10 +26,20 @@ def _normalize_suffix(suffix: str) -> str:
 class RagDocumentParser:
     object_storage: S3Config | None = None
     backends: dict[str, DocumentBackend] | None = None
+    asset_store: AssetStore | None = None
 
     def __post_init__(self) -> None:
-        if self.object_storage is None:
-            raise ValueError("object_storage is required")
+        if self.object_storage is not None and self.asset_store is not None:
+            raise ValueError("configure either asset_store or object_storage, not both")
+        self._asset_store = (
+            self.asset_store
+            if self.asset_store is not None
+            else (
+                as_asset_store(self.object_storage)
+                if self.object_storage is not None
+                else None
+            )
+        )
         backends = default_backends()
         if self.backends:
             backends.update(
@@ -53,7 +64,7 @@ class RagDocumentParser:
         backend = self._backend_for(normalized_suffix)
         parsed = backend.parse(data, normalized_suffix)
         sha256 = hashlib.sha256(data).hexdigest()
-        assets = upload_assets(parsed.assets, self.object_storage, sha256)
+        assets = upload_assets(parsed.assets, self._asset_store, sha256)
         source_info = SourceInfo(
             sha256=sha256,
             suffix=normalized_suffix,

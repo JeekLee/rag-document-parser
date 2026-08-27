@@ -11,7 +11,7 @@ from typing import Any, Callable
 from ....llm import LlmConfig
 from ....models import EvidenceUnit, PendingAsset, SourceEvidence
 from ...backend import ParsedDocument
-from ...ocr import OcrFn, OcrOutput, OcrResult, request_vision_ocr
+from ...ocr import OcrFn, OcrGateway, OcrOutput, OcrResult, VisionOcr
 from ...schema import (
     structured_diagram as _structured_diagram_content,
     structured_table as _structured_table_content,
@@ -77,6 +77,29 @@ class PdfBackend:
     max_ocr_workers: int = 4
     ocr_fn: OcrFn | None = None
     ocr_llm: LlmConfig | None = None
+    ocr_gateway: OcrGateway | None = None
+
+    def __post_init__(self) -> None:
+        configured = sum(
+            option is not None
+            for option in (self.ocr_fn, self.ocr_llm, self.ocr_gateway)
+        )
+        if configured > 1:
+            raise ValueError("configure only one of ocr_fn, ocr_llm, or ocr_gateway")
+
+    def _configured_ocr_gateway(self, data: bytes) -> OcrGateway | None:
+        if self.ocr_gateway is not None:
+            return self.ocr_gateway
+        if self.ocr_fn is not None:
+            return self.ocr_fn
+        if self.ocr_llm is None:
+            return None
+        vision_ocr = VisionOcr(self.ocr_llm)
+
+        def vision_with_local_fallback(image: bytes, page_idx: int) -> OcrOutput:
+            return _ocr_page_with_vision(data, image, page_idx, vision_ocr)
+
+        return vision_with_local_fallback
 
     def parse(self, data: bytes, suffix: str) -> ParsedDocument:
         try:
@@ -87,6 +110,7 @@ class PdfBackend:
                 "dependencies before parsing .pdf files."
             ) from exc
 
+        ocr_gateway = self._configured_ocr_gateway(data)
         assets: list[PendingAsset] = []
         warnings: list[dict[str, Any]] = []
 
@@ -99,7 +123,7 @@ class PdfBackend:
                 ocr_fallback_reason = _ocr_fallback_reason(
                     page,
                     allow_degraded_native=(
-                        self.ocr_fn is not None or self.ocr_llm is not None
+                        ocr_gateway is not None
                     ),
                 )
                 if ocr_fallback_reason is not None:
@@ -108,7 +132,7 @@ class PdfBackend:
                         page_idx,
                         page,
                         warnings,
-                    ) if self.ocr_fn is not None or self.ocr_llm is not None else b""
+                    ) if ocr_gateway is not None else b""
                     scanned.append((page_idx, png))
                     if ocr_fallback_reason == "degraded_native_text":
                         warnings.append(
@@ -206,8 +230,7 @@ class PdfBackend:
                 scanned,
                 data,
                 self.max_ocr_workers,
-                self.ocr_fn,
-                self.ocr_llm,
+                ocr_gateway,
             )
             for page_idx, text in ocr_by_page.items():
                 cleaned = _clean_text(text)
@@ -3413,17 +3436,14 @@ def _ocr_pages(
     scanned: list[tuple[int, bytes]],
     data: bytes,
     max_workers: int | None,
-    ocr_fn: OcrFn | None,
-    ocr_llm: LlmConfig | None,
+    ocr_gateway: OcrGateway | None,
 ) -> _OcrResults:
     if not scanned:
         return _OcrResults()
 
     def run_ocr(png: bytes, page_idx: int) -> OcrOutput:
-        if ocr_fn is not None:
-            return ocr_fn(png, page_idx)
-        if ocr_llm is not None:
-            return _ocr_page_with_vision(data, png, page_idx, ocr_llm)
+        if ocr_gateway is not None:
+            return ocr_gateway(png, page_idx)
         return _ocr_page(data, png, page_idx)
 
     if max_workers is None or max_workers <= 1 or len(scanned) == 1:
@@ -3720,11 +3740,11 @@ def _ocr_page_with_vision(
     data: bytes,
     png: bytes,
     page_idx: int,
-    cfg: LlmConfig,
+    ocr_gateway: OcrGateway,
 ) -> OcrOutput:
     if png:
         try:
-            result = _vision_ocr_png(png, cfg)
+            result = _vision_ocr_png(png, ocr_gateway, page_idx)
         except Exception:
             result = None
         if isinstance(result, OcrResult):
@@ -3737,8 +3757,17 @@ def _ocr_page_with_vision(
     return _ocr_page(data, png, page_idx)
 
 
-def _vision_ocr_png(png: bytes, cfg: LlmConfig) -> OcrResult:
-    result = request_vision_ocr(png, cfg)
+def _vision_ocr_png(
+    png: bytes,
+    ocr_gateway: OcrGateway,
+    page_idx: int,
+) -> OcrResult:
+    result = ocr_gateway(png, page_idx)
+    if not isinstance(result, OcrResult):
+        text = result or ""
+        if not text.strip():
+            return OcrResult(status="no_text", text="", reason="empty OCR result")
+        result = OcrResult(status="extracted", text=text, reason="legacy OCR result")
     if result.status != "extracted":
         return result
     cleaned = _clean_vision_ocr_text(result.text)

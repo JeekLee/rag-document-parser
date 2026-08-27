@@ -7,6 +7,8 @@ import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from .ports.asset_store import AssetStore
+
 
 @dataclass(frozen=True)
 class S3Config:
@@ -16,6 +18,22 @@ class S3Config:
     secret_key: str
     prefix: str = ""
     region: str = "us-east-1"
+
+
+@dataclass(frozen=True)
+class S3AssetStore:
+    """S3 implementation of the application-level asset store port."""
+
+    config: S3Config
+
+    def put(self, key: str, data: bytes, content_type: str) -> str:
+        return put_object(self.config, key, data, content_type)
+
+
+def as_asset_store(storage: AssetStore | S3Config) -> AssetStore:
+    if isinstance(storage, S3Config):
+        return S3AssetStore(storage)
+    return storage
 
 
 def put_object(cfg: S3Config, key: str, data: bytes, content_type: str) -> str:

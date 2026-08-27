@@ -7,8 +7,10 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
+from ..llm import LlmConfig, as_llm_gateway
 from ..models import Evidence, EvidenceItem, EvidenceUnit, RagChunk, SourceEvidence
-from ..llm import LlmConfig, chat_json
+from ..ports.llm import LlmGateway
+from .contracts import BoundaryDecision, ChunkPlanResponse
 from .enrichment import Enricher, RagChunkEnricher
 
 PlanFn = Callable[[list[EvidenceUnit], LlmConfig | None, int], Any]
@@ -32,7 +34,7 @@ _PROMPT = """\
 - 각 include_rows operation은 해당 unit_id의 rows[].index 범위 안에서만 작성합니다.
 - include_rows를 사용하면 해당 table의 모든 실제 row index를 빠짐없이, 겹치지 않게 포함해야 합니다.
 - table row coverage에 확신이 없으면 action "include"로 전체 table을 포함합니다.
-- context_unit_ids는 선택 사항이며 이미 이전 chunk에서 evidence로 포함된 unit id만 작성합니다.
+- context_unit_ids는 이미 이전 chunk에서 evidence로 포함된 unit id만 작성하며, 없으면 빈 배열입니다.
 - text, table, image를 같은 chunk에 묶을 수 있습니다.
 - summary, keywords, questions는 최종 RagChunk 확정 후 별도 enrichment 단계에서 생성합니다.
 - max_units_per_chunk는 일반 chunk의 hard limit입니다. 하나의 원자적 unit 자체가 큰 경우를 제외하고 초과하지 않습니다.
@@ -45,17 +47,19 @@ _PROMPT = """\
 Unit 목록:
 {units}
 
-JSON 배열만 출력하세요:
-[
-  {
-    "unit_ids": [{example_unit_id}],
-    "operations": [
-      {"unit_id": {example_unit_id}, "action": "include"}
-    ],
-    "context_unit_ids": [],
-    "title": "제목"
-  }
-]
+JSON object만 출력하세요:
+{
+  "chunks": [
+    {
+      "unit_ids": [{example_unit_id}],
+      "operations": [
+        {"unit_id": {example_unit_id}, "action": "include", "row_ranges": null}
+      ],
+      "context_unit_ids": [],
+      "title": "제목"
+    }
+  ]
+}
 {include_rows_example}
 """
 
@@ -110,7 +114,8 @@ class EvidenceUnitAgenticChunker:
     def __init__(
         self,
         *,
-        llm: LlmConfig | None,
+        llm: LlmConfig | None = None,
+        llm_gateway: LlmGateway | None = None,
         max_units_per_chunk: int = 10,
         target_tokens_per_chunk: int = _DEFAULT_TARGET_CHUNK_TOKENS,
         max_tokens_per_chunk: int = _DEFAULT_MAX_CHUNK_TOKENS,
@@ -122,7 +127,14 @@ class EvidenceUnitAgenticChunker:
         enrich_final_chunks: bool = True,
         enrichment_batch_token_budget: int | None = None,
     ) -> None:
+        if llm is not None and llm_gateway is not None:
+            raise ValueError("configure either llm or llm_gateway, not both")
         self._llm = llm
+        self._llm_gateway = (
+            llm_gateway
+            if llm_gateway is not None
+            else (as_llm_gateway(llm) if llm is not None else None)
+        )
         self._max_units = max(1, max_units_per_chunk)
         self._target_tokens = max(1, target_tokens_per_chunk)
         self._max_tokens = max(self._target_tokens, max_tokens_per_chunk)
@@ -135,8 +147,7 @@ class EvidenceUnitAgenticChunker:
             if final_enricher is not None
             else (
                 RagChunkEnricher(
-                    llm=llm,
-                    chat_fn=chat_json,
+                    llm_gateway=self._llm_gateway,
                     max_concurrency=self._concurrency,
                     batch_token_budget=enrichment_batch_token_budget,
                 )
@@ -187,14 +198,21 @@ class EvidenceUnitAgenticChunker:
         cfg: LlmConfig | None,
         max_units: int,
     ) -> Any:
-        if cfg is None:
+        if self._llm_gateway is None:
             return None
-        return chat_json(_plan_prompt(window, max_units), cfg)
+        response = self._llm_gateway.complete_model(
+            _json_messages(_plan_prompt(window, max_units)),
+            ChunkPlanResponse,
+            schema_name="chunk_plan",
+        )
+        return [item.model_dump(exclude_none=True) for item in response.chunks]
 
     def _merge_window_boundaries(self, results: list[_WindowResult]) -> list[RagChunk]:
         if not results:
             return []
-        if len(results) == 1 or (self._boundary_merge_fn is None and self._llm is None):
+        if len(results) == 1 or (
+            self._boundary_merge_fn is None and self._llm_gateway is None
+        ):
             return [chunk for result in results for chunk in result.chunks]
 
         chunks = list(results[0].chunks)
@@ -250,9 +268,21 @@ class EvidenceUnitAgenticChunker:
         cfg: LlmConfig | None,
         max_units: int,
     ) -> Any:
-        if cfg is None:
+        if self._llm_gateway is None:
             return {"action": "keep", "reason": "llm is not configured"}
-        return chat_json(_boundary_prompt(left, right, max_units), cfg)
+        response = self._llm_gateway.complete_model(
+            _json_messages(_boundary_prompt(left, right, max_units)),
+            BoundaryDecision,
+            schema_name="chunk_boundary_decision",
+        )
+        return response.model_dump()
+
+
+def _json_messages(prompt: str) -> list[dict[str, Any]]:
+    return [
+        {"role": "system", "content": "Return a response matching the JSON schema."},
+        {"role": "user", "content": prompt},
+    ]
 
 
 def _windows(units: list[EvidenceUnit], size: int) -> list[list[EvidenceUnit]]:

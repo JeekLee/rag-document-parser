@@ -7,8 +7,10 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from ..llm import LlmConfig, chat_json
+from ..llm import LlmConfig, as_llm_gateway, chat_json
 from ..models import RagChunk
+from ..ports.llm import LlmGateway
+from .contracts import BatchChunkEnrichmentResponse, ChunkEnrichmentResponse
 
 ChunkEnrichmentFn = Callable[[RagChunk, LlmConfig | None], Any]
 ChatJsonFn = Callable[[str, LlmConfig], Any]
@@ -91,14 +93,25 @@ class RagChunkEnricher:
         self,
         *,
         llm: LlmConfig | None = None,
+        llm_gateway: LlmGateway | None = None,
         enrich_fn: ChunkEnrichmentFn | None = None,
         chat_fn: ChatJsonFn = chat_json,
         max_concurrency: int = 4,
         batch_token_budget: int | None = None,
     ) -> None:
+        if llm is not None and llm_gateway is not None:
+            raise ValueError("configure either llm or llm_gateway, not both")
+        if llm_gateway is not None and chat_fn is not chat_json:
+            raise ValueError("custom chat_fn cannot be combined with llm_gateway")
         self._llm = llm
+        self._llm_gateway = (
+            llm_gateway
+            if llm_gateway is not None
+            else (as_llm_gateway(llm) if llm is not None else None)
+        )
         self._enrich_fn = enrich_fn
         self._chat_fn = chat_fn
+        self._uses_custom_chat = chat_fn is not chat_json
         self._concurrency = max(1, max_concurrency)
         self._batch_token_budget = (
             max(1, batch_token_budget)
@@ -109,11 +122,11 @@ class RagChunkEnricher:
     def enrich(self, chunks: list[RagChunk]) -> list[RagChunk]:
         if not chunks:
             return []
-        if self._llm is None and self._enrich_fn is None:
+        if self._llm_gateway is None and self._enrich_fn is None:
             return [self._heuristic_enrich_if_needed(chunk) for chunk in chunks]
 
         if (
-            self._llm is not None
+            self._llm_gateway is not None
             and self._enrich_fn is None
             and self._batch_token_budget is not None
         ):
@@ -153,13 +166,32 @@ class RagChunkEnricher:
     def _call_enricher(self, chunk: RagChunk) -> Any:
         if self._enrich_fn is not None:
             return self._enrich_fn(chunk, self._llm)
-        if self._llm is None:
+        if self._llm_gateway is None:
             return _heuristic_enrichment(chunk)
-        return self._chat_fn(_enrichment_prompt(chunk), self._llm)
+        if self._uses_custom_chat:
+            if self._llm is None:  # pragma: no cover - guarded by constructor
+                raise AssertionError("custom chat function requires LlmConfig")
+            return self._chat_fn(_enrichment_prompt(chunk), self._llm)
+        return self._llm_gateway.complete_model(
+            _json_messages(_enrichment_prompt(chunk)),
+            ChunkEnrichmentResponse,
+            schema_name="chunk_enrichment",
+        ).model_dump()
 
     def _enrich_batch(self, chunks: list[RagChunk]) -> list[RagChunk]:
         try:
-            raw = self._chat_fn(_batch_enrichment_prompt(chunks), self._llm)
+            if self._uses_custom_chat:
+                if self._llm is None:  # pragma: no cover - guarded by constructor
+                    raise AssertionError("custom chat function requires LlmConfig")
+                raw = self._chat_fn(_batch_enrichment_prompt(chunks), self._llm)
+            else:
+                if self._llm_gateway is None:  # pragma: no cover - guarded by caller
+                    raise AssertionError("LLM gateway is not configured")
+                raw = self._llm_gateway.complete_model(
+                    _json_messages(_batch_enrichment_prompt(chunks)),
+                    BatchChunkEnrichmentResponse,
+                    schema_name="batch_chunk_enrichment",
+                ).model_dump()
             enrichment_by_id = _parse_batch_enrichment(raw, chunks)
         except Exception:
             return [self._enrich_chunk(chunk) for chunk in chunks]
@@ -171,6 +203,13 @@ class RagChunkEnricher:
             )
             for chunk in chunks
         ]
+
+
+def _json_messages(prompt: str) -> list[dict[str, Any]]:
+    return [
+        {"role": "system", "content": "Return a response matching the JSON schema."},
+        {"role": "user", "content": prompt},
+    ]
 
 
 def _enrichment_prompt(chunk: RagChunk) -> str:

@@ -16,6 +16,15 @@ def _s3_config():
     )
 
 
+class _RecordingAssetStore:
+    def __init__(self) -> None:
+        self.uploads: list[tuple[str, bytes, str]] = []
+
+    def put(self, key: str, data: bytes, content_type: str) -> str:
+        self.uploads.append((key, data, content_type))
+        return f"s3://rag-assets/documents/{key}"
+
+
 def test_parse_markdown_document_is_disabled_by_default_without_llm(monkeypatch):
     from rag_document_parser import RagDocumentParser
 
@@ -172,16 +181,13 @@ def test_source_does_not_require_position_offsets():
     assert not hasattr(unit, "source_pointer")
 
 
-def test_parser_requires_object_storage_config_only():
+def test_parser_allows_asset_free_documents_without_storage_config():
     from rag_document_parser import RagDocumentParser
 
-    try:
-        RagDocumentParser(object_storage=None)
-    except ValueError as exc:
-        assert "object_storage is required" in str(exc)
-    else:
-        raise AssertionError("expected ValueError")
+    result = RagDocumentParser().parse(b"<p>text only</p>", suffix=".html")
 
+    assert result.assets == []
+    assert result.units[0].content == "text only"
     RagDocumentParser(object_storage=_s3_config())
 
 
@@ -263,7 +269,7 @@ def test_unsupported_suffix_fails_before_llm_call(monkeypatch):
         raise AssertionError("expected ValueError")
 
 
-def test_image_assets_are_uploaded_to_s3_and_linked_in_evidence(monkeypatch):
+def test_image_assets_are_uploaded_to_asset_store_and_linked_in_evidence():
     from rag_document_parser import (
         EvidenceUnit,
         PendingAsset,
@@ -272,13 +278,7 @@ def test_image_assets_are_uploaded_to_s3_and_linked_in_evidence(monkeypatch):
     )
     from rag_document_parser.evidence_unit_extraction.backend import ParsedDocument
 
-    uploads = []
-
-    def fake_put_object(cfg, key, data, content_type):
-        uploads.append((cfg, key, data, content_type))
-        return f"s3://{cfg.bucket}/{cfg.prefix}/{key}"
-
-    monkeypatch.setattr("rag_document_parser.evidence_unit_extraction.assets._put_object", fake_put_object)
+    asset_store = _RecordingAssetStore()
 
     class ImageBackend:
         def parse(self, data: bytes, suffix: str) -> ParsedDocument:
@@ -316,15 +316,24 @@ def test_image_assets_are_uploaded_to_s3_and_linked_in_evidence(monkeypatch):
             )
 
     raw = b"fake source document"
+    try:
+        RagDocumentParser(backends={".imgdoc": ImageBackend()}).parse(
+            raw,
+            suffix=".imgdoc",
+        )
+    except ValueError as exc:
+        assert "asset_store is required" in str(exc)
+    else:
+        raise AssertionError("expected assets without a store to be rejected")
+
     result = RagDocumentParser(
-        object_storage=_s3_config(),
+        asset_store=asset_store,
         backends={".imgdoc": ImageBackend()},
     ).parse(raw, suffix=".imgdoc")
 
     document_hash = hashlib.sha256(raw).hexdigest()
-    assert uploads == [
+    assert asset_store.uploads == [
         (
-            _s3_config(),
             f"{document_hash}/assets/img-0001.png",
             b"png bytes",
             "image/png",
@@ -351,19 +360,10 @@ def test_image_assets_are_uploaded_to_s3_and_linked_in_evidence(monkeypatch):
     }
 
 
-def test_parser_registers_html_backend_and_uploads_nested_html_images(monkeypatch):
+def test_parser_registers_html_backend_and_uploads_nested_html_images():
     from rag_document_parser import RagDocumentParser
 
-    uploads = []
-
-    def fake_put_object(cfg, key, data, content_type):
-        uploads.append((key, data, content_type))
-        return f"s3://{cfg.bucket}/{cfg.prefix}/{key}"
-
-    monkeypatch.setattr(
-        "rag_document_parser.evidence_unit_extraction.assets._put_object",
-        fake_put_object,
-    )
+    asset_store = _RecordingAssetStore()
 
     import base64
 
@@ -376,14 +376,14 @@ def test_parser_registers_html_backend_and_uploads_nested_html_images(monkeypatc
     </table>
     """.encode()
 
-    result = RagDocumentParser(object_storage=_s3_config()).parse(
+    result = RagDocumentParser(asset_store=asset_store).parse(
         raw,
         suffix=".HTML",
     )
     document_hash = hashlib.sha256(raw).hexdigest()
 
     assert result.source.suffix == ".html"
-    assert uploads == [
+    assert asset_store.uploads == [
         (
             f"{document_hash}/assets/img-0001.png",
             image_bytes,
