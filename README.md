@@ -1,8 +1,8 @@
 # rag-document-parser
 
 RAG-ready document parser for producing source-preserving evidence units,
-structured evidence payloads, and final retrieval chunks from HWP, HWPX, XLSX,
-PDF, Markdown, and plain text documents.
+structured evidence payloads, and final retrieval chunks from HTML, HWP, HWPX,
+XLSX, and PDF documents.
 
 The parser is not a Markdown converter. Its primary output is a typed evidence
 contract that downstream systems can use for indexing, retrieval, LLM grounding,
@@ -148,8 +148,10 @@ Built-in parser suffixes:
 - `.xlsx`: Excel workbook backend.
 - `.pdf`: PDF backend.
 
-Markdown/text suffixes (`.md`, `.markdown`, `.txt`) are disabled in the built-in
-parser registry as of `0.6.0` while their extraction quality is reworked.
+Markdown/text suffixes (`.md`, `.markdown`, `.txt`) are not registered by
+default while their extraction quality is reworked. The internal Markdown
+backend can still be registered explicitly by applications that accept its
+current behavior.
 
 Current extraction behavior by format:
 
@@ -183,7 +185,13 @@ src/rag_document_parser/
     backend.py
     registry.py
     assets.py
+    ocr.py
+    table_source.py
     schema/
+      asset_ref.py
+      common.py
+      structured_diagram.py
+      structured_table.py
     formats/
       html/
         backend.py
@@ -194,7 +202,7 @@ src/rag_document_parser/
         assets.py
         table_extraction.py
         source_projection.py
-      markdown/  # internal, not registered by default in 0.6.0
+      markdown/  # internal, not registered by default
       hwpx/
         backend.py
         package_reader.py
@@ -208,8 +216,10 @@ src/rag_document_parser/
         binary_reader.py
         section_parser.py
         blocks.py
+        parsed.py
         table_extraction.py
         diagram.py
+        text.py
         source_projection.py
         document_assembly.py
       xlsx/
@@ -276,6 +286,10 @@ Key boundaries:
 - `renderer/`: HTML rendering for extracted evidence units and final chunks.
 - `llm.py`: OpenAI-compatible `LlmGateway` adapter plus provider-specific Qwen,
   Gemini, and Gemma config classes for chunking and PDF vision OCR.
+
+See [`docs/architecture.md`](docs/architecture.md) for the dependency rules,
+backend responsibilities, and extension guidance that keep these boundaries
+intact.
 
 ## Rendering
 
