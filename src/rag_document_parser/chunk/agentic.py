@@ -7,81 +7,19 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
+from ..llm import LlmConfig, as_llm_gateway
 from ..models import Evidence, EvidenceItem, EvidenceUnit, RagChunk, SourceEvidence
-from ..llm import LlmConfig, chat_json
+from ..ports.llm import LlmGateway
+from .contracts import BoundaryDecision, ChunkPlanResponse
 from .enrichment import Enricher, RagChunkEnricher
+from .planning_prompt import (
+    build_boundary_prompt as _boundary_prompt,
+    build_plan_prompt as _plan_prompt,
+)
+from .tokens import count_tokens as _llm_token_count
 
 PlanFn = Callable[[list[EvidenceUnit], LlmConfig | None, int], Any]
 BoundaryMergeFn = Callable[[RagChunk, RagChunk, LlmConfig | None, int], Any]
-
-
-_PROMPT = """\
-당신은 RAG 인덱싱용 EvidenceUnit chunk planner입니다.
-아래 unit 목록을 의미적으로 일관된 chunk plan으로 묶어 주세요.
-
-규칙:
-- evidence content는 작성하지 않습니다. unit_id와 operation만 작성합니다.
-- evidence content는 unit에서 복사됩니다.
-- 모든 unit은 누락 없이 evidence로 포함되어야 합니다.
-- structured_table은 include_rows로 여러 chunk에 분해할 수 있습니다.
-- include_rows row range는 겹치지 않아야 하며 table row 범위 안에 있어야 합니다.
-- include_rows의 row_ranges는 양 끝을 포함하는 inclusive [start, end] 쌍 목록입니다.
-- include_rows row range는 table payload의 rows[].index에 표시된 값만 사용합니다.
-- 0-based row index를 만들지 않습니다. 첫 row index가 1이면 [1, ...]부터 시작해야 합니다.
-- row index는 unit별로 독립적입니다. 이전 table unit의 row 번호를 이어서 계산하지 않습니다.
-- 각 include_rows operation은 해당 unit_id의 rows[].index 범위 안에서만 작성합니다.
-- include_rows를 사용하면 해당 table의 모든 실제 row index를 빠짐없이, 겹치지 않게 포함해야 합니다.
-- table row coverage에 확신이 없으면 action "include"로 전체 table을 포함합니다.
-- context_unit_ids는 선택 사항이며 이미 이전 chunk에서 evidence로 포함된 unit id만 작성합니다.
-- text, table, image를 같은 chunk에 묶을 수 있습니다.
-- summary, keywords, questions는 최종 RagChunk 확정 후 별도 enrichment 단계에서 생성합니다.
-- max_units_per_chunk는 일반 chunk의 hard limit입니다. 하나의 원자적 unit 자체가 큰 경우를 제외하고 초과하지 않습니다.
-- 하나의 plan item에서 서로 다른 unit_id를 max_units_per_chunk보다 많이 포함하지 않습니다.
-- unit_ids 길이와 operations의 고유 unit_id 개수는 max_units_per_chunk 이하이어야 합니다.
-- 의미상 한 주제가 max_units_per_chunk를 넘으면 같은 title을 유지한 채 인접한 여러 plan item으로 순서대로 분할합니다.
-- 같은 장/절/표 아래라도 검색 질문이 달라지는 조문, 번호 항목, 서식 작성 항목은 분리합니다.
-- 긴 연속 목록은 의미가 이어져도 max_units_per_chunk 이하의 인접 chunk로 나눕니다.
-
-Unit 목록:
-{units}
-
-JSON 배열만 출력하세요:
-[
-  {
-    "unit_ids": [{example_unit_id}],
-    "operations": [
-      {"unit_id": {example_unit_id}, "action": "include"}
-    ],
-    "context_unit_ids": [],
-    "title": "제목"
-  }
-]
-{include_rows_example}
-"""
-
-
-_BOUNDARY_PROMPT = """\
-You are a RAG window boundary merge planner.
-Decide whether two adjacent chunks from neighboring EvidenceUnit windows are one continuous semantic unit.
-
-Rules:
-- Return only a JSON object.
-- Use action "merge" only when the right chunk directly continues the same topic, table, section, or Q&A block.
-- Use action "keep" when the chunks are merely related but answer different retrieval questions.
-- Do not invent evidence content. Evidence content will be copied from the existing chunks.
-- Summary, keywords, and questions are generated after final chunks are fixed.
-- Keep merged chunks reasonably close to {max_units} source units when possible.
-
-Boundary payload:
-{boundary}
-
-JSON object only:
-{{
-  "action": "merge",
-  "reason": "short reason",
-  "title": "optional merged title"
-}}
-"""
 
 
 _FORM_MARKER_PATTERN = (
@@ -90,8 +28,6 @@ _FORM_MARKER_PATTERN = (
 )
 _DEFAULT_TARGET_CHUNK_TOKENS = 800
 _DEFAULT_MAX_CHUNK_TOKENS = 2048
-_TOKEN_ENCODER: Any | None = None
-_TOKEN_ENCODER_UNAVAILABLE = False
 
 
 @dataclass(frozen=True)
@@ -110,7 +46,8 @@ class EvidenceUnitAgenticChunker:
     def __init__(
         self,
         *,
-        llm: LlmConfig | None,
+        llm: LlmConfig | None = None,
+        llm_gateway: LlmGateway | None = None,
         max_units_per_chunk: int = 10,
         target_tokens_per_chunk: int = _DEFAULT_TARGET_CHUNK_TOKENS,
         max_tokens_per_chunk: int = _DEFAULT_MAX_CHUNK_TOKENS,
@@ -122,7 +59,14 @@ class EvidenceUnitAgenticChunker:
         enrich_final_chunks: bool = True,
         enrichment_batch_token_budget: int | None = None,
     ) -> None:
+        if llm is not None and llm_gateway is not None:
+            raise ValueError("configure either llm or llm_gateway, not both")
         self._llm = llm
+        self._llm_gateway = (
+            llm_gateway
+            if llm_gateway is not None
+            else (as_llm_gateway(llm) if llm is not None else None)
+        )
         self._max_units = max(1, max_units_per_chunk)
         self._target_tokens = max(1, target_tokens_per_chunk)
         self._max_tokens = max(self._target_tokens, max_tokens_per_chunk)
@@ -135,8 +79,7 @@ class EvidenceUnitAgenticChunker:
             if final_enricher is not None
             else (
                 RagChunkEnricher(
-                    llm=llm,
-                    chat_fn=chat_json,
+                    llm_gateway=self._llm_gateway,
                     max_concurrency=self._concurrency,
                     batch_token_budget=enrichment_batch_token_budget,
                 )
@@ -187,14 +130,21 @@ class EvidenceUnitAgenticChunker:
         cfg: LlmConfig | None,
         max_units: int,
     ) -> Any:
-        if cfg is None:
+        if self._llm_gateway is None:
             return None
-        return chat_json(_plan_prompt(window, max_units), cfg)
+        response = self._llm_gateway.complete_model(
+            _json_messages(_plan_prompt(window, max_units)),
+            ChunkPlanResponse,
+            schema_name="chunk_plan",
+        )
+        return [item.model_dump(exclude_none=True) for item in response.chunks]
 
     def _merge_window_boundaries(self, results: list[_WindowResult]) -> list[RagChunk]:
         if not results:
             return []
-        if len(results) == 1 or (self._boundary_merge_fn is None and self._llm is None):
+        if len(results) == 1 or (
+            self._boundary_merge_fn is None and self._llm_gateway is None
+        ):
             return [chunk for result in results for chunk in result.chunks]
 
         chunks = list(results[0].chunks)
@@ -250,9 +200,21 @@ class EvidenceUnitAgenticChunker:
         cfg: LlmConfig | None,
         max_units: int,
     ) -> Any:
-        if cfg is None:
+        if self._llm_gateway is None:
             return {"action": "keep", "reason": "llm is not configured"}
-        return chat_json(_boundary_prompt(left, right, max_units), cfg)
+        response = self._llm_gateway.complete_model(
+            _json_messages(_boundary_prompt(left, right, max_units)),
+            BoundaryDecision,
+            schema_name="chunk_boundary_decision",
+        )
+        return response.model_dump()
+
+
+def _json_messages(prompt: str) -> list[dict[str, Any]]:
+    return [
+        {"role": "system", "content": "Return a response matching the JSON schema."},
+        {"role": "user", "content": prompt},
+    ]
 
 
 def _windows(units: list[EvidenceUnit], size: int) -> list[list[EvidenceUnit]]:
@@ -1461,50 +1423,17 @@ def _normalize_space(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _truncate(value: str, limit: int) -> str:
+    text = value.strip()
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
 def _fallback_title_from_text(text: str) -> str:
     for line in text.splitlines():
         stripped = line.strip()
         if stripped:
             return stripped[:100]
     return ""
-
-
-def _llm_token_count(text: str) -> int:
-    encoder = _token_encoder()
-    if encoder is not None:
-        return len(encoder.encode(text or ""))
-    return _estimated_token_count(text)
-
-
-def _token_encoder() -> Any | None:
-    global _TOKEN_ENCODER, _TOKEN_ENCODER_UNAVAILABLE
-    if _TOKEN_ENCODER is not None:
-        return _TOKEN_ENCODER
-    if _TOKEN_ENCODER_UNAVAILABLE:
-        return None
-
-    try:
-        import tiktoken  # type: ignore[import-not-found]
-    except Exception:
-        _TOKEN_ENCODER_UNAVAILABLE = True
-        return None
-
-    try:
-        _TOKEN_ENCODER = tiktoken.get_encoding("cl100k_base")
-    except Exception:
-        _TOKEN_ENCODER_UNAVAILABLE = True
-        return None
-    return _TOKEN_ENCODER
-
-
-def _estimated_token_count(text: str) -> int:
-    count = 0
-    for token in re.findall(r"[A-Za-z0-9_]+|[가-힣]|[^\s]", text or ""):
-        if re.fullmatch(r"[A-Za-z0-9_]+", token):
-            count += max(1, (len(token) + 3) // 4)
-        else:
-            count += 1
-    return count
 
 
 def _validate_unique_unit_ids(units: list[EvidenceUnit]) -> None:
@@ -2415,130 +2344,3 @@ def _reindex_chunk(index: int, chunk: RagChunk) -> RagChunk:
         questions=list(chunk.questions),
         metadata=dict(chunk.metadata),
     )
-
-
-def _plan_prompt(window: list[EvidenceUnit], max_units: int) -> str:
-    payload = {
-        "max_units_per_chunk": max_units,
-        "units": [_unit_payload(index, unit) for index, unit in enumerate(window)],
-    }
-    example_unit_id = json.dumps(window[0].id if window else "unit", ensure_ascii=False)
-    table_unit = next((unit for unit in window if unit.format == "structured_table"), None)
-    include_rows_example = ""
-    row_range = _example_row_range(table_unit) if table_unit is not None else None
-    if table_unit is not None and row_range is not None:
-        table_unit_id = json.dumps(table_unit.id, ensure_ascii=False)
-        include_rows_example = (
-            "\ninclude_rows operation 예시:\n"
-            f'{{"unit_id": {table_unit_id}, "action": "include_rows", "row_ranges": [{row_range}]}}\n'
-        )
-    return _PROMPT.replace("{max_units}", str(max_units)).replace(
-        "{example_unit_id}", example_unit_id
-    ).replace(
-        "{include_rows_example}", include_rows_example
-    ).replace(
-        "{units}", json.dumps(payload, ensure_ascii=False, indent=2)
-    )
-
-
-def _boundary_prompt(left: RagChunk, right: RagChunk, max_units: int) -> str:
-    payload = {
-        "max_units_per_chunk": max_units,
-        "left_chunk": _boundary_chunk_payload(left),
-        "right_chunk": _boundary_chunk_payload(right),
-    }
-    return _BOUNDARY_PROMPT.replace("{max_units}", str(max_units)).replace(
-        "{boundary}",
-        json.dumps(payload, ensure_ascii=False),
-    )
-
-
-def _boundary_chunk_payload(chunk: RagChunk) -> dict[str, Any]:
-    return {
-        "id": chunk.id,
-        "source_unit_ids": _strings(chunk.metadata.get("source_unit_ids")),
-        "context_unit_ids": _strings(chunk.metadata.get("context_unit_ids")),
-        "unit_types": _strings(
-            chunk.metadata.get("common", {}).get("unit_types")
-            if isinstance(chunk.metadata.get("common"), Mapping)
-            else None
-        ),
-        "summary": chunk.summary,
-        "keywords": list(chunk.keywords),
-        "questions": list(chunk.questions),
-        "source_preview": _truncate(chunk.source.text, 900),
-        "evidence_items": [
-            {
-                "type": item.type,
-                "format": item.format,
-                "source_unit_ids": list(item.source_unit_ids),
-            }
-            for item in chunk.evidence.items
-        ],
-    }
-
-
-def _example_row_range(unit: EvidenceUnit) -> list[int] | None:
-    if not isinstance(unit.content, Mapping):
-        return None
-    rows = unit.content.get("rows")
-    if not isinstance(rows, list):
-        return None
-    for row in rows:
-        if not isinstance(row, Mapping):
-            continue
-        index = row.get("index")
-        if type(index) is int:
-            return [index, index]
-    return None
-
-
-def _unit_payload(index: int, unit: EvidenceUnit) -> dict[str, Any]:
-    common = unit.metadata.get("common", {})
-    table = unit.metadata.get("table", {})
-    asset = unit.metadata.get("asset", {})
-    return {
-        "id": unit.id,
-        "index": index,
-        "type": unit.type,
-        "format": unit.format,
-        "section_path": common.get("section_path", []) if isinstance(common, Mapping) else [],
-        "source_preview": _truncate(unit.source.text, 900),
-        "table": _compact_table(table),
-        "asset": _compact_asset(asset),
-    }
-
-
-def _compact_table(table: Any) -> dict[str, Any]:
-    if not isinstance(table, Mapping):
-        return {}
-    result: dict[str, Any] = {}
-    if "table_id" in table:
-        result["table_id"] = table["table_id"]
-    if "headers" in table and isinstance(table["headers"], list):
-        result["headers"] = [str(header)[:80] for header in table["headers"][:12]]
-    if "row_count" in table:
-        result["row_count"] = table["row_count"]
-    return result
-
-
-def _compact_asset(asset: Any) -> dict[str, Any]:
-    if not isinstance(asset, Mapping):
-        return {}
-    result: dict[str, Any] = {}
-    for key in ("asset_id", "kind", "mime", "ext", "uri", "public_url", "alt", "caption"):
-        if key not in asset:
-            continue
-        value = asset[key]
-        if value is None:
-            result[key] = None
-        elif isinstance(value, str):
-            result[key] = _truncate(value, 300)
-        elif type(value) in (int, float, bool):
-            result[key] = value
-    return result
-
-
-def _truncate(value: str, limit: int) -> str:
-    text = value.strip()
-    return text if len(text) <= limit else text[: limit - 1] + "…"

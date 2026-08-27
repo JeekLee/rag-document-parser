@@ -19,9 +19,11 @@ raw document
   -> optional HTML rendering for inspection
 ```
 
-The public `RagDocumentParser` handles extraction plus S3-compatible asset
-upload. Format backends can also be used directly when you want raw
-`ParsedDocument` output before asset upload.
+The public `RagDocumentParser` handles extraction plus optional asset upload.
+`S3Config` is adapted to the `AssetStore` port for compatibility; applications
+can inject their own `AssetStore` implementation with `asset_store=`. Asset-free
+documents do not require a store. Format backends can also be used directly when
+you want raw `ParsedDocument` output before asset upload.
 
 ```python
 import os
@@ -189,10 +191,18 @@ src/rag_document_parser/
       hwp5/
       xlsx/
       pdf/
+        backend.py
+        ocr.py
   chunk/
     backend.py
     agentic.py
+    contracts.py
     enrichment.py
+    planning_prompt.py
+    tokens.py
+  ports/
+    asset_store.py
+    llm.py
   pipeline/
     parser.py
   renderer/
@@ -206,10 +216,13 @@ Key boundaries:
 - `evidence_unit_extraction/`: extraction backends, schema construction
   helpers, table source text helpers, and asset upload/resolve support.
 - `pipeline/parser.py`: public parser orchestration.
-- `chunk/`: `EvidenceUnitAgenticChunker`, chunker protocol, and final
-  `RagChunkEnricher`.
+- `ports/`: application-facing `AssetStore` and `LlmGateway` protocols.
+- `chunk/`: `EvidenceUnitAgenticChunker`, typed LLM response contracts,
+  prompt construction, shared token accounting, and final `RagChunkEnricher`.
+- `evidence_unit_extraction/formats/pdf/ocr.py`: PDF scan classification, OCR
+  execution/fallback policy, and OCR failure reporting.
 - `renderer/`: HTML rendering for extracted evidence units and final chunks.
-- `llm.py`: OpenAI-compatible `LlmConfig` plus provider-specific Qwen,
+- `llm.py`: OpenAI-compatible `LlmGateway` adapter plus provider-specific Qwen,
   Gemini, and Gemma config classes for chunking and PDF vision OCR.
 
 ## Rendering
@@ -334,7 +347,8 @@ OCR callbacks may also return the structured `OcrResult` model. Only an
 excluded and reported as quality warnings. The `VisionOcr` callback requests
 this model with a strict JSON schema, sends OCR instructions as a system message,
 and sends only the image in the user message. Existing string callbacks remain
-supported for compatibility.
+supported for compatibility. `PdfBackend(ocr_gateway=...)` accepts any
+implementation of the `OcrGateway` protocol.
 
 PDF OCR configuration is independent from chunk enrichment configuration.
 Passing `LlmConfig` to `EvidenceUnitAgenticChunker(llm=...)` does not enable PDF

@@ -23,6 +23,7 @@ def test_ocr_result_enforces_text_status_contract(payload):
 
 def test_vision_ocr_requests_and_validates_strict_json_schema(monkeypatch):
     from rag_document_parser import LlmConfig, VisionOcr
+    from rag_document_parser import llm as llm_module
     from rag_document_parser.evidence_unit_extraction import ocr as ocr_module
 
     requests = []
@@ -48,7 +49,7 @@ def test_vision_ocr_requests_and_validates_strict_json_schema(monkeypatch):
         )
 
     monkeypatch.setattr(
-        ocr_module,
+        llm_module,
         "_read_response_with_retries",
         fake_read_response,
     )

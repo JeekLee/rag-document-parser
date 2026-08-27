@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import dataclass
 from typing import Any, Literal
 from urllib import error, request
 
 from pydantic import BaseModel, ConfigDict, Field
 
-ChatMessage = dict[str, Any]
+from .ports.llm import ChatMessage, LlmGateway, LlmResponse
+
 GeminiThinkingMode = Literal["default", "disabled", "minimal", "low", "medium", "high"]
 GemmaThinkingMode = Literal["default"]
 QwenThinkingMode = Literal["default", "enabled", "disabled"]
@@ -64,37 +66,80 @@ class GemmaLlmConfig(LlmConfig):
     thinking: GemmaThinkingMode = "default"
 
 
-def chat_json(prompt: str, cfg: LlmConfig) -> Any:
-    endpoint = chat_completions_url(cfg.url)
-    messages = cfg.prepare_messages(
-        [
+@dataclass(frozen=True)
+class OpenAICompatibleLlmGateway:
+    config: LlmConfig
+
+    def complete_json(self, prompt: str) -> Any:
+        messages = [
             {
                 "role": "system",
                 "content": "Return only valid JSON. Do not wrap it in Markdown.",
             },
             {"role": "user", "content": prompt},
         ]
-    )
-    body = {
-        "model": cfg.model,
-        "temperature": cfg.temperature,
-        "messages": messages,
-    }
-    apply_llm_request_options(body, cfg)
-    data = json.dumps(body, ensure_ascii=False).encode("utf-8")
-    req = request.Request(
-        endpoint,
-        data=data,
-        headers={
-            "Authorization": f"Bearer {cfg.api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    response_body = _read_response_with_retries(req, cfg)
-    payload = json.loads(response_body)
-    content = payload["choices"][0]["message"]["content"]
-    return _loads_json_object(content)
+        return _loads_json_object(self._complete(messages))
+
+    def complete_model(
+        self,
+        messages: list[ChatMessage],
+        response_model: type[LlmResponse],
+        *,
+        schema_name: str,
+    ) -> LlmResponse:
+        content = self._complete(
+            messages,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": schema_name,
+                    "strict": True,
+                    "schema": response_model.model_json_schema(),
+                },
+            },
+        )
+        return response_model.model_validate_json(content)
+
+    def _complete(
+        self,
+        messages: list[ChatMessage],
+        *,
+        response_format: dict[str, Any] | None = None,
+    ) -> str:
+        cfg = self.config
+        endpoint = chat_completions_url(cfg.url)
+        prepared_messages = cfg.prepare_messages(messages)
+        body: dict[str, Any] = {
+            "model": cfg.model,
+            "temperature": cfg.temperature,
+            "messages": prepared_messages,
+        }
+        if response_format is not None:
+            body["response_format"] = response_format
+        apply_llm_request_options(body, cfg)
+        data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        req = request.Request(
+            endpoint,
+            data=data,
+            headers={
+                "Authorization": f"Bearer {cfg.api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        response_body = _read_response_with_retries(req, cfg)
+        payload = json.loads(response_body)
+        return payload["choices"][0]["message"]["content"]
+
+
+def as_llm_gateway(llm: LlmGateway | LlmConfig) -> LlmGateway:
+    if isinstance(llm, LlmConfig):
+        return OpenAICompatibleLlmGateway(llm)
+    return llm
+
+
+def chat_json(prompt: str, cfg: LlmConfig) -> Any:
+    return OpenAICompatibleLlmGateway(cfg).complete_json(prompt)
 
 
 def apply_llm_request_options(body: dict[str, Any], cfg: LlmConfig) -> None:

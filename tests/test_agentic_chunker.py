@@ -1,6 +1,43 @@
 from __future__ import annotations
 
 
+class _FakeLlmGateway:
+    def __init__(self, handler):
+        self._handler = handler
+
+    def complete_json(self, prompt):
+        return self._handler(prompt)
+
+    def complete_model(self, messages, response_model, *, schema_name):
+        raw = self._handler(messages[-1]["content"])
+        if response_model.__name__ == "ChunkPlanResponse":
+            raw = {
+                "chunks": [
+                    {
+                        "unit_ids": item.get("unit_ids", []),
+                        "operations": [
+                            {
+                                "unit_id": operation["unit_id"],
+                                "action": operation.get("action", "include"),
+                                "row_ranges": operation.get("row_ranges"),
+                            }
+                            for operation in item.get("operations", [])
+                        ],
+                        "context_unit_ids": item.get("context_unit_ids", []),
+                        "title": item.get("title", ""),
+                    }
+                    for item in raw
+                ]
+            }
+        elif response_model.__name__ == "BoundaryDecision":
+            raw = {
+                "action": raw["action"],
+                "reason": raw.get("reason", ""),
+                "title": raw.get("title", ""),
+            }
+        return response_model.model_validate(raw)
+
+
 def _text_unit(id: str, text: str):
     from rag_document_parser import EvidenceUnit, SourceEvidence
 
@@ -367,10 +404,12 @@ def test_agentic_chunker_uses_llm_prompt_when_no_plan_fn(monkeypatch):
             }
         ]
 
-    monkeypatch.setattr("rag_document_parser.chunk.agentic.chat_json", fake_chat_json)
     cfg = LlmConfig(url="http://llm.test/v1", api_key="key", model="model")
+    gateway = _FakeLlmGateway(lambda prompt: fake_chat_json(prompt, cfg))
 
-    chunks = EvidenceUnitAgenticChunker(llm=cfg).chunk([_text_unit("b1", "첫 문장")])
+    chunks = EvidenceUnitAgenticChunker(llm_gateway=gateway).chunk(
+        [_text_unit("b1", "첫 문장")]
+    )
 
     assert len(calls) == 2
     assert '"id": "b1"' in calls[0][0]
@@ -418,13 +457,13 @@ def test_agentic_chunker_forwards_enrichment_batch_token_budget(monkeypatch):
             ]
         }
 
-    monkeypatch.setattr("rag_document_parser.chunk.agentic.chat_json", fake_chat_json)
     monkeypatch.setattr(enrichment, "_chunk_batch_token_cost", lambda chunk: 1, raising=False)
     cfg = LlmConfig(url="http://llm.test/v1", api_key="key", model="model")
+    gateway = _FakeLlmGateway(lambda prompt: fake_chat_json(prompt, cfg))
     units = [_text_unit(f"b{index}", f"문장 {index}") for index in range(1, 11)]
 
     chunks = EvidenceUnitAgenticChunker(
-        llm=cfg,
+        llm_gateway=gateway,
         plan_fn=plan_fn,
         max_concurrency=1,
         enrichment_batch_token_budget=8,
@@ -740,11 +779,11 @@ def test_agentic_chunker_uses_llm_boundary_prompt_between_windows(monkeypatch):
             }
         return {"action": "keep", "reason": "서로 다른 주제다."}
 
-    monkeypatch.setattr("rag_document_parser.chunk.agentic.chat_json", fake_chat_json)
     cfg = LlmConfig(url="http://llm.test/v1", api_key="key", model="model")
+    gateway = _FakeLlmGateway(lambda prompt: fake_chat_json(prompt, cfg))
 
     chunks = EvidenceUnitAgenticChunker(
-        llm=cfg,
+        llm_gateway=gateway,
         plan_fn=plan_fn,
         window_size=2,
     ).chunk(units)
@@ -786,10 +825,13 @@ def test_agentic_chunker_uses_rich_korean_llm_prompt_contract(monkeypatch):
             }
         ]
 
-    monkeypatch.setattr("rag_document_parser.chunk.agentic.chat_json", fake_chat_json)
     cfg = LlmConfig(url="http://llm.test/v1", api_key="key", model="model")
+    gateway = _FakeLlmGateway(lambda prompt: fake_chat_json(prompt, cfg))
 
-    chunks = EvidenceUnitAgenticChunker(llm=cfg, max_units_per_chunk=7).chunk([_table_unit("b2")])
+    chunks = EvidenceUnitAgenticChunker(
+        llm_gateway=gateway,
+        max_units_per_chunk=7,
+    ).chunk([_table_unit("b2")])
 
     assert len(chunks) == 1
     assert len(calls) == 2
@@ -804,7 +846,10 @@ def test_agentic_chunker_uses_rich_korean_llm_prompt_contract(monkeypatch):
     assert "{{" not in prompt
     assert "}}" not in prompt
     assert '    "unit_ids": ["b2"]' in prompt
-    assert '      {"unit_id": "b2", "action": "include"}' in prompt
+    assert (
+        '{"unit_id": "b2", "action": "include", "row_ranges": null}'
+        in prompt
+    )
     assert '    "context_unit_ids": []' in prompt
     assert '"row_ranges": [[1, 1]]' in prompt
     assert "양 끝을 포함" in prompt
@@ -848,13 +893,18 @@ def test_agentic_chunker_prompt_uses_table_id_for_include_rows_example(monkeypat
             }
         ]
 
-    monkeypatch.setattr("rag_document_parser.chunk.agentic.chat_json", fake_chat_json)
     cfg = LlmConfig(url="http://llm.test/v1", api_key="key", model="model")
+    gateway = _FakeLlmGateway(lambda prompt: fake_chat_json(prompt, cfg))
 
-    EvidenceUnitAgenticChunker(llm=cfg).chunk([_text_unit("txt1", "텍스트"), _table_unit("tbl1")])
+    EvidenceUnitAgenticChunker(llm_gateway=gateway).chunk(
+        [_text_unit("txt1", "텍스트"), _table_unit("tbl1")]
+    )
 
     prompt = calls[0][0]
-    assert '      {"unit_id": "txt1", "action": "include"}' in prompt
+    assert (
+        '{"unit_id": "txt1", "action": "include", "row_ranges": null}'
+        in prompt
+    )
     assert '{"unit_id": "tbl1", "action": "include_rows", "row_ranges": [[1, 1]]}' in prompt
     assert '"unit_id": "txt1", "action": "include_rows"' not in prompt
 
@@ -877,10 +927,10 @@ def test_agentic_chunker_prompt_omits_include_rows_example_without_table(monkeyp
             }
         ]
 
-    monkeypatch.setattr("rag_document_parser.chunk.agentic.chat_json", fake_chat_json)
     cfg = LlmConfig(url="http://llm.test/v1", api_key="key", model="model")
+    gateway = _FakeLlmGateway(lambda prompt: fake_chat_json(prompt, cfg))
 
-    EvidenceUnitAgenticChunker(llm=cfg).chunk([_text_unit("txt1", "텍스트")])
+    EvidenceUnitAgenticChunker(llm_gateway=gateway).chunk([_text_unit("txt1", "텍스트")])
 
     prompt = calls[0][0]
     assert "include_rows operation 예시" not in prompt
@@ -905,10 +955,12 @@ def test_agentic_chunker_prompt_example_uses_window_unit_id(monkeypatch):
             }
         ]
 
-    monkeypatch.setattr("rag_document_parser.chunk.agentic.chat_json", fake_chat_json)
     cfg = LlmConfig(url="http://llm.test/v1", api_key="key", model="model")
+    gateway = _FakeLlmGateway(lambda prompt: fake_chat_json(prompt, cfg))
 
-    chunks = EvidenceUnitAgenticChunker(llm=cfg).chunk([_text_unit("u99", "다른 문장")])
+    chunks = EvidenceUnitAgenticChunker(llm_gateway=gateway).chunk(
+        [_text_unit("u99", "다른 문장")]
+    )
 
     prompt = calls[0][0]
     assert '"unit_ids": ["u99"]' in prompt
@@ -955,10 +1007,10 @@ def test_agentic_chunker_prompt_compacts_asset_metadata(monkeypatch):
             }
         ]
 
-    monkeypatch.setattr("rag_document_parser.chunk.agentic.chat_json", fake_chat_json)
     cfg = LlmConfig(url="http://llm.test/v1", api_key="key", model="model")
+    gateway = _FakeLlmGateway(lambda prompt: fake_chat_json(prompt, cfg))
 
-    EvidenceUnitAgenticChunker(llm=cfg).chunk([unit])
+    EvidenceUnitAgenticChunker(llm_gateway=gateway).chunk([unit])
 
     prompt = calls[0][0]
     assert '"asset_id": "asset-1"' in prompt
