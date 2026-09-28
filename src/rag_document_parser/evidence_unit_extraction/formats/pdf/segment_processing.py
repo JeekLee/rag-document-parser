@@ -176,8 +176,10 @@ def _segments_to_units(page_segments: list[list[_Segment]]) -> list[EvidenceUnit
     for segments in page_segments:
         for segment in sorted(segments, key=lambda item: item.top):
             if segment.kind == "text":
-                text = str(segment.payload).strip()
-                if not text or _is_pdf_artifact_text(text):
+                text = str(segment.payload)
+                if not segment.metadata.get("table_fallback"):
+                    text = text.strip()
+                if not text.strip() or _is_pdf_artifact_text(text):
                     continue
                 pdf_metadata = {"page": segment.page}
                 pdf_metadata.update(segment.metadata)
@@ -319,6 +321,7 @@ def _segments_to_units(page_segments: list[list[_Segment]]) -> list[EvidenceUnit
 def _merge_continuation_tables(page_segments: list[list[_Segment]]) -> list[list[_Segment]]:
     merged_pages: list[list[_Segment]] = [[] for _ in page_segments]
     previous_table: _Segment | None = None
+    previous_table_end_page: int | None = None
 
     for page_idx, segments in enumerate(page_segments):
         page_has_content_before_table = False
@@ -337,16 +340,23 @@ def _merge_continuation_tables(page_segments: list[list[_Segment]]) -> list[list
             if (
                 previous_table is not None
                 and not page_has_content_before_table
+                and not (
+                    previous_table_end_page == segment.page
+                    and previous_table.metadata.get("ocr")
+                    and segment.metadata.get("ocr")
+                )
                 and _is_table_continuation(previous_table.payload, segment.payload)
             ):
                 _PDF_TABLE_NORMALIZER.append_rows(
                     previous_table.payload,
                     segment.payload,
                 )
+                previous_table_end_page = segment.page
                 continue
 
             merged_pages[page_idx].append(segment)
             previous_table = segment
+            previous_table_end_page = segment.page
 
     return merged_pages
 
@@ -358,7 +368,7 @@ def _expand_text_segments(
     for segments in page_segments:
         expanded: list[_Segment] = []
         for segment in segments:
-            if segment.kind != "text":
+            if segment.kind != "text" or segment.metadata.get("table_fallback"):
                 expanded.append(segment)
                 continue
             parts = _revision_history_parts(str(segment.payload))

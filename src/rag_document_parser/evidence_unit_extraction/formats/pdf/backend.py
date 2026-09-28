@@ -292,10 +292,9 @@ class PdfBackend:
                 ocr_gateway,
             )
             for page_idx, text in ocr_by_page.items():
-                cleaned = _clean_text(text)
-                if cleaned:
+                if text.strip():
                     segments, ocr_parse_warnings = _ocr_text_segments(
-                        cleaned,
+                        text,
                         page_idx + 1,
                     )
                     page_segments[page_idx].extend(segments)
