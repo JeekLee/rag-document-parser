@@ -416,6 +416,17 @@ and sends only the image in the user message. Existing string callbacks remain
 supported for compatibility. `PdfBackend(ocr_gateway=...)` accepts any
 implementation of the `OcrGateway` protocol.
 
+PDF OCR pipe tables are structured only when headers, separator, and body rows
+have matching column counts and the header is unambiguous. Empty body cells keep
+their column positions, escaped pipes stay inside their cells, and separate
+tables on one page retain separate headers. If a table cannot be safely
+structured, its OCR text is returned as plain evidence with
+`metadata.pdf.table_fallback = true` and a medium-severity
+`pdf_ocr_table_unstructured` warning. The warning includes the page, reason, and
+`line_column_counts` (header and separator included). Ambiguous contiguous table
+blocks are preserved together; merged or nested relationships are not guessed.
+This preserves the OCR text, but does not verify its accuracy against the image.
+
 PDF OCR configuration is independent from chunk enrichment configuration.
 Passing `LlmConfig` to `EvidenceUnitAgenticChunker(llm=...)` does not enable PDF
 vision OCR in `RagDocumentParser`. The parser's default backend registry uses
