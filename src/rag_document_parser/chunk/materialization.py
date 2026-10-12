@@ -750,9 +750,6 @@ def _chunk_from_items(
     if warnings:
         metadata["_warnings"] = warnings
 
-    if not any(key in plan for key in ("summary", "keywords", "questions")):
-        metadata["_needs_enrichment"] = True
-
     return RagChunk(
         id=f"chunk-{index}",
         source=SourceEvidence(kind="chunk", text=source_text),
