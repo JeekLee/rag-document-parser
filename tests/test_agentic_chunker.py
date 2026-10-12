@@ -1621,6 +1621,8 @@ def test_agentic_chunker_preserves_pending_diagram_source_when_splitting_large_t
 
 
 def test_agentic_chunker_budgets_first_table_split_with_pending_source_prefix():
+    from rag_document_parser.chunk.tokens import count_tokens
+
     marker = "pending-prefix-marker " + "semantic diagram context " * 80
     diagram = _diagram_unit("diagram1", marker)
     large_table = _table_unit_with_rows(
@@ -1635,26 +1637,23 @@ def test_agentic_chunker_budgets_first_table_split_with_pending_source_prefix():
     )
 
     assert len(chunks) > 1
-    first_table = chunks[0].evidence.items[-1]
-    assert first_table.metadata["row_ranges"] == [[1, 1]]
+    assert chunks[0].metadata["source_unit_ids"] == ["diagram1"]
+    assert marker in chunks[0].source.text
+    assert all(chunk.metadata["source_unit_ids"] == ["large"] for chunk in chunks[1:])
+    assert all(count_tokens(chunk.source.text) <= 120 for chunk in chunks[1:])
     assert any(
         row_range[1] > row_range[0]
         for chunk in chunks[1:]
         for row_range in chunk.evidence.items[0].metadata["row_ranges"]
     )
 
-    table_warning = next(
-        warning
-        for warning in first_table.metadata["_warnings"]
-        if warning["type"] == "agentic_table_row_group_exceeds_max_tokens"
-    )
     chunk_warning = next(
         warning
         for warning in chunks[0].metadata["_warnings"]
         if warning["type"] == "agentic_chunk_exceeds_max_tokens"
     )
-    assert table_warning["type"] == "agentic_table_row_group_exceeds_max_tokens"
-    assert table_warning["token_count"] == chunk_warning["token_count"]
+    assert chunk_warning["token_count"] == count_tokens(chunks[0].source.text)
+    assert [row["index"] for chunk in chunks[1:] for row in chunk.evidence.items[0].content["rows"]] == list(range(1, 9))
 
 
 def test_agentic_chunker_carries_rowspan_context_when_splitting_large_table():

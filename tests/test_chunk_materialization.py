@@ -33,6 +33,20 @@ def test_chunk_plan_materializer_owns_validation_and_omission_repair():
     assert chunks[1].metadata["_fallback_reason"] == "chunk plan omitted units: u2"
 
 
+@pytest.mark.parametrize("fields", [{}, {"summary": "Custom summary"},
+                                    {"keywords": ["Custom"]}, {"questions": []}])
+def test_only_plans_without_legacy_text_fields_need_enrichment(fields):
+    unit = _text_unit("u1", "Source evidence")
+    chunk = ChunkPlanMaterializer(10).materialize(
+        [unit], [{"operations": [{"unit_id": "u1", "action": "include"}], **fields}],
+    )[0]
+    assert chunk.metadata.get("_needs_enrichment", False) is (not fields)
+    if "summary" in fields:
+        assert chunk.summary == fields["summary"]
+    if "keywords" in fields:
+        assert chunk.keywords == fields["keywords"]
+
+
 def _table_unit(indexes=(1, 2, 3)):
     return EvidenceUnit(
         id="table", type="table", format="structured_table",

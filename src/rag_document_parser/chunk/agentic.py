@@ -398,7 +398,7 @@ def _improve_chunk_boundaries(
         chunks, units_by_id, max_units_per_chunk, target_tokens_per_chunk
     )
     improved = _move_trailing_heading_units_forward(improved, units_by_id, max_units_per_chunk)
-    improved = _join_rowspan_boundaries(
+    improved = _join_table_row_boundaries(
         improved, units_by_id, max_units_per_chunk, max_tokens_per_chunk
     )
     improved = _split_case_boundary_chunks(improved, units_by_id, max_units_per_chunk)
@@ -488,7 +488,7 @@ def _different_sections(
     return bool(left_path and right_path and left_path != right_path)
 
 
-def _join_rowspan_boundaries(
+def _join_table_row_boundaries(
     chunks: list[RagChunk],
     units_by_id: dict[str, EvidenceUnit],
     max_units: int,
@@ -515,7 +515,7 @@ def _join_rowspan_boundaries(
         left_rows, right_rows = tail.content.get("rows", []), head.content.get("rows", [])
         if not left_rows or not right_rows or not any(
             group[0]["index"] <= left_rows[-1]["index"] < right_rows[0]["index"] <= group[-1]["index"]
-            for group in _rowspan_groups(table.get("rows", []))
+            for group in _table_row_groups(table)
         ):
             result.append(right)
             continue
@@ -525,13 +525,18 @@ def _join_rowspan_boundaries(
             content=_table_subset(table, _row_range_tuples(ranges)),
             source_unit_ids=ids, metadata={**dict(tail.metadata), "row_ranges": ranges},
         )
-        merged = _merge_adjacent_chunks(left, right, {"reason": "shared table rowspan"}, max_units)
+        is_heading = _is_section_heading_band(table, left_rows[-1], right_rows[0])
+        warning_type = "agentic_table_heading_boundary_joined" if is_heading else "agentic_rowspan_boundary_joined"
+        merged = _merge_adjacent_chunks(left, right, {"reason": "shared table row group"}, max_units)
         merged = _rebuild_chunk_from_items(
             merged, [*left.evidence.items[:-1], joined, *right.evidence.items[1:]],
             units_by_id, max_units_per_chunk=max_units, regenerate_text_fields=True,
-            warning={"type": "agentic_rowspan_boundary_joined", "unit_id": ids[0], "row_ranges": ranges},
+            warning={"type": warning_type, "unit_id": ids[0], "row_ranges": ranges},
         )
-        if _llm_token_count(merged.source.text) <= max_tokens:
+        group_rows = next(group for group in _table_row_groups(table)
+                          if left_rows[-1]["index"] in [row["index"] for row in group])
+        group_table = _table_subset(table, _row_range_tuples(_row_ranges_from_rows(group_rows)))
+        if _llm_token_count(_table_source_text(group_table)) <= max_tokens:
             result[-1] = merged
         else:
             result.append(right)
@@ -794,6 +799,28 @@ def _split_large_table_chunk(
             pending_context_items.append(item)
             continue
 
+        first_rows = _table_row_groups(item.content)[0]
+        first_table_text = _table_split_source_text(
+            item, _table_context_text(item, [], units_by_id), first_rows,
+        )
+        if len(first_rows) > 1 and _llm_token_count(first_table_text) > max_tokens_per_chunk:
+            first_table_text = _table_split_source_text(
+                item, _table_context_text(item, [], units_by_id), first_rows[:1],
+            )
+        pending_groups = _pending_groups_before_table(
+            pending_context_items, first_table_text, units_by_id, max_tokens_per_chunk,
+        )
+        for group in pending_groups[:-1]:
+            did_split = True
+            result.append(_rebuild_chunk_from_items(
+                chunk, group, units_by_id,
+                max_units_per_chunk=max_units_per_chunk,
+                max_tokens_per_chunk=max_tokens_per_chunk,
+                regenerate_text_fields=True,
+                warning={"type": "agentic_pending_evidence_split_by_token_budget"},
+            ))
+        pending_context_items = pending_groups[-1]
+
         table_splits = _split_table_item_by_rows(
             item,
             pending_context_items,
@@ -872,8 +899,53 @@ def _is_splittable_table_item(item: EvidenceItem) -> bool:
         and item.format == "structured_table"
         and isinstance(item.content, Mapping)
         and isinstance(item.content.get("rows"), list)
-        and len(item.content.get("rows", [])) > 1
+        and len(item.content.get("rows", [])) >= 1
     )
+
+
+def _pending_groups_before_table(
+    items: list[EvidenceItem], table_text: str,
+    units_by_id: dict[str, EvidenceUnit], max_tokens: int,
+) -> list[list[EvidenceItem]]:
+    """Flush separable primary evidence, keeping a fitting title suffix forward."""
+    # Detaching context cannot prevent overflow when even the row group is
+    # oversized; keep the existing context-preserving atomic-row behavior.
+    if _llm_token_count(table_text) > max_tokens:
+        return [items]
+    groups: list[list[EvidenceItem]] = []
+    pending: list[EvidenceItem] = []
+    for item in items:
+        if pending and _llm_token_count(_table_pending_source_text([*pending, item], units_by_id)) > max_tokens:
+            groups.append(pending)
+            pending = []
+        pending.append(item)
+
+    def fits(context: list[EvidenceItem]) -> bool:
+        prefix = _table_pending_source_text(context, units_by_id)
+        return _llm_token_count(prefix + "\n\n" + table_text) <= max_tokens
+
+    if pending and not fits(pending):
+        cut = len(pending)
+        while cut and _is_table_title_item(pending[cut - 1], units_by_id):
+            cut -= 1
+        if cut and fits(pending[cut:]):
+            groups.append(pending[:cut])
+            pending = pending[cut:]
+        else:
+            groups.append(pending)
+            pending = []
+    return [*groups, pending]
+
+
+def _is_table_title_item(item: EvidenceItem, units_by_id: dict[str, EvidenceUnit]) -> bool:
+    if _is_forward_heading_item(item, units_by_id):
+        return True
+    if item.type != "text":
+        return False
+    text = _item_plain_text(item, units_by_id).strip()
+    # This only selects a trailing title suffix when a table needs space; it
+    # does not merge arbitrary short fallback paragraphs or alter their text.
+    return bool(text) and len(text) <= 120 and "\n" not in text and not re.search(r"[.!?。！？]$", text)
 
 
 def _split_table_item_by_rows(
@@ -901,7 +973,7 @@ def _split_table_item_by_rows(
     current_rows: list[dict[str, Any]] = []
     splits: list[_TableRowSplit] = []
 
-    groups = _rowspan_groups(rows)
+    groups = _table_row_groups(table)
     # Rowspans are preferred boundaries. Only break them when the complete
     # group cannot fit under the hard budget, retaining carried cell context.
     budgeted_groups = []
@@ -968,6 +1040,48 @@ def _rowspan_groups(rows: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
             if type(cell.get("rowspan", 1)) is int and cell.get("rowspan", 1) > 1
         ])
     return groups
+
+
+def _table_row_groups(table: Mapping[str, Any]) -> list[list[dict[str, Any]]]:
+    groups = _rowspan_groups(table.get("rows", []))
+    result: list[list[dict[str, Any]]] = []
+    for group in groups:
+        if result and _is_section_heading_band(table, result[-1][-1], group[0]):
+            result[-1].extend(group)
+        else:
+            result.append(list(group))
+    return result
+
+
+def _is_section_heading_band(
+    table: Mapping[str, Any], row: Mapping[str, Any], following: Mapping[str, Any],
+) -> bool:
+    """A repeated label spans whole column groups that the next row subdivides."""
+    columns = [column.get("id") for column in table.get("columns", [])]
+    cells = row.get("cells", [])
+    next_cells = following.get("cells", [])
+    if not columns or not cells or following["index"] != row["index"] + 1:
+        return False
+    labels = {_normalize_space(str(cell.get("text", ""))) for cell in cells}
+    if len(labels) != 1 or not 0 < len(next(iter(labels))) <= 120:
+        return False
+    end = 0
+    for cell in cells:
+        span = cell.get("colspan", 1)
+        if (
+            type(span) is not int or span <= 1 or end + span > len(columns)
+            or cell.get("column_id") != columns[end]
+            or cell.get("rowspan", 1) != 1 or cell.get("children")
+        ):
+            return False
+        covered = columns[end:end + span]
+        # Require actual subdivisions, not another merged data/summary row.
+        if not all(any(next_cell.get("column_id") == column_id
+                       and next_cell.get("colspan", 1) == 1
+                       for next_cell in next_cells) for column_id in covered):
+            return False
+        end += span
+    return end == len(columns)
 
 
 def _table_row_split(

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 from rag_document_parser import EvidenceUnit, PdfBackend, SourceEvidence
 from rag_document_parser.chunk import EvidenceUnitAgenticChunker
+from rag_document_parser.chunk.enrichment import _chunk_payload
 from rag_document_parser.chunk.materialization import ChunkPlanMaterializer, table_source_text
 from rag_document_parser.chunk.planning_prompt import build_plan_prompt
 from rag_document_parser.chunk.tokens import count_tokens
@@ -47,6 +49,90 @@ def _coverage(items):
         for item in items if item.format == "structured_table"
         for row in item.content["rows"]
     ]
+
+
+@pytest.fixture(scope="module")
+def criteria_units():
+    path = Path(__file__).parent / "fixtures/corpus/pdf/benefit-criteria-2024-278.pdf"
+    return PdfBackend().parse(path.read_bytes(), ".pdf").units
+
+
+def _captured_smoke_plan(name):
+    # Primary operations from the actual planning-smoke calls, kept independent
+    # of the developer's local capture files and with no model requests.
+    if name == "criteria":
+        groups = [range(1, 9), range(9, 15)]
+        rows = {"b8": [1, 1], "b10": [1, 1], "b14": [1, 4]}
+    else:
+        groups = [range(1, 10), range(10, 12)]
+        rows = {"b9": [1, 2], "b11": [1, 9]}
+    return [
+        {
+            "unit_ids": [f"b{i}" for i in group],
+            "context_unit_ids": [],
+            "operations": [
+                {"unit_id": f"b{i}",
+                 "action": "include_rows" if name == "criteria" and f"b{i}" in rows else "include",
+                 "row_ranges": [rows[f"b{i}"]] if f"b{i}" in rows else None}
+                for i in group
+            ],
+        }
+        for group in groups
+    ]
+
+
+def _assert_complete_coverage(chunks, units):
+    items = [item for chunk in chunks for item in chunk.evidence.items]
+    assert list(dict.fromkeys(item.source_unit_ids[0] for item in items)) == [unit.id for unit in units]
+    assert [item.source_unit_ids[0] for item in items if item.type == "text"] == [
+        unit.id for unit in units if unit.type == "text"
+    ]
+    assert _coverage(items) == [
+        (unit.id, row["index"]) for unit in units if unit.type == "table"
+        for row in unit.content["rows"]
+    ]
+    assert all("_fallback_reason" not in chunk.metadata for chunk in chunks)
+    assert all(count_tokens(chunk.source.text) <= 2048 for chunk in chunks)
+
+
+@pytest.mark.parametrize("separate_plan_rows", [False, True])
+def test_captured_criteria_smoke_keeps_heading_bands_and_pending_evidence_within_budget(criteria_units, separate_plan_rows):
+    before = [unit.to_dict() for unit in criteria_units]
+    plan = _captured_smoke_plan("criteria")
+    if separate_plan_rows:
+        # Also cover a planner attaching a band to an oversized previous chunk
+        # and placing its content row in the next chunk.
+        plan[-1]["operations"][-1]["row_ranges"] = [[1, 1]]
+        plan.extend({"operations": [{"unit_id": "b14", "action": "include_rows", "row_ranges": [[i, i]]}]}
+                    for i in range(2, 5))
+    chunks = EvidenceUnitAgenticChunker(
+        plan_fn=lambda *_: plan, enrich_final_chunks=False,
+    ).chunk(criteria_units)
+    _assert_complete_coverage(chunks, criteria_units)
+    assert [_coverage(chunk.evidence.items) for chunk in chunks
+            if "b14" in chunk.metadata["source_unit_ids"]] == [
+        [("b14", 1), ("b14", 2)], [("b14", 3), ("b14", 4)],
+    ]
+    first_comparison = next(chunk for chunk in chunks if ("b14", 1) in _coverage(chunk.evidence.items))
+    assert first_comparison.metadata["source_unit_ids"] == ["b12", "b13", "b14"]
+    disease_chunk = next(chunk for chunk in chunks if "b10" in chunk.metadata["source_unit_ids"])
+    assert "b9" in disease_chunk.metadata["source_unit_ids"]
+    nested = criteria_units[9].content.rows[0].cells[2].children[0].content
+    codes = [cell["text"].strip() for row in [*nested["header_rows"][1:], *nested["rows"]]
+             for cell in row["cells"] if cell["text"].strip()]
+    assert len(codes) == len(set(codes)) == 84
+    payload = json.dumps(_chunk_payload(disease_chunk)["evidence"], ensure_ascii=False)
+    assert all(code in disease_chunk.source.text and code in payload for code in codes)
+    assert [unit.to_dict() for unit in criteria_units] == before
+
+
+def test_captured_qa_smoke_preserves_rowspan_groups(qa_units):
+    chunks = EvidenceUnitAgenticChunker(
+        plan_fn=lambda *_: _captured_smoke_plan("qa"), enrich_final_chunks=False,
+    ).chunk(qa_units)
+    _assert_complete_coverage(chunks, qa_units)
+    for pair in [[("b9", 1), ("b9", 2)], [("b11", 5), ("b11", 6)]]:
+        assert any(set(pair) <= set(_coverage(chunk.evidence.items)) for chunk in chunks)
 
 
 @pytest.mark.parametrize("fallback", [False, True])
@@ -104,6 +190,61 @@ def _text(unit_id, text, section=()):
         source=SourceEvidence(kind="text", text=text),
         metadata={"common": {"section_path": list(section)}},
     )
+
+
+@pytest.mark.parametrize("shape", ["groups", "full_width", "partial", "different_labels", "nested"])
+@pytest.mark.parametrize("separate_plan_rows", [False, True])
+def test_only_structural_heading_bands_join_following_rows(shape, separate_plan_rows):
+    cells = [{"column_id": "c1", "text": "Section A", "colspan": 2},
+             {"column_id": "c3", "text": "Section A", "colspan": 2}]
+    if shape == "full_width":
+        cells = [{"column_id": "c1", "text": "Section A", "colspan": 4}]
+    elif shape == "partial":
+        cells = cells[:1]
+    elif shape == "different_labels":
+        cells[1]["text"] = "A data value"
+    elif shape == "nested":
+        cells[0]["children"] = [{"type": "text", "format": "plain", "content": "Nested evidence"}]
+    table = {
+        "columns": [{"id": f"c{i}", "text": f"Column {i}"} for i in range(1, 5)],
+        "rows": [
+            {"index": 1, "cells": cells},
+            {"index": 2, "cells": [{"column_id": f"c{i}", "text": "content " * 20} for i in range(1, 5)]},
+        ],
+    }
+    unit = EvidenceUnit(id="table", type="table", format="structured_table", content=table,
+                        source=SourceEvidence(kind="table", text=table_source_text(table)))
+    ranges = [[1, 1], [2, 2]] if separate_plan_rows else [[1, 2]]
+    chunks = EvidenceUnitAgenticChunker(
+        plan_fn=lambda *_: [{"operations": [{"unit_id": "table", "action": "include_rows", "row_ranges": [rows]}]}
+                           for rows in ranges],
+        target_tokens_per_chunk=80, max_tokens_per_chunk=500, enrich_final_chunks=False,
+    ).chunk([unit])
+    expected = [[("table", 1), ("table", 2)]] if shape in {"groups", "full_width"} else [[("table", 1)], [("table", 2)]]
+    assert [_coverage(chunk.evidence.items) for chunk in chunks] == expected
+
+
+@pytest.mark.parametrize("row_count", [1, 2])
+def test_pending_primary_evidence_splits_before_fitting_table_with_title(row_count):
+    table = {
+        "columns": [{"id": "c1", "text": "Answer"}],
+        "rows": [{"index": i, "cells": [{"column_id": "c1", "text": "answer " * 100}]}
+                 for i in range(1, row_count + 1)],
+    }
+    unit = EvidenceUnit(id="table", type="table", format="structured_table", content=table,
+                        source=SourceEvidence(kind="table", text=table_source_text(table)))
+    units = [_text("previous", "Previous facts. " * 60), _text("title", "Comparison table"), unit]
+    chunks = EvidenceUnitAgenticChunker(
+        plan_fn=lambda *_: [{"operations": [{"unit_id": u.id, "action": "include"} for u in units]}],
+        target_tokens_per_chunk=100, max_tokens_per_chunk=300, enrich_final_chunks=False,
+    ).chunk(units)
+    assert chunks[0].metadata["source_unit_ids"] == ["previous"]
+    assert chunks[1].metadata["source_unit_ids"] == ["title", "table"]
+    assert all(count_tokens(chunk.source.text) <= 300 for chunk in chunks)
+    assert _coverage([item for chunk in chunks for item in chunk.evidence.items]) == [
+        ("table", i) for i in range(1, row_count + 1)
+    ]
+    assert chunks[0].source.text == units[0].source.text
 
 
 @pytest.mark.parametrize("texts,sections", [
