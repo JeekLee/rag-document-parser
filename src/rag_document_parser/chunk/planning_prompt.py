@@ -24,6 +24,10 @@ _PLAN_PROMPT = """\
 - include_rows를 사용하면 해당 table의 모든 실제 row index를 빠짐없이, 겹치지 않게 포함해야 합니다.
 - table row coverage에 확신이 없으면 action "include"로 전체 table을 포함합니다.
 - context_unit_ids는 이미 이전 chunk에서 evidence로 포함된 unit id만 작성하며, 없으면 빈 배열입니다.
+- 처음 포함하는 현재 unit이나 미래 unit은 context_unit_ids에 넣지 않습니다.
+- unit 및 row의 원문 순서를 유지합니다. 제목과 짧은 근거/인용은 관련 본문과 묶습니다.
+- Q&A는 하나의 질의와 답변을 함께 유지하고, rowspan으로 연결된 행은 가능한 한 나누지 않습니다.
+- 서로 다른 질의는 아래 target_tokens_per_chunk를 기준으로 나누고 max_tokens_per_chunk를 넘지 않습니다.
 - text, table, image를 같은 chunk에 묶을 수 있습니다.
 - summary, keywords, questions는 최종 RagChunk 확정 후 별도 enrichment 단계에서 생성합니다.
 - max_units_per_chunk는 일반 chunk의 hard limit입니다. 하나의 원자적 unit 자체가 큰 경우를 제외하고 초과하지 않습니다.
@@ -76,9 +80,14 @@ JSON object only:
 """
 
 
-def build_plan_prompt(window: list[EvidenceUnit], max_units: int) -> str:
+def build_plan_prompt(
+    window: list[EvidenceUnit], max_units: int,
+    target_tokens: int = 800, max_tokens: int = 2048,
+) -> str:
     payload = {
         "max_units_per_chunk": max_units,
+        "target_tokens_per_chunk": target_tokens,
+        "max_tokens_per_chunk": max_tokens,
         "units": [_unit_payload(index, unit) for index, unit in enumerate(window)],
     }
     example_unit_id = json.dumps(window[0].id if window else "unit", ensure_ascii=False)
@@ -163,9 +172,29 @@ def _unit_payload(index: int, unit: EvidenceUnit) -> dict[str, Any]:
         "format": unit.format,
         "section_path": common.get("section_path", []) if isinstance(common, Mapping) else [],
         "source_preview": _truncate(unit.source.text, 900),
-        "table": _compact_table(table),
+        "table": {**_compact_table(table), **_table_row_outline(unit)},
         "asset": _compact_asset(asset),
     }
+
+
+def _table_row_outline(unit: EvidenceUnit) -> dict[str, Any]:
+    if unit.format != "structured_table" or not isinstance(unit.content, Mapping):
+        return {}
+    # The global source preview can hide later questions and actual row indexes.
+    return {"rows": [
+        {
+            "index": row.get("index"),
+            "cells": [
+                {
+                    "column_id": cell.get("column_id"),
+                    "rowspan": cell.get("rowspan", 1),
+                    "text_preview": _truncate(str(cell.get("text", "")), 120),
+                }
+                for cell in row.get("cells", []) if isinstance(cell, Mapping)
+            ],
+        }
+        for row in unit.content.get("rows", []) if isinstance(row, Mapping)
+    ]}
 
 
 def _compact_table(table: Any) -> dict[str, Any]:

@@ -11,6 +11,7 @@ from ..llm import LlmConfig, as_llm_gateway, chat_json
 from ..models import RagChunk
 from ..ports.llm import LlmGateway
 from .contracts import BatchChunkEnrichmentResponse, ChunkEnrichmentResponse
+from .evidence_projection import table_payload, table_row_payload
 from .tokens import count_tokens as _llm_token_count
 
 ChunkEnrichmentFn = Callable[[RagChunk, LlmConfig | None], Any]
@@ -258,39 +259,15 @@ def _evidence_payload(chunk: RagChunk) -> list[dict[str, Any]]:
 
 
 def _table_payload(table: dict[str, Any], metadata: dict[str, Any]) -> dict[str, Any]:
-    rows = table.get("rows", [])
-    columns = table.get("columns", [])
-    return {
-        "caption": table.get("caption") if isinstance(table.get("caption"), str) else "",
-        "columns": [
-            str(column.get("text", "")).strip()
-            for column in columns
-            if isinstance(column, Mapping) and str(column.get("text", "")).strip()
-        ][:80],
-        "row_ranges": metadata.get("row_ranges") if isinstance(metadata.get("row_ranges"), list) else [],
-        "rows": [
-            _table_row_payload(row, columns if isinstance(columns, list) else [])
-            for row in rows
-            if isinstance(row, Mapping)
-        ][:60],
-    }
+    payload = table_payload(table)
+    payload["row_ranges"] = (
+        metadata.get("row_ranges") if isinstance(metadata.get("row_ranges"), list) else []
+    )
+    return payload
 
 
 def _table_row_payload(row: dict[str, Any], columns: list[Any]) -> dict[str, Any]:
-    cells: list[dict[str, str]] = []
-    for cell in row.get("cells", []) if isinstance(row.get("cells"), list) else []:
-        if not isinstance(cell, Mapping):
-            continue
-        text = _normalize_space(str(cell.get("text", "")))
-        if not text:
-            continue
-        cells.append(
-            {
-                "column": _column_label(columns, cell.get("column_id")),
-                "text": _truncate(text, 500),
-            }
-        )
-    return {"index": row.get("index"), "cells": cells}
+    return table_row_payload(row, columns)
 
 
 def _parse_enrichment(raw: Any, *, fallback: _ChunkEnrichment) -> _ChunkEnrichment:
