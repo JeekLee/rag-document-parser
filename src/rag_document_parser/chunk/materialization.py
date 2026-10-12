@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..models import Evidence, EvidenceItem, EvidenceUnit, RagChunk, SourceEvidence
+from .evidence_projection import column_label, table_source_text
 
 
 @dataclass(frozen=True)
@@ -385,7 +386,7 @@ def _materialize_operation(
                 source_unit_ids=[unit.id],
                 metadata=dict(unit.metadata),
             ),
-            unit.source.text,
+            _unit_source_text(unit),
             {"unit_id": unit.id, "action": "include"},
         )
 
@@ -477,6 +478,9 @@ def _rowspan_context_cells_by_row(
             continue
         start_index = row.get("index")
         if type(start_index) is not int:
+            continue
+        # A selected origin already owns the spanning cell and its children.
+        if start_index in selected_indexes:
             continue
         cells = row.get("cells", [])
         if not isinstance(cells, list):
@@ -659,65 +663,10 @@ def _covered_unit_ids(
     return set(full_assigned) | set(row_ranges_by_unit)
 
 
-def table_source_text(table: dict[str, Any]) -> str:
-    columns = table.get("columns", [])
-    if not isinstance(columns, list):
-        columns = []
-
-    lines = [f"table: {len(columns)} columns"]
-    labels = [
-        str(column.get("text", "")).strip()
-        for column in columns
-        if isinstance(column, Mapping)
-    ]
-    if labels:
-        lines.append("columns: " + " | ".join(labels))
-
-    rows = table.get("rows", [])
-    if not isinstance(rows, list):
-        return "\n".join(lines)
-
-    for row in rows:
-        if not isinstance(row, Mapping):
-            continue
-        values: list[str] = []
-        cells = row.get("cells", [])
-        if isinstance(cells, list):
-            for cell in cells:
-                if not isinstance(cell, Mapping):
-                    continue
-                label = column_label(columns, cell.get("column_id"))
-                text = str(cell.get("text", "")).strip()
-                if text:
-                    values.append(f"{label}={text}")
-        lines.append(f"row {row.get('index', '?')}: " + "; ".join(values))
-
-    return "\n".join(lines)
-
-
-def column_label(columns: list[Any], column_id: Any) -> str:
-    for column in columns:
-        if (
-            isinstance(column, Mapping)
-            and column.get("id") == column_id
-            and isinstance(column.get("text"), str)
-            and column["text"].strip()
-        ):
-            return column["text"].strip()
-
-    if isinstance(column_id, str):
-        match = re.fullmatch(r"c([1-9][0-9]*)", column_id)
-        if match:
-            index = int(match.group(1)) - 1
-            if 0 <= index < len(columns):
-                column = columns[index]
-                if isinstance(column, Mapping) and isinstance(column.get("text"), str):
-                    text = column["text"].strip()
-                    if text:
-                        return text
-        return column_id
-
-    return "col"
+def _unit_source_text(unit: EvidenceUnit) -> str:
+    if unit.format == "structured_table" and isinstance(unit.content, Mapping):
+        return table_source_text(unit.content)
+    return unit.source.text
 
 
 def _chunk_from_items(
@@ -998,7 +947,7 @@ def _fallback_chunks(
         chunks.append(
             RagChunk(
                 id=f"chunk-{index}",
-                source=SourceEvidence(kind="chunk", text=unit.source.text),
+                source=SourceEvidence(kind="chunk", text=_unit_source_text(unit)),
                 evidence=Evidence(items=[item]),
                 summary=_fallback_summary([unit]),
                 keywords=_fallback_keywords([unit]),
