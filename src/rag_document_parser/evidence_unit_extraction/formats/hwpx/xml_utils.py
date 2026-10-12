@@ -4,6 +4,12 @@ import re
 from xml.etree import ElementTree as ET
 
 _HP = "http://www.hancom.co.kr/hwpml/2011/paragraph"
+_INLINE_SEPARATORS = {
+    "lineBreak": "\n",
+    "fwSpace": " ",
+    "nbSpace": " ",
+    "tab": "\t",
+}
 
 
 def q(local: str) -> str:
@@ -20,10 +26,17 @@ def paragraph_text(paragraph: ET.Element) -> str:
 
 
 def run_text(run: ET.Element) -> str:
-    parts: list[str] = []
-    for text in run.findall(q("t")):
-        if text.text:
-            parts.append("".join(char for char in text.text if char > "\x1f"))
+    # Only direct text nodes belong to this run; nested objects own their text.
+    return "".join(_inline_text(text) for text in run.findall(q("t")))
+
+
+def _inline_text(element: ET.Element) -> str:
+    """Read one text node's mixed content, excluding its own external tail."""
+    parts = ["".join(char for char in element.text or "" if char > "\x1f")]
+    for child in element:
+        parts.append(_INLINE_SEPARATORS.get(local_name(child.tag), ""))
+        parts.append(_inline_text(child))
+        parts.append("".join(char for char in child.tail or "" if char > "\x1f"))
     return "".join(parts)
 
 
@@ -32,8 +45,9 @@ def element_text(element: ET.Element) -> str:
     for descendant in element.iter():
         if local_name(descendant.tag) != "t":
             continue
-        if descendant.text:
-            parts.append("".join(char for char in descendant.text if char > "\x1f"))
+        text = _inline_text(descendant)
+        if text:
+            parts.append(text)
     return clean_text(" ".join(parts))
 
 
