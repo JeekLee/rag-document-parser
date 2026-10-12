@@ -14,7 +14,6 @@ from .contracts import BoundaryDecision, ChunkPlanResponse
 from .enrichment import Enricher, RagChunkEnricher
 from .materialization import (
     ChunkPlanMaterializer,
-    column_label as _column_label,
     contiguous_ranges as _contiguous_ranges,
     dict_items as _dicts,
     fallback_keywords_from_text as _fallback_keywords_from_text,
@@ -145,7 +144,7 @@ class EvidenceUnitAgenticChunker:
         if self._llm_gateway is None:
             return None
         response = self._llm_gateway.complete_model(
-            _json_messages(_plan_prompt(window, max_units)),
+            _json_messages(_plan_prompt(window, max_units, self._target_tokens, self._max_tokens)),
             ChunkPlanResponse,
             schema_name="chunk_plan",
         )
@@ -339,6 +338,12 @@ def _merge_adjacent_chunks(
     if warnings:
         metadata["_warnings"] = warnings
 
+    for key in ("_fallback_reason", "_rejected_plan"):
+        if key in left.metadata or key in right.metadata:
+            metadata[key] = left.metadata.get(key, right.metadata.get(key))
+    if left.metadata.get("_needs_enrichment") or right.metadata.get("_needs_enrichment"):
+        metadata["_needs_enrichment"] = True
+
     return RagChunk(
         id=left.id,
         source=SourceEvidence(kind="chunk", text=source_text),
@@ -389,7 +394,13 @@ def _improve_chunk_boundaries(
         return []
 
     units_by_id = {unit.id: unit for unit in units}
-    improved = _move_trailing_heading_units_forward(chunks, units_by_id, max_units_per_chunk)
+    improved = _coalesce_fallback_text_fragments(
+        chunks, units_by_id, max_units_per_chunk, target_tokens_per_chunk
+    )
+    improved = _move_trailing_heading_units_forward(improved, units_by_id, max_units_per_chunk)
+    improved = _join_rowspan_boundaries(
+        improved, units_by_id, max_units_per_chunk, max_tokens_per_chunk
+    )
     improved = _split_case_boundary_chunks(improved, units_by_id, max_units_per_chunk)
     improved = _split_independent_form_chunks(improved, units_by_id, max_units_per_chunk)
     improved = _split_chunks_exceeding_max_units(
@@ -407,6 +418,126 @@ def _improve_chunk_boundaries(
     )
 
 
+def _coalesce_fallback_text_fragments(
+    chunks: list[RagChunk], units_by_id: dict[str, EvidenceUnit],
+    max_units: int, target_tokens: int,
+) -> list[RagChunk]:
+    """Keep runs of small fallback title/citation units readable as one block."""
+    result: list[RagChunk] = []
+    run: list[RagChunk] = []
+
+    def flush() -> None:
+        if not any(
+            _is_forward_heading_item(item, units_by_id)
+            for part in run for item in part.evidence.items
+        ):
+            result.extend(run)
+        else:
+            merged = run[0]
+            for part in run[1:]:
+                if (
+                    _combined_source_unit_count(merged, part) > max_units
+                    or _llm_token_count(merged.source.text + "\n\n" + part.source.text) > target_tokens
+                ):
+                    result.append(merged)
+                    merged = part
+                else:
+                    merged = _merge_adjacent_chunks(
+                        merged, part, {"reason": "short fallback text under a shared heading"}, max_units
+                    )
+            result.append(merged)
+        run.clear()
+
+    for chunk in chunks:
+        if run:
+            previous = run[-1].evidence.items[-1]
+            first = chunk.evidence.items[0]
+            if (
+                _different_sections(previous, first, units_by_id)
+                or _item_starts_new_case(first, units_by_id)
+                or _item_starts_new_form(first, units_by_id)
+                or (
+                    _is_forward_heading_item(first, units_by_id)
+                    and any(_is_forward_heading_item(item, units_by_id)
+                            for part in run for item in part.evidence.items)
+                )
+            ):
+                flush()
+        if (
+            chunk.metadata.get("_fallback_reason")
+            and all(item.type == "text" for item in chunk.evidence.items)
+            and _llm_token_count(chunk.source.text) <= target_tokens // 4
+        ):
+            run.append(chunk)
+        else:
+            flush()
+            result.append(chunk)
+    flush()
+    return result
+
+
+def _different_sections(
+    left: EvidenceItem, right: EvidenceItem, units_by_id: dict[str, EvidenceUnit]
+) -> bool:
+    def section(item: EvidenceItem) -> Any:
+        unit = units_by_id.get(item.source_unit_ids[0]) if item.source_unit_ids else None
+        common = unit.metadata.get("common", {}) if unit else {}
+        return common.get("section_path", []) if isinstance(common, Mapping) else []
+
+    left_path, right_path = section(left), section(right)
+    return bool(left_path and right_path and left_path != right_path)
+
+
+def _join_rowspan_boundaries(
+    chunks: list[RagChunk],
+    units_by_id: dict[str, EvidenceUnit],
+    max_units: int,
+    max_tokens: int,
+) -> list[RagChunk]:
+    result: list[RagChunk] = []
+    for right in chunks:
+        if not result:
+            result.append(right)
+            continue
+        left = result[-1]
+        tail, head = left.evidence.items[-1], right.evidence.items[0]
+        ids = list(tail.source_unit_ids)
+        if (
+            len(ids) != 1 or ids != list(head.source_unit_ids)
+            or tail.format != "structured_table" or head.format != "structured_table"
+            or ids[0] not in units_by_id
+            or _combined_source_unit_count(left, right) > max_units
+            or left.metadata.get("_fallback_reason") or right.metadata.get("_fallback_reason")
+        ):
+            result.append(right)
+            continue
+        table = units_by_id[ids[0]].content
+        left_rows, right_rows = tail.content.get("rows", []), head.content.get("rows", [])
+        if not left_rows or not right_rows or not any(
+            group[0]["index"] <= left_rows[-1]["index"] < right_rows[0]["index"] <= group[-1]["index"]
+            for group in _rowspan_groups(table.get("rows", []))
+        ):
+            result.append(right)
+            continue
+        ranges = _row_ranges_from_rows([*left_rows, *right_rows])
+        joined = EvidenceItem(
+            type=tail.type, format=tail.format,
+            content=_table_subset(table, _row_range_tuples(ranges)),
+            source_unit_ids=ids, metadata={**dict(tail.metadata), "row_ranges": ranges},
+        )
+        merged = _merge_adjacent_chunks(left, right, {"reason": "shared table rowspan"}, max_units)
+        merged = _rebuild_chunk_from_items(
+            merged, [*left.evidence.items[:-1], joined, *right.evidence.items[1:]],
+            units_by_id, max_units_per_chunk=max_units, regenerate_text_fields=True,
+            warning={"type": "agentic_rowspan_boundary_joined", "unit_id": ids[0], "row_ranges": ranges},
+        )
+        if _llm_token_count(merged.source.text) <= max_tokens:
+            result[-1] = merged
+        else:
+            result.append(right)
+    return result
+
+
 def _move_trailing_heading_units_forward(
     chunks: list[RagChunk],
     units_by_id: dict[str, EvidenceUnit],
@@ -422,6 +553,8 @@ def _move_trailing_heading_units_forward(
         moving: list[EvidenceItem] = []
 
         while left_items and _is_forward_heading_item(left_items[-1], units_by_id):
+            if _different_sections(left_items[-1], right_items[0], units_by_id):
+                break
             moving.insert(0, left_items.pop())
 
         if not moving:
@@ -440,6 +573,12 @@ def _move_trailing_heading_units_forward(
             max_units_per_chunk=max_units_per_chunk,
             warning=right_warning,
         )
+        # Moving the last evidence out of a chunk must not erase its repairs.
+        inherited = _dicts(left.metadata.get("_warnings"))
+        if inherited:
+            result[index + 1].metadata["_warnings"] = [
+                *inherited, *_dicts(result[index + 1].metadata.get("_warnings"))
+            ]
 
         if left_items:
             result[index] = _rebuild_chunk_from_items(
@@ -623,7 +762,7 @@ def _split_large_table_chunks(
 ) -> list[RagChunk]:
     result: list[RagChunk] = []
     for chunk in chunks:
-        if _llm_token_count(chunk.source.text) <= max_tokens_per_chunk:
+        if _llm_token_count(chunk.source.text) <= target_tokens_per_chunk:
             result.append(chunk)
             continue
 
@@ -707,7 +846,15 @@ def _split_large_table_chunk(
         )
         result.append(rebuilt)
 
-    return result if did_split else [chunk]
+    if did_split:
+        return result
+    if original_token_count > max_tokens_per_chunk:
+        return [_rebuild_chunk_from_items(
+            chunk, list(chunk.evidence.items), units_by_id,
+            max_units_per_chunk=max_units_per_chunk,
+            max_tokens_per_chunk=max_tokens_per_chunk,
+        )]
+    return [chunk]
 
 
 @dataclass(frozen=True)
@@ -754,8 +901,18 @@ def _split_table_item_by_rows(
     current_rows: list[dict[str, Any]] = []
     splits: list[_TableRowSplit] = []
 
-    for row in rows:
-        candidate_rows = [*current_rows, row]
+    groups = _rowspan_groups(rows)
+    # Rowspans are preferred boundaries. Only break them when the complete
+    # group cannot fit under the hard budget, retaining carried cell context.
+    budgeted_groups = []
+    for group in groups:
+        if _llm_token_count(_table_split_source_text(item, repeated_context_text, group)) > max_tokens_per_chunk:
+            budgeted_groups.extend([[row] for row in group])
+        else:
+            budgeted_groups.append(group)
+
+    for group in budgeted_groups:
+        candidate_rows = [*current_rows, *group]
         candidate_context_text = first_context_text if not splits else repeated_context_text
         candidate_source_prefix_text = first_source_prefix_text if not splits else ""
         candidate_text = _table_split_source_text(
@@ -773,7 +930,7 @@ def _split_table_item_by_rows(
                     source_prefix_text=first_source_prefix_text if not splits else "",
                 )
             )
-            current_rows = [row]
+            current_rows = list(group)
             continue
         current_rows = candidate_rows
 
@@ -794,6 +951,23 @@ def _split_table_item_by_rows(
         _with_large_row_warning(split, max_tokens_per_chunk)
         for split in splits
     ]
+
+
+def _rowspan_groups(rows: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    """Connected rowspans describe a logical record, including multirow Q&A."""
+    groups: list[list[dict[str, Any]]] = []
+    end = -1
+    for row in rows:
+        index = row["index"]
+        if not groups or index > end:
+            groups.append([])
+        groups[-1].append(row)
+        end = max(end, index, *[
+            index + cell.get("rowspan", 1) - 1
+            for cell in row.get("cells", [])
+            if type(cell.get("rowspan", 1)) is int and cell.get("rowspan", 1) > 1
+        ])
+    return groups
 
 
 def _table_row_split(
@@ -946,49 +1120,21 @@ def _table_split_source_text(
     source_prefix_text: str = "",
 ) -> str:
     table = item.content if isinstance(item.content, Mapping) else {}
-    columns = table.get("columns", [])
-    if not isinstance(columns, list):
-        columns = []
-
     row_ranges = _row_ranges_from_rows(rows)
+    subset = _table_subset(table, _row_range_tuples(row_ranges))
     lines = [
         f"table rows: {_row_ranges_label(row_ranges)}",
     ]
     if context_text:
         lines.append(f"context: {context_text}")
-    for row in rows:
-        lines.append(_compact_table_row_text(row, columns))
+    # Use the same complete recursive projection for sizing and final source.
+    lines.append(_table_source_text(subset))
     table_text = "\n".join(line for line in lines if line)
     return "\n\n".join(
         part
         for part in (source_prefix_text, table_text)
         if part
     )
-
-
-def _compact_table_row_text(row: dict[str, Any], columns: list[Any]) -> str:
-    values: list[str] = []
-    cells = row.get("cells", [])
-    if isinstance(cells, list):
-        for cell in cells:
-            if not isinstance(cell, Mapping):
-                continue
-            text = _normalize_space(str(cell.get("text", "")))
-            if not text:
-                continue
-            label = _compact_column_label(columns, cell.get("column_id"))
-            if label and label != text:
-                values.append(f"{label}: {_truncate(text, 120)}")
-            else:
-                values.append(_truncate(text, 120))
-    return f"row {row.get('index', '?')}: " + "; ".join(values)
-
-
-def _compact_column_label(columns: list[Any], column_id: Any) -> str:
-    label = _column_label(columns, column_id)
-    if label.startswith("col") or label == column_id:
-        return label
-    return _truncate(_normalize_space(label), 36)
 
 
 def _row_ranges_from_rows(rows: list[dict[str, Any]]) -> list[list[int]]:

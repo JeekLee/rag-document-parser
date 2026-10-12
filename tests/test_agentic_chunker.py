@@ -1541,7 +1541,7 @@ def test_agentic_chunker_preserves_pending_table_source_when_splitting_large_tab
     for chunk in chunks:
         table_item = next(item for item in chunk.evidence.items if item.type == "table")
         for row in table_item.content["rows"]:
-            assert f"항목: 항목 {row['index']}" in chunk.source.text
+            assert f"항목=항목 {row['index']}" in chunk.source.text
 
 
 def test_agentic_chunker_preserves_pending_image_source_when_splitting_large_table():
@@ -1630,8 +1630,8 @@ def test_agentic_chunker_budgets_first_table_split_with_pending_source_prefix():
 
     chunks = _chunk_units_together(
         [diagram, large_table],
-        target_tokens_per_chunk=70,
-        max_tokens_per_chunk=100,
+        target_tokens_per_chunk=90,
+        max_tokens_per_chunk=120,
     )
 
     assert len(chunks) > 1
@@ -1683,7 +1683,7 @@ def test_agentic_chunker_carries_rowspan_context_when_splitting_large_table():
     second_table = chunks[1].evidence.items[0].content
     assert second_table["rows"][0]["index"] == 2
     assert second_table["rows"][0]["cells"][0]["text"] == "확진용 검사"
-    assert "구분: 확진용 검사" in chunks[1].source.text
+    assert "구분=확진용 검사" in chunks[1].source.text
     assert "row 2:" in chunks[1].source.text
 
 
@@ -1985,7 +1985,7 @@ def test_agentic_chunker_preserves_source_unit_metadata_on_planned_and_fallback_
     ]
 
 
-def test_agentic_chunker_rejects_context_unit_from_current_chunk():
+def test_agentic_chunker_repairs_context_unit_from_current_chunk():
     from rag_document_parser.chunk import EvidenceUnitAgenticChunker
 
     def plan_fn(window, cfg, max_units):
@@ -2001,4 +2001,7 @@ def test_agentic_chunker_rejects_context_unit_from_current_chunk():
     chunks = EvidenceUnitAgenticChunker(llm=None, plan_fn=plan_fn).chunk([_text_unit("b1", "현재 설명")])
 
     assert len(chunks) == 1
-    assert "context unit id must refer to a prior assigned unit" in chunks[0].metadata["_fallback_reason"]
+    assert "_fallback_reason" not in chunks[0].metadata
+    assert chunks[0].metadata["context_unit_ids"] == []
+    assert chunks[0].metadata["_warnings"][0]["type"] == "agentic_context_reference_dropped"
+    assert "self reference" in chunks[0].metadata["_warnings"][0]["reason"]

@@ -38,6 +38,10 @@ class _OmittedTableRows:
     row_indexes: list[int]
 
 
+class _EvidenceIntegrityError(ValueError):
+    """An ambiguous primary assignment that cannot be repaired locally."""
+
+
 def _materialize_window(
     units: list[EvidenceUnit],
     raw_plan: Any,
@@ -99,7 +103,10 @@ def _materialize_window(
                 source_parts.append(source_text)
             normalized_ops.append(normalized)
 
-        context_unit_ids = _context_unit_ids(item.get("context_unit_ids"), by_id, prior_covered)
+        context_unit_ids, context_warnings = _context_unit_ids(
+            item.get("context_unit_ids"), by_id, prior_covered, operation_unit_ids
+        )
+        plan_warnings.extend(context_warnings)
         chunks.append(
             _chunk_from_items(
                 len(chunks) + 1,
@@ -134,7 +141,28 @@ def _materialize_window(
                 _chunk_sort_key_for_unit(unit, units),
                 units,
             )
+    _validate_primary_coverage(chunks, units)
     return chunks
+
+
+def _validate_primary_coverage(chunks: list[RagChunk], units: list[EvidenceUnit]) -> None:
+    def keys(unit_id: str, content: Any, format: str) -> list[tuple[str, int | None]]:
+        if format == "structured_table" and isinstance(content, Mapping):
+            indexes = _table_row_indexes(content.get("rows", []))
+            if indexes:
+                return [(unit_id, index) for index in indexes]
+        return [(unit_id, None)]
+
+    expected = [key for unit in units for key in keys(unit.id, unit.content, unit.format)]
+    actual = [
+        key
+        for chunk in chunks
+        for item in chunk.evidence.items
+        for unit_id in item.source_unit_ids
+        for key in keys(unit_id, item.content, item.format)
+    ]
+    if actual != expected:
+        raise _EvidenceIntegrityError("primary evidence must cover every unit/row once in source order")
 
 
 def _validate_unique_unit_ids(units: list[EvidenceUnit]) -> None:
@@ -232,7 +260,8 @@ def _omitted_table_rows(
             if not _row_selected(index, ranges)
         ]
         if missing:
-            omitted.append(_OmittedTableRows(unit, missing))
+            for start, end in contiguous_ranges(missing):
+                omitted.append(_OmittedTableRows(unit, list(range(start, end + 1))))
     return omitted
 
 
@@ -350,6 +379,8 @@ def _materialize_operation_with_repair(
     try:
         evidence_item, source_text, normalized = _materialize_operation(unit, operation)
     except ValueError as exc:
+        if isinstance(exc, _EvidenceIntegrityError):
+            raise
         if operation.get("action") != "include_rows":
             raise
         evidence_item, source_text, normalized = _materialize_operation(
@@ -427,6 +458,9 @@ def _normalize_row_ranges(value: Any) -> list[tuple[int, int]]:
         ):
             raise ValueError("row range must be [start, end] ints with start <= end")
         ranges.append((item[0], item[1]))
+    for previous, current in zip(ranges, ranges[1:]):
+        if current[0] <= previous[1]:
+            raise _EvidenceIntegrityError("row ranges must be ordered and must not overlap")
     return ranges
 
 
@@ -612,6 +646,8 @@ def _validate_row_range_bounds(
     for start, end in ranges:
         if start < min_index or end > max_index:
             raise ValueError("row range is outside table rows")
+        if start not in row_indexes or end not in row_indexes:
+            raise _EvidenceIntegrityError("row range boundaries must reference actual table rows")
 
 
 def _row_selected(index: int, ranges: list[tuple[int, int]]) -> bool:
@@ -741,16 +777,36 @@ def _context_unit_ids(
     value: Any,
     by_id: dict[str, EvidenceUnit],
     prior_assigned: set[str],
-) -> list[str]:
+    operation_unit_ids: list[str],
+) -> tuple[list[str], list[dict[str, Any]]]:
     result: list[str] = []
-    for unit_id in string_items(value):
-        if unit_id not in by_id:
-            raise ValueError(f"unknown context unit id: {unit_id!r}")
-        if unit_id not in prior_assigned:
-            raise ValueError(f"context unit id must refer to a prior assigned unit: {unit_id}")
-        if unit_id not in result:
-            result.append(unit_id)
-    return result
+    warnings: list[dict[str, Any]] = []
+    if value is None:
+        return result, warnings
+    if not isinstance(value, list):
+        return result, [{
+            "type": "agentic_context_reference_dropped",
+            "reason": "context_unit_ids must be a list; primary evidence is unchanged",
+            "value": _debug_value(value),
+        }]
+    for unit_id in value:
+        if not isinstance(unit_id, str) or unit_id not in by_id:
+            reason = "unknown context unit id"
+        elif unit_id in prior_assigned:
+            # A previously selected row subset is valid context for later rows.
+            if unit_id not in result:
+                result.append(unit_id)
+            continue
+        elif unit_id in operation_unit_ids:
+            reason = "self reference: unit first included in the current chunk"
+        else:
+            reason = "new context unit: not previously assigned as evidence"
+        warnings.append({
+            "type": "agentic_context_reference_dropped",
+            "unit_id": _debug_value(unit_id),
+            "reason": reason + "; primary evidence is unchanged",
+        })
+    return result, warnings
 
 
 def _insert_repair_chunk(
