@@ -91,6 +91,20 @@ def _table_text(table: Mapping[str, Any]) -> str:
                 parts = [str(cell.get("text", "")).strip()]
                 parts.extend(_child_text(child) for child in cell.get("children", []))
                 text = "; ".join(part for part in parts if part)
+                fragment = cell.get("metadata", {}).get("cell_fragment")
+                if isinstance(fragment, Mapping):
+                    role = fragment.get("role")
+                    if role == "omitted":
+                        text = "[omitted in this row fragment]"
+                    elif role == "context":
+                        text += " [repeated context]"
+                    elif (
+                        role == "content"
+                        and isinstance(fragment.get("text_range"), list)
+                        and len(fragment["text_range"]) == 2
+                    ):
+                        start, end = fragment["text_range"]
+                        text += f" [row fragment; text {start}:{end}]"
                 if not text:
                     continue
                 spans = [

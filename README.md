@@ -85,6 +85,24 @@ to enrich one chunk per LLM call. For Gemini Flash-Lite, `24000` is a practical
 fast default; lower it for stricter latency/error isolation and raise it only
 after checking provider rate limits and JSON response stability.
 
+The chunker targets 800 source tokens and uses a maximum of 2,048 by default
+(`target_tokens_per_chunk` / `max_tokens_per_chunk`). Counts use `cl100k_base`
+when `tiktoken` is available, otherwise a local estimate; they are not the
+provider's full request token count. Tables prefer row and rowspan boundaries.
+An oversized single row can split its cell text at paragraph, sentence, or word
+boundaries, falling back to character boundaries when needed. Headers and
+fitting short keys remain as context; the original `EvidenceUnit` stays intact.
+
+Such fragments keep the original row index and column IDs. The evidence item's
+`metadata.table_fragment` records `row_index`, `part`, and `count`; each cell's
+`metadata.cell_fragment` records its `role` (`content`, `context`, or `omitted`),
+`text_range`, and `children_range`. Ranges use zero-based, exclusive-end offsets
+in the original cell's Python string and child list. Reassemble only `content`
+pieces; repeated context is not new primary evidence. Multiple long columns
+are continued independently, with omitted cells explicitly marked. Atomic
+children occur once. Headers, context, or child objects that cannot fit are
+preserved with a size warning instead of being truncated.
+
 ## Model Contract
 
 The canonical contract lives in `rag_document_parser.models`. Models are
@@ -170,6 +188,9 @@ Notes:
 - HWP5/HWPX 1×1 layout tables containing nested tables are unwrapped into
   ordered body blocks before chunking. Nested tables inside multi-cell data
   tables remain cell evidence; plain text-only boxes keep their existing behavior.
+- HWP5/HWPX header inference requires actual subdivisions of merged header
+  groups. Repeated merged data rows and populated cells outside those groups
+  remain in the table body.
 - Binary assets are uploaded to S3-compatible object storage by
   `RagDocumentParser` and represented as `asset_ref` evidence instead of being
   embedded into text or content payloads.
@@ -249,7 +270,9 @@ src/rag_document_parser/
     contracts.py
     enrichment.py
     materialization.py
+    evidence_projection.py
     planning_prompt.py
+    table_fragmentation.py
     tokens.py
   ports/
     asset_store.py

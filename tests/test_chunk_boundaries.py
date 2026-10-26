@@ -269,7 +269,7 @@ def test_context_warning_survives_moving_all_heading_evidence():
                for warning in chunks[0].metadata["_warnings"])
 
 
-def test_target_splitting_preserves_long_nested_source_and_warns_for_atomic_rows():
+def test_target_splitting_preserves_long_cell_text_and_nested_source():
     nested_marker = "nested evidence at the end"
     long_text = "evidence " * 200 + "last cell sentence"
     table = {
@@ -287,13 +287,15 @@ def test_target_splitting_preserves_long_nested_source_and_warns_for_atomic_rows
         plan_fn=lambda *_: [{"operations": [{"unit_id": "table", "action": "include"}]}],
         target_tokens_per_chunk=100, max_tokens_per_chunk=200, enrich_final_chunks=False,
     ).chunk([unit])
-    assert len(chunks) == 2
-    assert long_text in chunks[0].source.text
-    assert chunks[0].source.text.count(nested_marker) == 1
-    assert nested_marker not in chunks[1].source.text
-    assert _coverage([item for chunk in chunks for item in chunk.evidence.items]) == [("table", 1), ("table", 2)]
-    assert any(warning["type"] == "agentic_chunk_exceeds_max_tokens"
-               for warning in chunks[0].metadata["_warnings"])
+    assert len(chunks) > 2
+    fragments = [c.evidence.items[0].content["rows"][0]["cells"][0] for c in chunks[:-1]]
+    assert "".join(c["text"] for c in fragments) == long_text
+    assert [child["content"] for c in fragments for child in c["children"]] == [nested_marker]
+    assert sum(c.source.text.count(nested_marker) for c in chunks) == 1
+    assert chunks[-1].evidence.items[0].content["rows"][0]["index"] == 2
+    assert all(count_tokens(c.source.text) <= 200 for c in chunks)
+    assert not any(w["type"] == "agentic_chunk_exceeds_max_tokens"
+                   for c in chunks for w in c.metadata.get("_warnings", []))
 
 
 def test_table_below_max_splits_at_target_without_breaking_rowspan():
