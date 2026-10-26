@@ -19,8 +19,9 @@ def _manifest_documents() -> list[dict[str, object]]:
 def test_regression_corpus_files_are_pinned_by_hash_and_size():
     documents = _manifest_documents()
 
-    assert len(documents) == 11
+    assert len(documents) == 12
     assert {str(document["id"]) for document in documents} == {
+        "hwp-hira-spine-1a-5",
         "hwpx-ultrasound-qa",
         "pdf-ultrasound-qa",
         "hwpx-benefit-criteria-2024-278",

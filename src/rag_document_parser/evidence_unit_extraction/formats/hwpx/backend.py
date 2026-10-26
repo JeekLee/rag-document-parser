@@ -11,6 +11,7 @@ from ...backend import ParsedDocument
 from ...ocr import OcrFn
 from .diagram import HwpxDiagramBuilder
 from .document_assembly import HwpxDocumentAssembler
+from .layout_tables import expand_layout_tables
 from .package_reader import HwpxPackageReader
 from .source_projection import HwpxTableSourceProjector
 from .table_extraction import HwpxTableExtractor
@@ -39,7 +40,7 @@ class HwpxBackend:
             bin_data_map = package_reader.load_bin_data_map(archive)
             for section_name in package_reader.section_names(archive):
                 root = ET.fromstring(archive.read(section_name))
-                for paragraph in root.findall(q("p")):
+                for paragraph in expand_layout_tables(root.findall(q("p"))):
                     table = paragraph.find(f".//{q('tbl')}")
                     if table is not None:
                         structured = table_extractor.extract(

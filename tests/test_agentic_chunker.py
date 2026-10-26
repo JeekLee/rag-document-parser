@@ -1754,7 +1754,9 @@ def test_agentic_chunker_heuristic_enrichment_uses_qa_questions_after_table_spli
         llm=None,
         plan_fn=plan_fn,
         target_tokens_per_chunk=55,
-        max_tokens_per_chunk=100,
+        # Exercise row-level enrichment with complete Q&A records. Oversized
+        # individual cells are covered separately by the fragment tests.
+        max_tokens_per_chunk=600,
     ).chunk([unit])
 
     assert len(chunks) > 1

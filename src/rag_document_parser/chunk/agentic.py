@@ -29,6 +29,7 @@ from .planning_prompt import (
     build_boundary_prompt as _boundary_prompt,
     build_plan_prompt as _plan_prompt,
 )
+from .table_fragmentation import split_oversized_row
 from .tokens import count_tokens as _llm_token_count
 
 PlanFn = Callable[[list[EvidenceUnit], LlmConfig | None, int], Any]
@@ -908,8 +909,9 @@ def _pending_groups_before_table(
     units_by_id: dict[str, EvidenceUnit], max_tokens: int,
 ) -> list[list[EvidenceItem]]:
     """Flush separable primary evidence, keeping a fitting title suffix forward."""
-    # Detaching context cannot prevent overflow when even the row group is
-    # oversized; keep the existing context-preserving atomic-row behavior.
+    # Retain attached context when even a bare row is oversized. The cell
+    # splitter includes this context in its budget and leaves an explicit
+    # warning if the context or an atomic object cannot fit.
     if _llm_token_count(table_text) > max_tokens:
         return [items]
     groups: list[list[EvidenceItem]] = []
@@ -956,17 +958,6 @@ def _split_table_item_by_rows(
     max_tokens_per_chunk: int,
 ) -> list[_TableRowSplit]:
     table = item.content if isinstance(item.content, Mapping) else {}
-    rows = [row for row in table.get("rows", []) if isinstance(row, Mapping)]
-    if len(rows) <= 1:
-        return [
-            _TableRowSplit(
-                item=item,
-                rows=rows,
-                row_ranges=_row_ranges_from_rows(rows),
-                context_text=_table_context_text(item, context_items, units_by_id),
-            )
-        ]
-
     repeated_context_text = _table_context_text(item, context_items, units_by_id)
     first_context_text = _table_context_text(item, [], units_by_id)
     first_source_prefix_text = _table_pending_source_text(context_items, units_by_id)
@@ -1016,13 +1007,29 @@ def _split_table_item_by_rows(
             )
         )
 
-    if len(splits) <= 1:
-        return splits
+    result = []
+    for split in splits:
+        def render(fragment: EvidenceItem) -> str:
+            first_text = _table_split_source_text(
+                fragment, split.context_text, fragment.content["rows"],
+                source_prefix_text=split.source_prefix_text,
+            )
+            later_text = _table_split_source_text(
+                fragment, repeated_context_text, fragment.content["rows"],
+            )
+            return max((first_text, later_text), key=_llm_token_count)
 
-    return [
-        _with_large_row_warning(split, max_tokens_per_chunk)
-        for split in splits
-    ]
+        fragments = split_oversized_row(split.item, max_tokens_per_chunk, render)
+        for index, fragment in enumerate(fragments):
+            result.append(_with_large_row_warning(_TableRowSplit(
+                item=fragment,
+                rows=fragment.content["rows"],
+                row_ranges=split.row_ranges,
+                context_text=split.context_text if index == 0 else repeated_context_text,
+                # Primary prefix evidence is included only once.
+                source_prefix_text=split.source_prefix_text if index == 0 else "",
+            ), max_tokens_per_chunk))
+    return result
 
 
 def _rowspan_groups(rows: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
@@ -1366,6 +1373,10 @@ def _rebuild_chunk_from_items(
         item
         for item in _dicts(original.metadata.get("_warnings"))
         if item.get("type") != "agentic_chunk_exceeds_max_units"
+        and not (
+            max_tokens_per_chunk is not None
+            and item.get("type") == "agentic_chunk_exceeds_max_tokens"
+        )
     ]
     if warning is not None:
         warnings.append(warning)
@@ -1424,6 +1435,8 @@ def _operations_from_evidence_items(items: list[EvidenceItem]) -> list[dict[str,
                     "unit_id": unit_ids[0],
                     "action": "include_rows",
                     "row_ranges": row_ranges,
+                    **({"table_fragment": dict(item.metadata["table_fragment"])}
+                       if "table_fragment" in item.metadata else {}),
                 }
             )
             continue
@@ -1531,7 +1544,7 @@ def _item_starts_new_case(
     if item.type != "text":
         return False
     text = _normalize_space(_item_plain_text(item, units_by_id))
-    return bool(re.match(r"^[○●]?\s*사례\s*\d+(?:\D|$)", text))
+    return bool(re.match(r"^[○●▶]?\s*사례\s*\d+(?:\D|$)", text))
 
 
 def _item_ends_form(

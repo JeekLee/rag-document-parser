@@ -168,9 +168,10 @@
       "sha256": "74b96c0e6b1fd82cbdf0071a0e00311ee290890b02a917fb770f495ea71703ec",
       "expected": {
         "units": {
-          "total": 1,
+          "total": 25,
           "by_type": {
-            "table": 1
+            "table": 9,
+            "text": 16
           }
         },
         "assets": 0,

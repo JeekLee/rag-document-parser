@@ -8,6 +8,7 @@ from xml.etree import ElementTree as ET
 
 from ....models import PendingAsset
 from ...schema import structured_table as _structured_table_content
+from ...table_headers import HeaderCellSpan, refines_header_groups
 from .diagram import HwpxDiagramBuilder
 from .package_reader import HwpxPackageReader
 from .xml_utils import paragraph_text as _paragraph_text
@@ -172,42 +173,10 @@ def _row_refines_previous_header(
 ) -> bool:
     if any(cell["children"] for cell in row):
         return False
-    groups = [
-        cell
-        for cell in previous_row
-        if int(cell["colspan"]) > 1 and str(cell["text"]).strip()
-    ]
-    if not groups:
-        return False
-    group_ranges = [
-        (
-            int(group["col_addr"]),
-            int(group["col_addr"]) + int(group["colspan"]),
-        )
-        for group in groups
-    ]
-    for cell in row:
-        if not str(cell["text"]).strip():
-            continue
-        cell_start = int(cell["col_addr"])
-        cell_end = cell_start + int(cell["colspan"])
-        if not any(
-            group_start <= cell_start and cell_end <= group_end
-            for group_start, group_end in group_ranges
-        ):
-            return False
-    for group in groups:
-        group_start = int(group["col_addr"])
-        group_end = group_start + int(group["colspan"])
-        refiners = [
-            cell
-            for cell in row
-            if group_start <= int(cell["col_addr"])
-            and int(cell["col_addr"]) + int(cell["colspan"]) <= group_end
-        ]
-        if not any(str(cell["text"]).strip() for cell in refiners):
-            return False
-    return True
+    return refines_header_groups(
+        [HeaderCellSpan(int(c["col_addr"]), int(c["colspan"]), str(c["text"])) for c in row],
+        [HeaderCellSpan(int(c["col_addr"]), int(c["colspan"]), str(c["text"])) for c in previous_row],
+    )
 
 
 def _row_start(row: list[dict[str, object]]) -> int:

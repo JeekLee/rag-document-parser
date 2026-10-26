@@ -2,10 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ...schema import structured_table as _structured_table_content
+from ...table_headers import HeaderCellSpan, refines_header_groups
 from .text import clean_text as _clean_text
+
+if TYPE_CHECKING:
+    from .blocks import Block
 
 
 @dataclass(frozen=True)
@@ -51,6 +55,8 @@ class Cell:
     rowspan: int = 1
     colspan: int = 1
     synthetic: bool = False
+    # Private parse-time order; not part of the public table/evidence contract.
+    blocks: list[Block] = field(default_factory=list, repr=False)
 
 
 def _structured_table(
@@ -422,25 +428,10 @@ def _row_refines_previous_header(
 ) -> bool:
     if any(cell.children for cell in row) or _row_is_blank(row):
         return False
-    groups = [
-        cell
-        for cell in previous_row
-        if cell.colspan > 1 and cell.text.strip()
-    ]
-    if not groups:
-        return False
-    for group in groups:
-        group_start = group.col_addr or 0
-        group_end = group_start + group.colspan
-        refiners = [
-            cell
-            for cell in row
-            if group_start <= (cell.col_addr or 0)
-            and (cell.col_addr or 0) + cell.colspan <= group_end
-        ]
-        if not any(cell.text.strip() for cell in refiners):
-            return False
-    return True
+    return refines_header_groups(
+        [HeaderCellSpan(cell.col_addr or 0, cell.colspan, cell.text) for cell in row],
+        [HeaderCellSpan(cell.col_addr or 0, cell.colspan, cell.text) for cell in previous_row],
+    )
 
 
 def _row_start(row: list[Cell]) -> int:

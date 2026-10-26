@@ -263,6 +263,8 @@ def _table_payload(table: dict[str, Any], metadata: dict[str, Any]) -> dict[str,
     payload["row_ranges"] = (
         metadata.get("row_ranges") if isinstance(metadata.get("row_ranges"), list) else []
     )
+    if "table_fragment" in metadata:
+        payload["table_fragment"] = dict(metadata["table_fragment"])
     return payload
 
 
