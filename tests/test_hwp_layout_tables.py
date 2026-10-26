@@ -248,3 +248,38 @@ def test_real_hwp_wrapper_preserves_all_text_and_the_inner_table(monkeypatch):
     assert [u.source for u in actual.units[start + 25:]] == [u.source for u in before.units[start + 1:]]
     assert actual.assets == before.assets == []
     assert actual.quality_warnings == before.quality_warnings == []
+
+
+def test_issue75_original_preserves_all_28_nested_tables_and_78_paragraphs(monkeypatch):
+    pytest.importorskip("olefile")
+    from rag_document_parser import Hwp5Backend
+    from rag_document_parser.evidence_unit_extraction.formats.hwp5 import document_assembly
+
+    fixture = Path(__file__).parent / "fixtures/corpus/hwp/hira-spine-1a-5.hwp"
+    raw = fixture.read_bytes()
+    actual = Hwp5Backend().parse(raw, ".hwp")
+    with monkeypatch.context() as patch:
+        patch.setattr(document_assembly, "expand_layout_tables", lambda blocks: blocks)
+        before = Hwp5Backend().parse(raw, ".hwp")
+    assert len(before.units) == 13
+    assert len(actual.units) == 118
+    assert actual.units[:12] == before.units[:12]
+    cell = before.units[-1].content["rows"][0]["cells"][0]
+    promoted = actual.units[12:]
+    tables = [u for u in promoted if u.type == "table"]
+    texts = [u for u in promoted if u.type == "text"]
+    assert len(tables) == 28 and len(texts) == 78
+    assert [u.content for u in tables] == [c["content"] for c in cell["children"]]
+    assert "\n".join(u.content for u in texts) == cell["text"]
+    assert [u.content for u in texts if u.content.startswith("▶")] == [
+        "▶ 사례1(남/54세)", "▶ 사례2(여/54세)", "▶ 사례3(여/58세)",
+        "▶ 사례4(여/53세)", "▶ 사례5(여/61세)",
+    ]
+    # A matching table must stay between its preceding/following paragraphs,
+    # not merely preserve text order and table order independently.
+    for marker in ("○ 주요 청구내역 :", "○ 최근 1년 입원 청구 내역"):
+        i = next(i for i, u in enumerate(promoted) if u.type == "text" and u.content == marker)
+        assert promoted[i + 1].type == "table"
+        assert promoted[i + 2].type == "text"
+    assert actual.assets == before.assets
+    assert actual.quality_warnings == before.quality_warnings
