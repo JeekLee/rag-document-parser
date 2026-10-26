@@ -13,6 +13,7 @@ from .blocks import ImageBlock as _ImageBlock
 from .blocks import TableBlock as _TableBlock
 from .blocks import TextBlock as _TextBlock
 from .diagram import Hwp5DiagramBuilder
+from .layout_tables import expand_layout_tables
 from .parsed import ParsedBlocks as _ParsedBlocks
 from .source_projection import Hwp5TableSourceProjector
 from .table_extraction import Hwp5TableBuilder
@@ -47,7 +48,7 @@ def _to_document(parsed: _ParsedBlocks) -> ParsedDocument:
     table_index = 1
     saw_structured_diagram = False
 
-    for block in _coalesce_drawing_text_blocks(parsed.blocks):
+    for block in _coalesce_drawing_text_blocks(list(expand_layout_tables(parsed.blocks))):
         if isinstance(block, _TextBlock):
             text = _clean_text(block.text)
             if not text:

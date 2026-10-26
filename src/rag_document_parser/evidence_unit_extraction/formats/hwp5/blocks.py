@@ -46,3 +46,6 @@ class TableBlock:
 class ImageBlock:
     asset_id: str
     metadata: dict[str, object] = field(default_factory=dict)
+
+
+Block = TextBlock | DiagramBlock | DrawingLineBlock | TableBlock | ImageBlock

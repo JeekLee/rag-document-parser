@@ -167,6 +167,9 @@ Notes:
 
 - Parser backends produce `EvidenceUnit` objects. Chunking and
   summary/keyword/question generation are intentionally separate from parsing.
+- HWP5/HWPX 1×1 layout tables containing nested tables are unwrapped into
+  ordered body blocks before chunking. Nested tables inside multi-cell data
+  tables remain cell evidence; plain text-only boxes keep their existing behavior.
 - Binary assets are uploaded to S3-compatible object storage by
   `RagDocumentParser` and represented as `asset_ref` evidence instead of being
   embedded into text or content payloads.

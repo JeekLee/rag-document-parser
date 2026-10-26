@@ -1531,7 +1531,7 @@ def _item_starts_new_case(
     if item.type != "text":
         return False
     text = _normalize_space(_item_plain_text(item, units_by_id))
-    return bool(re.match(r"^[○●]?\s*사례\s*\d+(?:\D|$)", text))
+    return bool(re.match(r"^[○●▶]?\s*사례\s*\d+(?:\D|$)", text))
 
 
 def _item_ends_form(

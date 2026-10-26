@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from ....models import PendingAsset
 from .binary_reader import BinEntry as _BinEntry
 from .binary_reader import Hwp5BinaryReader
+from .blocks import Block
+from .blocks import DiagramBlock as _DiagramBlock
 from .blocks import DrawingLineBlock as _DrawingLineBlock
 from .blocks import ImageBlock as _ImageBlock
 from .blocks import TableBlock as _TableBlock
@@ -83,6 +85,7 @@ class _TableCtx:
     current_row: list[_Cell] = field(default_factory=list)
     current_cell_parts: list[str] = field(default_factory=list)
     current_cell_children: list[dict[str, object]] = field(default_factory=list)
+    current_cell_blocks: list[Block] = field(default_factory=list)
     in_cell: bool = False
     row_addr: int = -1
     col_addr: int = -1
@@ -127,6 +130,9 @@ def _parse_section(
 
     def append_gso_text_block(text_block: _TextBlock) -> None:
         if table_stack and table_stack[-1].in_cell:
+            table_stack[-1].current_cell_blocks.append(
+                _DiagramBlock(text_block.text, nodes=[_diagram_node_from_text_block(1, text_block)])
+            )
             table_stack[-1].current_cell_children.append(
                 {
                     "type": "diagram",
@@ -190,6 +196,9 @@ def _parse_section(
                 metadata=dict(gso_metadata),
             )
             if table_stack and table_stack[-1].in_cell:
+                table_stack[-1].current_cell_blocks.append(
+                    _DiagramBlock("", connectors=[_structured_connector(1, line_block)])
+                )
                 table_stack[-1].current_cell_children.append(
                     {
                         "type": "diagram",
@@ -241,10 +250,12 @@ def _parse_section(
                 col_addr=ctx.col_addr,
                 rowspan=ctx.rowspan,
                 colspan=ctx.colspan,
+                blocks=list(ctx.current_cell_blocks),
             )
         )
         ctx.current_cell_parts = []
         ctx.current_cell_children = []
+        ctx.current_cell_blocks = []
 
     def close_top_table() -> None:
         ctx = table_stack.pop()
@@ -271,6 +282,9 @@ def _parse_section(
             return
 
         if _table_has_content(ctx.rows):
+            table_stack[-1].current_cell_blocks.append(
+                _TableBlock(ctx.rows, row_count=ctx.row_count, column_count=ctx.column_count)
+            )
             table_stack[-1].current_cell_children.append(
                 {
                     "type": "table",
@@ -353,6 +367,12 @@ def _parse_section(
                 parsed.missing_image_count += 1
             elif table_stack and table_stack[-1].in_cell:
                 table_stack[-1].current_cell_children.append(image)
+                table_stack[-1].current_cell_blocks.append(
+                    _ImageBlock(
+                        str(image["content"]["asset_id"]),
+                        metadata=dict(image.get("metadata", {})),
+                    )
+                )
             else:
                 parsed.blocks.append(
                     _ImageBlock(
@@ -429,6 +449,7 @@ def _parse_section(
             gso_text_parts.append(text)
         elif table_stack and table_stack[-1].in_cell:
             table_stack[-1].current_cell_parts.append(text)
+            table_stack[-1].current_cell_blocks.append(_TextBlock(text))
         else:
             parsed.blocks.append(_TextBlock(text))
 

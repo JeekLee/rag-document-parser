@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ...schema import structured_table as _structured_table_content
 from .text import clean_text as _clean_text
+
+if TYPE_CHECKING:
+    from .blocks import Block
 
 
 @dataclass(frozen=True)
@@ -51,6 +54,8 @@ class Cell:
     rowspan: int = 1
     colspan: int = 1
     synthetic: bool = False
+    # Private parse-time order; not part of the public table/evidence contract.
+    blocks: list[Block] = field(default_factory=list, repr=False)
 
 
 def _structured_table(
