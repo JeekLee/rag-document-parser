@@ -1521,6 +1521,111 @@ def test_pdf_backend_splits_dotted_subrows_inside_physical_row(monkeypatch):
     ]
 
 
+def test_pdf_backend_dotted_subrow_split_keeps_cells_spanning_later_rows(monkeypatch):
+    # Issue #78 (HIRA p.188): a merged category cell starting in a split row lost its span.
+    from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
+
+    table = _FakeTable(
+        bbox=(60.0, 80.0, 280.0, 300.0),
+        row_cells=[
+            [(60.0, 80.0, 120.0, 100.0), (120.0, 80.0, 200.0, 100.0), (200.0, 80.0, 280.0, 100.0)],
+            [(60.0, 100.0, 120.0, 300.0), (120.0, 100.0, 200.0, 200.0), (200.0, 100.0, 280.0, 200.0)],
+            [None, (120.0, 200.0, 200.0, 250.0), (200.0, 200.0, 280.0, 250.0)],
+            [None, (120.0, 250.0, 200.0, 300.0), (200.0, 250.0, 280.0, 300.0)],
+        ],
+        extracted=[
+            ["암종", "요법", "기준"],
+            ["위암", "상단 요법 하단 요법", "상단 기준 하단 기준"],
+            ["", "둘째 요법", "둘째 기준"],
+            ["", "셋째 요법", "셋째 기준"],
+        ],
+    )
+    dotted = [
+        {"x0": x, "x1": x + 0.5, "top": 150.0, "bottom": 150.0}
+        for x in [120.0 + index * 2.0 for index in range(80)]
+    ]
+    borders = [
+        {"x0": 120.0, "x1": 280.0, "top": top, "bottom": top}
+        for top in (200.0, 250.0)
+    ]
+    page = _FakePage(
+        chars=[{"text": "가"} for _ in range(40)],
+        images=[],
+        tables=[table],
+        lines=[*dotted, *borders],
+        crop_text={
+            (120, 100, 200, 150): "상단 요법",
+            (120, 150, 200, 200): "하단 요법",
+            (200, 100, 280, 150): "상단 기준",
+            (200, 150, 280, 200): "하단 기준",
+        },
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "pdfplumber",
+        SimpleNamespace(open=lambda stream: _FakePdf([page])),
+    )
+
+    parsed = PdfBackend().parse(b"%PDF-1.4 fake", ".pdf")
+
+    rows = parsed.units[0].content["rows"]
+    assert _cell_span_summary(rows) == [
+        [("c1", "위암", 4, 1), ("c2", "상단 요법", 1, 1), ("c3", "상단 기준", 1, 1)],
+        [("c2", "하단 요법", 1, 1), ("c3", "하단 기준", 1, 1)],
+        [("c2", "둘째 요법", 1, 1), ("c3", "둘째 기준", 1, 1)],
+        [("c2", "셋째 요법", 1, 1), ("c3", "셋째 기준", 1, 1)],
+    ]
+
+
+def test_pdf_continuation_rejoins_merged_cells_across_running_headers():
+    # Issue #78 (HIRA pp.187-190): a page header split the table and its merged cells.
+    from rag_document_parser.evidence_unit_extraction.formats.pdf.models import Segment
+    from rag_document_parser.evidence_unit_extraction.formats.pdf.segment_processing import (
+        PdfSegmentProcessor,
+    )
+
+    def cell(column_id, text, rowspan=1):
+        return {"column_id": column_id, "text": text, "rowspan": rowspan, "colspan": 1, "children": []}
+
+    def table(*rows):
+        return {
+            "columns": [{"id": "c1", "text": "연번"}, {"id": "c2", "text": "암종"}, {"id": "c3", "text": "요법"}],
+            "rows": [{"index": index, "cells": cells} for index, cells in enumerate(rows, 1)],
+        }
+
+    header = "약제 요양급여 세부사항"
+    pages = [
+        table([cell("c1", "1"), cell("c2", "폐암"), cell("c3", "a")]),
+        table([cell("c1", "2"), cell("c2", "", 2), cell("c3", "b")], [cell("c1", "3"), cell("c3", "c")]),
+        table([cell("c1", "4"), cell("c2", "식도암"), cell("c3", "d 앞")]),
+        table(
+            [cell("c1", ""), cell("c2", "", 3), cell("c3", "d 뒤")],
+            [cell("c1", "5"), cell("c3", "e")],
+            [cell("c1", "6"), cell("c3", "f")],
+        ),
+    ]
+    page_segments = [
+        [
+            Segment(top=10.0, bottom=20.0, kind="text", payload=header, page=page),
+            Segment(top=40.0, bottom=300.0, kind="table", payload=payload, page=page),
+        ]
+        for page, payload in enumerate(pages, 1)
+    ]
+
+    merged = PdfSegmentProcessor().merge_continuation_tables(page_segments)
+
+    tables = [segment.payload for page in merged for segment in page if segment.kind == "table"]
+    assert len(tables) == 1
+    assert _cell_span_summary(tables[0]["rows"]) == [
+        [("c1", "1", 1, 1), ("c2", "폐암", 3, 1), ("c3", "a", 1, 1)],
+        [("c1", "2", 1, 1), ("c3", "b", 1, 1)],
+        [("c1", "3", 1, 1), ("c3", "c", 1, 1)],
+        [("c1", "4", 1, 1), ("c2", "식도암", 3, 1), ("c3", "d 앞\nd 뒤", 1, 1)],
+        [("c1", "5", 1, 1), ("c3", "e", 1, 1)],
+        [("c1", "6", 1, 1), ("c3", "f", 1, 1)],
+    ]
+
+
 def test_pdf_backend_keeps_bullet_subrows_separate(monkeypatch):
     from rag_document_parser.evidence_unit_extraction.formats.pdf import PdfBackend
 
