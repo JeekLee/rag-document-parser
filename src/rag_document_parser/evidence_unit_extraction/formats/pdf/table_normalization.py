@@ -95,12 +95,14 @@ def _append_table_rows(
     continuation_rows = continuation.get("rows")
     if not isinstance(target_rows, list) or not isinstance(continuation_rows, list):
         return
+    boundary = len(target_rows)
     for row in continuation_rows:
         if not isinstance(row, Mapping):
             continue
         copied = dict(row)
         copied["index"] = len(target_rows) + 1
         target_rows.append(copied)
+    _join_page_split_row_spans(target_rows, boundary)
     _merge_wrapped_table_rows(target)
     _promote_code_table_leaf_headers(target)
     _promote_ultrasound_code_matrix(target)
@@ -117,16 +119,93 @@ def _merge_wrapped_table_rows(table: dict[str, object]) -> None:
         return
 
     merged: list[dict[str, object]] = []
-    for row in rows:
+    # Positions are in the original row order; spans are recounted after merging.
+    merged_positions: list[int] = []
+    last_rows: dict[int, int] = {}
+    position_of_row: list[int] = []
+    for position, row in enumerate(rows):
         if not isinstance(row, Mapping):
+            position_of_row.append(max(len(merged) - 1, 0))
             continue
+        for cell in _row_cells(row):
+            last_rows[id(cell)] = position + _cell_rowspan(cell) - 1
         if merged and _is_wrapped_table_row(row):
-            _append_wrapped_row_cells(merged[-1], row)
+            _append_wrapped_row_cells(merged, row, last_rows, position)
+            position_of_row.append(len(merged) - 1)
             continue
         row["index"] = len(merged) + 1
         merged.append(row)
+        merged_positions.append(position)
+        position_of_row.append(len(merged) - 1)
 
+    if len(merged) < len(rows):
+        for new_index, (row, position) in enumerate(zip(merged, merged_positions, strict=True)):
+            for cell in _row_cells(row):
+                if _cell_rowspan(cell) == 1 and last_rows[id(cell)] == position:
+                    continue
+                last_row = min(last_rows[id(cell)], len(rows) - 1)
+                cell["rowspan"] = position_of_row[last_row] - new_index + 1
     table["rows"] = merged
+
+
+def _join_page_split_row_spans(rows: list[object], boundary: int) -> None:
+    # A merged cell cut by a page break leaves an empty cell atop the next page.
+    if boundary <= 0 or boundary >= len(rows):
+        return
+    first = rows[boundary]
+    if not isinstance(first, Mapping):
+        return
+    joined: list[dict[str, object]] = []
+    for cell in _row_cells(first):
+        opened = None if _cell_has_content(cell) else _open_cell_above(rows, boundary, cell)
+        if opened is None:
+            continue
+        position, origin = opened
+        origin["rowspan"] = boundary - position + _cell_rowspan(cell)
+        joined.append(cell)
+    if joined:
+        first["cells"] = [
+            cell for cell in first.get("cells", []) if not any(cell is item for item in joined)
+        ]
+
+
+def _open_cell_above(
+    rows: list[object],
+    boundary: int,
+    cell: Mapping[str, object],
+) -> tuple[int, dict[str, object]] | None:
+    for position in range(boundary - 1, -1, -1):
+        row = rows[position]
+        if not isinstance(row, Mapping):
+            continue
+        for candidate in _row_cells(row):
+            if (
+                candidate.get("column_id") != cell.get("column_id")
+                or candidate.get("colspan", 1) != cell.get("colspan", 1)
+            ):
+                continue
+            rowspan = _cell_rowspan(candidate)
+            if position + rowspan < boundary or not _cell_has_content(candidate):
+                return None
+            # A lone one-row cell above a lone one-row blank is ordinary data.
+            if rowspan == 1 and _cell_rowspan(cell) == 1:
+                return None
+            return position, candidate
+    return None
+
+
+def _row_cells(row: Mapping[str, object]) -> list[dict[str, object]]:
+    cells = row.get("cells")
+    if not isinstance(cells, list):
+        return []
+    return [cell for cell in cells if isinstance(cell, Mapping)]
+
+
+def _cell_rowspan(cell: Mapping[str, object]) -> int:
+    try:
+        return max(int(cell.get("rowspan", 1) or 1), 1)
+    except (TypeError, ValueError):
+        return 1
 
 
 def _has_leading_column_content(rows: list[object]) -> bool:
@@ -535,24 +614,26 @@ def _is_wrapped_table_row(row: dict[str, object]) -> bool:
 
 
 def _append_wrapped_row_cells(
-    target_row: dict[str, object],
+    merged: list[dict[str, object]],
     wrapped_row: dict[str, object],
+    last_rows: dict[int, int],
+    position: int,
 ) -> None:
-    target_cells = target_row.get("cells")
-    wrapped_cells = wrapped_row.get("cells")
-    if not isinstance(target_cells, list) or not isinstance(wrapped_cells, list):
-        return
-
-    target_by_column = {
-        str(cell.get("column_id")): cell
-        for cell in target_cells
-        if isinstance(cell, Mapping)
-    }
-    for wrapped_cell in wrapped_cells:
-        if not isinstance(wrapped_cell, Mapping) or not _cell_has_content(wrapped_cell):
+    for wrapped_cell in _row_cells(wrapped_row):
+        target_cell = _cell_covering_previous_row(
+            merged,
+            str(wrapped_cell.get("column_id")),
+            last_rows,
+            position,
+        )
+        if target_cell is None:
             continue
-        target_cell = target_by_column.get(str(wrapped_cell.get("column_id")))
-        if not isinstance(target_cell, Mapping):
+        # The wrapped row joins the row above, so its spans extend the covering cell.
+        last_rows[id(target_cell)] = max(
+            last_rows[id(target_cell)],
+            last_rows[id(wrapped_cell)],
+        )
+        if not _cell_has_content(wrapped_cell):
             continue
         wrapped_text = str(wrapped_cell.get("text", "")).strip()
         if wrapped_text:
@@ -570,6 +651,19 @@ def _append_wrapped_row_cells(
                 target_cell["children"] = _merge_nested_table_children(target_children)
             else:
                 target_cell["children"] = _merge_nested_table_children(list(children))
+
+
+def _cell_covering_previous_row(
+    merged: list[dict[str, object]],
+    column_id: str,
+    last_rows: dict[int, int],
+    position: int,
+) -> dict[str, object] | None:
+    for row in reversed(merged):
+        for cell in _row_cells(row):
+            if str(cell.get("column_id")) == column_id:
+                return cell if last_rows[id(cell)] >= position - 1 else None
+    return None
 
 
 def _cell_has_content(cell: object) -> bool:

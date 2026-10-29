@@ -322,15 +322,16 @@ def _merge_continuation_tables(page_segments: list[list[_Segment]]) -> list[list
     merged_pages: list[list[_Segment]] = [[] for _ in page_segments]
     previous_table: _Segment | None = None
     previous_table_end_page: int | None = None
+    running_headers = _running_header_texts(page_segments)
 
     for page_idx, segments in enumerate(page_segments):
         page_has_content_before_table = False
         for segment in sorted(segments, key=lambda item: item.top):
             if segment.kind != "table":
                 merged_pages[page_idx].append(segment)
-                is_artifact_text = (
-                    segment.kind == "text"
-                    and _is_pdf_artifact_text(str(segment.payload).strip())
+                text = str(segment.payload).strip()
+                is_artifact_text = segment.kind == "text" and (
+                    _is_pdf_artifact_text(text) or text in running_headers
                 )
                 if segment.kind in {"text", "image", "diagram"} and not is_artifact_text:
                     page_has_content_before_table = True
@@ -359,6 +360,19 @@ def _merge_continuation_tables(page_segments: list[list[_Segment]]) -> list[list
             previous_table_end_page = segment.page
 
     return merged_pages
+
+
+def _running_header_texts(page_segments: list[list[_Segment]]) -> set[str]:
+    # A single line opening several pages is a page header, not content between tables.
+    pages_by_text: dict[str, set[int]] = {}
+    for page_idx, segments in enumerate(page_segments):
+        if not segments:
+            continue
+        first = min(segments, key=lambda item: item.top)
+        text = str(first.payload).strip()
+        if first.kind == "text" and text and "\n" not in text:
+            pages_by_text.setdefault(text, set()).add(page_idx)
+    return {text for text, pages in pages_by_text.items() if len(pages) >= 2}
 
 
 def _expand_text_segments(

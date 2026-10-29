@@ -488,6 +488,7 @@ def table_subset(table: dict[str, Any], ranges: list[tuple[int, int]]) -> dict[s
             continue
         index = row.get("index")
         if type(index) is int and _row_selected(index, ranges):
+            row = _row_with_clipped_rowspans(row, _selected_run_end(index, selected_indexes))
             selected.append(_row_with_carried_cells(row, carried_by_row.get(index, []), table))
 
     if not selected:
@@ -513,9 +514,6 @@ def _rowspan_context_cells_by_row(
         start_index = row.get("index")
         if type(start_index) is not int:
             continue
-        # A selected origin already owns the spanning cell and its children.
-        if start_index in selected_indexes:
-            continue
         cells = row.get("cells", [])
         if not isinstance(cells, list):
             continue
@@ -528,9 +526,12 @@ def _rowspan_context_cells_by_row(
             covered = [
                 index
                 for index in sorted(selected_indexes)
-                if start_index < index < start_index + rowspan
+                if start_index <= index < start_index + rowspan
             ]
             for group in contiguous_ranges(covered):
+                # A selected origin already owns the spanning cell for its own run.
+                if group[0] == start_index:
+                    continue
                 carried = dict(cell)
                 carried["rowspan"] = group[1] - group[0] + 1
                 metadata = (
@@ -545,6 +546,32 @@ def _rowspan_context_cells_by_row(
                 carried["metadata"] = metadata
                 result.setdefault(group[0], []).append(carried)
     return result
+
+
+def _selected_run_end(index: int, selected_indexes: set[int]) -> int:
+    end = index
+    while end + 1 in selected_indexes:
+        end += 1
+    return end
+
+
+def _row_with_clipped_rowspans(row: dict[str, Any], run_end: int) -> dict[str, Any]:
+    # A span reaching past the selected run would cover rows this fragment lacks.
+    limit = run_end - row["index"] + 1
+    cells = row.get("cells", [])
+    if not isinstance(cells, list) or not any(
+        isinstance(cell, Mapping) and _positive_int(cell.get("rowspan")) > limit
+        for cell in cells
+    ):
+        return row
+    copied = dict(row)
+    copied["cells"] = [
+        {**dict(cell), "rowspan": limit}
+        if isinstance(cell, Mapping) and _positive_int(cell.get("rowspan")) > limit
+        else cell
+        for cell in cells
+    ]
+    return copied
 
 
 def _row_with_carried_cells(

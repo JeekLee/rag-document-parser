@@ -337,33 +337,68 @@ def _split_dotted_subrows(
         return
 
     column_count = len(columns)
-    expanded_rows: list[dict[str, object]] = []
+    row_groups: list[list[dict[str, object]]] = []
+    # Cells whose rowspan still counts physical rows, keyed by their physical row.
+    whole_cells: list[tuple[int, dict[str, object]]] = []
     changed = False
     for row_index, row in enumerate(rows):
         if not isinstance(row, Mapping):
             continue
         pdf_row_index = header_depth + row_index
-        row_cells = _pad_row_cells(_row_cells(pdf_table, pdf_row_index), column_count)
+        row_cells = _single_row_cells(
+            row,
+            _pad_row_cells(_row_cells(pdf_table, pdf_row_index), column_count),
+        )
         separators = _dotted_subrow_separators(page, row_cells)
-        if not separators:
-            copied = dict(row)
-            copied["index"] = len(expanded_rows) + 1
-            expanded_rows.append(copied)
-            continue
-
-        split_rows = _split_row_by_subrow_separators(row, page, row_cells, separators)
+        split_rows = (
+            _split_row_by_subrow_separators(row, page, row_cells, separators)
+            if separators
+            else []
+        )
         if len(split_rows) <= 1:
             copied = dict(row)
-            copied["index"] = len(expanded_rows) + 1
-            expanded_rows.append(copied)
+            copied["cells"] = [
+                dict(cell) for cell in row.get("cells", []) if isinstance(cell, Mapping)
+            ]
+            whole_cells.extend((len(row_groups), cell) for cell in copied["cells"])
+            row_groups.append([copied])
             continue
         changed = True
-        for split_row in split_rows:
-            split_row["index"] = len(expanded_rows) + 1
-            expanded_rows.append(split_row)
+        whole_cells.extend(
+            (len(row_groups), cell)
+            for cell in split_rows[0]["cells"]
+            if cell.get("_whole")
+        )
+        row_groups.append(split_rows)
 
-    if changed:
-        table["rows"] = expanded_rows
+    if not changed:
+        return
+    for group_index, cell in whole_cells:
+        cell.pop("_whole", None)
+        rowspan = int(cell.get("rowspan", 1) or 1)
+        cell["rowspan"] = sum(
+            len(group) for group in row_groups[group_index:group_index + rowspan]
+        )
+    expanded_rows = [row for group in row_groups for row in group]
+    for index, row in enumerate(expanded_rows, start=1):
+        row["index"] = index
+    table["rows"] = expanded_rows
+
+
+def _single_row_cells(
+    row: Mapping[str, object],
+    row_cells: list[tuple[float, float, float, float] | None],
+) -> list[tuple[float, float, float, float] | None]:
+    # A cell spanning later rows reaches past this row; its borders are row lines.
+    spanning = {
+        str(cell.get("column_id"))
+        for cell in row.get("cells", [])
+        if isinstance(cell, Mapping) and int(cell.get("rowspan", 1) or 1) > 1
+    }
+    return [
+        None if f"c{column_index + 1}" in spanning else bbox
+        for column_index, bbox in enumerate(row_cells)
+    ]
 
 
 def _dotted_subrow_separators(
@@ -497,7 +532,7 @@ def _split_row_by_subrow_separators(
             continue
         if cell_bbox is None or not _cell_is_crossed_by_separator(cell_bbox, separators):
             copied = dict(cell)
-            copied["rowspan"] = int(copied.get("rowspan", 1) or 1) + len(split_rows) - 1
+            copied["_whole"] = True
             split_rows[0]["cells"].append(copied)
             continue
 

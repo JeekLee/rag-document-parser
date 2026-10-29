@@ -150,6 +150,32 @@ def test_nested_rowspan_context_is_projected_once(include_origin):
         assert carried["metadata"]["rowspan_context"] == {"source_row_index": 1, "source_rowspan": 3}
 
 
+@pytest.mark.parametrize("typed", [False, True])
+def test_row_subset_clips_selected_origin_rowspans_to_fragment(typed):
+    # Issue #78 (HIRA t82): an origin near the fragment end kept its full rowspan.
+    table = _table("cancer", "", "", "", "next")
+    table["columns"].append({"id": "c2", "text": "Regimen"})
+    table["rows"][0]["cells"][0]["rowspan"] = 4
+    for row in table["rows"][1:4]:
+        row["cells"] = []
+    for row in table["rows"]:
+        row["cells"].append({"column_id": "c2", "text": f"regimen {row['index']}"})
+    content = _unit(table).content if typed else table
+
+    subset = table_subset(content, [(1, 2), (4, 5)])
+    payload = _table_payload(subset, {"row_ranges": [[1, 2], [4, 5]]})
+
+    assert [row["index"] for row in payload["rows"]] == [1, 2, 4, 5]
+    origin, carried = payload["rows"][0]["cells"][0], payload["rows"][2]["cells"][0]
+    assert (origin["text"], origin["rowspan"]) == ("cancer", 2)
+    assert (carried["text"], carried["rowspan"]) == ("cancer", 1)
+    assert carried["metadata"]["rowspan_context"] == {"source_row_index": 1, "source_rowspan": 4}
+    assert table["rows"][0]["cells"][0]["rowspan"] == 4
+    for position, row in enumerate(payload["rows"]):
+        for cell in row["cells"]:
+            assert position + cell.get("rowspan", 1) <= len(payload["rows"])
+
+
 @pytest.mark.parametrize("action", ["include", "include_rows", "fallback"])
 def test_full_and_subset_projection_keeps_large_nested_evidence_in_prompts(action):
     nested = _table(*(f"nested value {index:03d}" for index in range(85)))
