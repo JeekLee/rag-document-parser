@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import re
+from bisect import bisect_left, bisect_right
 from collections.abc import Mapping
 from dataclasses import dataclass
+from heapq import heappop, heappush
 from typing import Any
 
-from ..models import Evidence, EvidenceItem, EvidenceUnit, RagChunk, SourceEvidence
+from ..models import Evidence, EvidenceItem, EvidenceUnit, RagChunk, SourceEvidence, StructuredTableContent
 from .evidence_projection import column_label, table_source_text
 
 
@@ -464,95 +466,98 @@ def _normalize_row_ranges(value: Any) -> list[tuple[int, int]]:
     return ranges
 
 
-def table_subset(table: dict[str, Any], ranges: list[tuple[int, int]]) -> dict[str, Any]:
-    rows = table.get("rows", [])
-    if not isinstance(rows, list):
-        raise ValueError("structured_table content requires rows")
-
-    _validate_row_range_bounds(ranges, _table_row_indexes(rows))
-
-    selected_indexes = {
-        index
-        for row in rows
-        if (
-            isinstance(row, Mapping)
-            and type(row.get("index")) is int
-            and _row_selected(row["index"], ranges)
-        )
-        for index in [row["index"]]
-    }
-    carried_by_row = _rowspan_context_cells_by_row(table, rows, selected_indexes)
-    selected: list[dict[str, Any]] = []
-    for row in rows:
-        if not isinstance(row, Mapping):
-            continue
-        index = row.get("index")
-        if type(index) is int and _row_selected(index, ranges):
-            row = _row_with_clipped_rowspans(row, _selected_run_end(index, selected_indexes))
-            selected.append(_row_with_carried_cells(row, carried_by_row.get(index, []), table))
-
-    if not selected:
-        raise ValueError("row_ranges selected no rows")
-
-    subset = dict(table)
-    subset["rows"] = selected
-    return subset
+def table_subset(table: Mapping[str, Any], ranges: list[tuple[int, int]]) -> dict[str, Any]:
+    return TableRowIndex(table).subset(ranges)
 
 
-def _rowspan_context_cells_by_row(
-    table: dict[str, Any],
-    rows: list[Any],
-    selected_indexes: set[int],
-) -> dict[int, list[dict[str, Any]]]:
-    if not selected_indexes:
-        return {}
+class TableRowIndex:
+    """Reuse row lookup and spanning-cell context while splitting one table.
 
-    result: dict[int, list[dict[str, Any]]] = {}
-    for row in rows:
-        if not isinstance(row, Mapping):
-            continue
-        start_index = row.get("index")
-        if type(start_index) is not int:
-            continue
-        cells = row.get("cells", [])
-        if not isinstance(cells, list):
-            continue
-        for cell in cells:
-            if not isinstance(cell, Mapping):
+    The source must remain unchanged for this index's lifetime. Only selected
+    rows are copied; in particular, copying the table envelope must not invoke
+    RdpModel.keys(), which recursively serializes even unselected rows.
+    """
+
+    def __init__(self, table: Mapping[str, Any]) -> None:
+        rows = table.get("rows", [])
+        if not isinstance(rows, list):
+            raise ValueError("structured_table content requires rows")
+        if isinstance(table, StructuredTableContent):
+            # Normalize the repeated headers once. Compact caches may contain
+            # the whole table, so retain them without recursively copying them.
+            self._envelope = table.model_copy(update={"rows": [], "compact": None}).to_dict()
+            self._envelope.pop("rows")
+            if table.compact is not None:
+                self._envelope["compact"] = table.compact
+        else:
+            self._envelope = {key: value for key, value in table.items() if key != "rows"}
+        self._rows: dict[int, list[tuple[int, Mapping[str, Any]]]] = {}
+        spans = []
+        for position, row in enumerate(rows):
+            if not isinstance(row, Mapping) or type(row.get("index")) is not int:
                 continue
-            rowspan = _positive_int(cell.get("rowspan"))
-            if rowspan <= 1:
-                continue
-            covered = [
-                index
-                for index in sorted(selected_indexes)
-                if start_index <= index < start_index + rowspan
-            ]
-            for group in contiguous_ranges(covered):
-                # A selected origin already owns the spanning cell for its own run.
-                if group[0] == start_index:
-                    continue
-                carried = dict(cell)
-                carried["rowspan"] = group[1] - group[0] + 1
-                metadata = (
-                    dict(carried.get("metadata"))
-                    if isinstance(carried.get("metadata"), Mapping)
-                    else {}
-                )
-                metadata["rowspan_context"] = {
-                    "source_row_index": start_index,
-                    "source_rowspan": rowspan,
+            start = row["index"]
+            self._rows.setdefault(start, []).append((position, row))
+            cells = row.get("cells", [])
+            for cell in cells if isinstance(cells, list) else []:
+                if isinstance(cell, Mapping) and _positive_int(cell.get("rowspan")) > 1:
+                    spans.append((start, start + cell["rowspan"] - 1, len(spans), cell))
+        self._indexes = sorted(self._rows)
+        self._context: dict[int, list[tuple[int, int, int, Mapping[str, Any]]]] = {}
+        active = {}
+        endings: list[tuple[int, int]] = []
+        spans.sort(key=lambda span: span[0])
+        cursor = 0
+        for index in self._indexes:
+            while cursor < len(spans) and spans[cursor][0] < index:
+                span = spans[cursor]
+                active[span[2]] = span
+                heappush(endings, (span[1], span[2]))
+                cursor += 1
+            while endings and endings[0][0] < index:
+                _, ordinal = heappop(endings)
+                del active[ordinal]
+            if active:
+                # Preserve original cell order, including overlapping spans.
+                self._context[index] = [active[key] for key in sorted(active)]
+
+    def subset(self, ranges: list[tuple[int, int]]) -> dict[str, Any]:
+        selected_indexes: set[int] = set()
+        for start, end in ranges:
+            if self._indexes:
+                if start < self._indexes[0] or end > self._indexes[-1]:
+                    raise ValueError("row range is outside table rows")
+                if start not in self._rows or end not in self._rows:
+                    raise _EvidenceIntegrityError("row range boundaries must reference actual table rows")
+            selected_indexes.update(self._indexes[
+                bisect_left(self._indexes, start):bisect_right(self._indexes, end)
+            ])
+        if not selected_indexes:
+            raise ValueError("row_ranges selected no rows")
+
+        selected = []
+        for start, end in contiguous_ranges(list(selected_indexes)):
+            carried = []
+            for origin, span_end, _, cell in self._context.get(start, []):
+                copied = dict(cell)
+                copied["rowspan"] = min(span_end, end) - start + 1
+                metadata = cell.get("metadata")
+                copied["metadata"] = {
+                    **(dict(metadata) if isinstance(metadata, Mapping) else {}),
+                    "rowspan_context": {
+                        "source_row_index": origin,
+                        "source_rowspan": cell["rowspan"],
+                    },
                 }
-                carried["metadata"] = metadata
-                result.setdefault(group[0], []).append(carried)
-    return result
-
-
-def _selected_run_end(index: int, selected_indexes: set[int]) -> int:
-    end = index
-    while end + 1 in selected_indexes:
-        end += 1
-    return end
+                carried.append(copied)
+            for index in range(start, end + 1):
+                for position, row in self._rows[index]:
+                    row = _row_with_clipped_rowspans(row, end)
+                    if index == start:
+                        row = _row_with_carried_cells(row, carried, self._envelope)
+                    selected.append((position, row))
+        selected.sort(key=lambda pair: pair[0])
+        return {**self._envelope, "rows": [row for _, row in selected]}
 
 
 def _row_with_clipped_rowspans(row: dict[str, Any], run_end: int) -> dict[str, Any]:
