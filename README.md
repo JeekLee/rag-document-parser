@@ -85,6 +85,31 @@ to enrich one chunk per LLM call. For Gemini Flash-Lite, `24000` is a practical
 fast default; lower it for stricter latency/error isolation and raise it only
 after checking provider rate limits and JSON response stability.
 
+Set `max_plan_input_tokens=64000` on `EvidenceUnitAgenticChunker` to bound
+planning inputs. This optional limit splits unit windows and then oversized
+tables into row ranges before calling the planner. Leaving it unset preserves
+the existing `window_size` behavior. Table views retain original unit IDs, row
+indexes, headers and spanning-cell context; final evidence is materialized
+from the original table without truncating cell text or nested content.
+
+The budget counts a canonical JSON serialization of the system/user messages
+and response schema. It uses `cl100k_base` when available, otherwise a local
+estimate. It is not an exact provider token count: choose a limit with headroom
+for the model's tokenizer, framing and output. `plan_token_counter(text)` can
+override this counting function; it receives that complete serialized input
+and must return a nonnegative integer. The same budget guards boundary-merge
+requests. Final enrichment has its own independent budget.
+
+Custom `plan_fn(window, cfg, max_units)` callbacks receive the bounded, typed
+views. `unit.metadata["plan_row_ranges"]` identifies a partial table; original
+IDs can occur in several successive windows, so checkpoint/cache keys must
+include the row ranges or view content. Callbacks that add prompt material
+must account for that extra input themselves. Plans should include a provided
+table range as a whole rather than enumerate one plan item per row; final
+token-budget chunking subdivides it as needed. If even one row or indivisible
+unit cannot fit, the planner is skipped and local fallback preserves its
+evidence with an `agentic_plan_input_budget_exceeded` warning.
+
 The chunker targets 800 source tokens and uses a maximum of 2,048 by default
 (`target_tokens_per_chunk` / `max_tokens_per_chunk`). Counts use `cl100k_base`
 when `tiktoken` is available, otherwise a local estimate; they are not the

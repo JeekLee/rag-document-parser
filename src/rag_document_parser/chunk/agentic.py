@@ -27,9 +27,12 @@ from .materialization import (
     unique_strings as _unique,
 )
 from .planning_prompt import (
+    PLAN_ROW_RANGES,
     build_boundary_prompt as _boundary_prompt,
     build_plan_prompt as _plan_prompt,
+    json_messages as _json_messages,
 )
+from .planning_budget import PlanInputBudget, PlanningWindow
 from .table_fragmentation import split_oversized_row
 from .tokens import count_tokens as _llm_token_count
 
@@ -67,6 +70,8 @@ class EvidenceUnitAgenticChunker:
         final_enricher: Enricher | None = None,
         enrich_final_chunks: bool = True,
         enrichment_batch_token_budget: int | None = None,
+        max_plan_input_tokens: int | None = None,
+        plan_token_counter: Callable[[str], int] | None = None,
     ) -> None:
         if llm is not None and llm_gateway is not None:
             raise ValueError("configure either llm or llm_gateway, not both")
@@ -81,6 +86,17 @@ class EvidenceUnitAgenticChunker:
         self._target_tokens = max(1, target_tokens_per_chunk)
         self._max_tokens = max(self._target_tokens, max_tokens_per_chunk)
         self._window_size = max(1, window_size)
+        if max_plan_input_tokens is not None and (
+            type(max_plan_input_tokens) is not int or max_plan_input_tokens < 1
+        ):
+            raise ValueError("max_plan_input_tokens must be a positive integer or None")
+        self._plan_budget = (
+            PlanInputBudget(
+                max_plan_input_tokens, self._max_units, self._target_tokens, self._max_tokens,
+                plan_token_counter if plan_token_counter is not None else _llm_token_count,
+            )
+            if max_plan_input_tokens is not None else None
+        )
         self._concurrency = max(1, max_concurrency)
         self._plan_fn = plan_fn or self._default_plan
         self._boundary_merge_fn = boundary_merge_fn
@@ -102,9 +118,20 @@ class EvidenceUnitAgenticChunker:
         if not units:
             return []
 
-        windows = _windows(units, self._window_size)
-        with ThreadPoolExecutor(max_workers=self._concurrency) as executor:
-            results = list(executor.map(self._chunk_window, windows))
+        if self._plan_budget is None:
+            windows = _windows(units, self._window_size)
+            with ThreadPoolExecutor(max_workers=self._concurrency) as executor:
+                results = list(executor.map(self._chunk_window, windows))
+        else:
+            planned_windows = self._plan_budget.windows(units, self._window_size)
+            with ThreadPoolExecutor(max_workers=self._concurrency) as executor:
+                results = list(executor.map(self._chunk_budgeted_window, planned_windows))
+            originals = {unit.id: unit for unit in units}
+            indexes: dict[str, TableRowIndex] = {}
+            results = [
+                _restore_planning_rows(result, window.units, originals, indexes, self._max_units)
+                for window, result in zip(planned_windows, results)
+            ]
 
         chunks = self._merge_window_boundaries(results)
         chunks = _improve_chunk_boundaries(
@@ -122,6 +149,23 @@ class EvidenceUnitAgenticChunker:
         if self._final_enricher is not None:
             return self._final_enricher.enrich(final_chunks)
         return final_chunks
+
+    def _chunk_budgeted_window(self, window: PlanningWindow) -> _WindowResult:
+        assert self._plan_budget is not None
+        if window.input_tokens <= self._plan_budget.max_tokens:
+            return self._chunk_window(window.units)
+        reason = (
+            f"indivisible planning input exceeds max_plan_input_tokens: "
+            f"{window.input_tokens} > {self._plan_budget.max_tokens}"
+        )
+        chunks = self._materializer.fallback(window.units, reason)
+        for chunk in chunks:
+            chunk.metadata.setdefault("_warnings", []).append({
+                "type": "agentic_plan_input_budget_exceeded",
+                "input_tokens": window.input_tokens,
+                "max_plan_input_tokens": self._plan_budget.max_tokens,
+            })
+        return _WindowResult(chunks, reason)
 
     def _chunk_window(self, window: list[EvidenceUnit]) -> _WindowResult:
         raw_plan: Any | None = None
@@ -145,8 +189,13 @@ class EvidenceUnitAgenticChunker:
     ) -> Any:
         if self._llm_gateway is None:
             return None
+        prompt = _plan_prompt(window, max_units, self._target_tokens, self._max_tokens)
+        if self._plan_budget is not None:
+            count = self._plan_budget.count(prompt, ChunkPlanResponse)
+            if count > self._plan_budget.max_tokens:
+                raise ValueError(f"planning input exceeds max_plan_input_tokens: {count}")
         response = self._llm_gateway.complete_model(
-            _json_messages(_plan_prompt(window, max_units, self._target_tokens, self._max_tokens)),
+            _json_messages(prompt),
             ChunkPlanResponse,
             schema_name="chunk_plan",
         )
@@ -202,6 +251,10 @@ class EvidenceUnitAgenticChunker:
         return chunks
 
     def _plan_boundary_merge(self, left: RagChunk, right: RagChunk) -> Any:
+        if self._plan_budget is not None:
+            count = self._plan_budget.count(_boundary_prompt(left, right, self._max_units), BoundaryDecision)
+            if count > self._plan_budget.max_tokens:
+                raise ValueError(f"boundary planning input exceeds max_plan_input_tokens: {count}")
         if self._boundary_merge_fn is not None:
             return self._boundary_merge_fn(left, right, self._llm, self._max_units)
         return self._default_boundary_merge(left, right, self._llm, self._max_units)
@@ -223,11 +276,48 @@ class EvidenceUnitAgenticChunker:
         return response.model_dump()
 
 
-def _json_messages(prompt: str) -> list[dict[str, Any]]:
-    return [
-        {"role": "system", "content": "Return a response matching the JSON schema."},
-        {"role": "user", "content": prompt},
-    ]
+def _restore_planning_rows(
+    result: _WindowResult,
+    window: list[EvidenceUnit],
+    originals: dict[str, EvidenceUnit],
+    indexes: dict[str, TableRowIndex],
+    max_units: int,
+) -> _WindowResult:
+    """Materialize row views from original evidence, never from clipped spans."""
+    views = {unit.id: unit for unit in window if PLAN_ROW_RANGES in unit.metadata}
+    if not views:
+        return result
+    chunks = []
+    for chunk in result.chunks:
+        items = []
+        for item in chunk.evidence.items:
+            unit_id = item.source_unit_ids[0] if len(item.source_unit_ids) == 1 else None
+            if unit_id not in views:
+                items.append(item)
+                continue
+            if unit_id not in indexes:
+                indexes[unit_id] = TableRowIndex(originals[unit_id].content)
+            ranges = _row_ranges_from_rows(item.content["rows"])
+            metadata = dict(item.metadata)
+            metadata.pop(PLAN_ROW_RANGES, None)
+            metadata["row_ranges"] = ranges
+            metadata["agentic_plan_split"] = {
+                "strategy": "input_budget_rows",
+                "row_ranges": views[unit_id].metadata[PLAN_ROW_RANGES],
+            }
+            if "table" in originals[unit_id].metadata:
+                metadata["table"] = originals[unit_id].metadata["table"]
+            items.append(EvidenceItem(
+                type=item.type, format=item.format,
+                content=indexes[unit_id].subset(_row_range_tuples(ranges)),
+                source_unit_ids=list(item.source_unit_ids), metadata=metadata,
+            ))
+        rebuilt = _rebuild_chunk_from_items(
+            chunk, items, originals, max_units_per_chunk=max_units,
+        )
+        rebuilt.metadata.pop(PLAN_ROW_RANGES, None)
+        chunks.append(rebuilt)
+    return _WindowResult(chunks, result.fallback_reason)
 
 
 def _windows(units: list[EvidenceUnit], size: int) -> list[list[EvidenceUnit]]:
@@ -768,6 +858,7 @@ def _split_large_table_chunks(
     max_tokens_per_chunk: int,
 ) -> list[RagChunk]:
     result: list[RagChunk] = []
+    plan_row_indexes: dict[str, TableRowIndex] = {}
     for chunk in chunks:
         if _llm_token_count(chunk.source.text) <= target_tokens_per_chunk:
             result.append(chunk)
@@ -779,6 +870,7 @@ def _split_large_table_chunks(
             max_units_per_chunk,
             target_tokens_per_chunk,
             max_tokens_per_chunk,
+            plan_row_indexes=plan_row_indexes,
         )
         result.extend(split_chunks)
     return result
@@ -790,7 +882,11 @@ def _split_large_table_chunk(
     max_units_per_chunk: int,
     target_tokens_per_chunk: int,
     max_tokens_per_chunk: int,
+    *,
+    plan_row_indexes: dict[str, TableRowIndex] | None = None,
 ) -> list[RagChunk]:
+    if plan_row_indexes is None:
+        plan_row_indexes = {}
     result: list[RagChunk] = []
     pending_context_items: list[EvidenceItem] = []
     original_token_count = _llm_token_count(chunk.source.text)
@@ -801,7 +897,15 @@ def _split_large_table_chunk(
             pending_context_items.append(item)
             continue
 
-        row_index = TableRowIndex(item.content)
+        if "agentic_plan_split" in item.metadata and len(item.source_unit_ids) == 1:
+            # A planning view already clipped spans at its boundaries. Further
+            # splits must use the original origins and spans, not those clips.
+            unit_id = item.source_unit_ids[0]
+            if unit_id not in plan_row_indexes:
+                plan_row_indexes[unit_id] = TableRowIndex(units_by_id[unit_id].content)
+            row_index = plan_row_indexes[unit_id]
+        else:
+            row_index = TableRowIndex(item.content)
         first_rows = _table_row_groups(item.content)[0]
         first_table_text = _table_split_source_text(
             item, _table_context_text(item, [], units_by_id), first_rows,

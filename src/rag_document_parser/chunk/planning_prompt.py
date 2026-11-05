@@ -6,6 +6,24 @@ from typing import Any
 
 from ..models import EvidenceUnit, RagChunk
 
+PLAN_ROW_RANGES = "plan_row_ranges"
+
+_ROW_WINDOW_RULES = """\
+입력 예산으로 나눈 표 구간:
+- table.row_ranges가 있는 unit은 원본 표의 해당 행 구간만 제공합니다.
+- 이 unit의 action "include"는 제공된 구간 전체만 포함합니다.
+- 이런 구간은 가능한 한 하나의 include 또는 연속 include_rows 항목으로 계획합니다.
+- 행마다 별도 plan item을 나열하지 않습니다. 최종 청크 크기에 따른 행 분할은 후처리가 담당합니다.
+- 원본 unit_id와 rows[].index를 그대로 사용하고 제공되지 않은 행을 참조하지 않습니다.
+"""
+
+
+def json_messages(prompt: str) -> list[dict[str, Any]]:
+    return [
+        {"role": "system", "content": "Return a response matching the JSON schema."},
+        {"role": "user", "content": prompt},
+    ]
+
 _PLAN_PROMPT = """\
 당신은 RAG 인덱싱용 EvidenceUnit chunk planner입니다.
 아래 unit 목록을 의미적으로 일관된 chunk plan으로 묶어 주세요.
@@ -100,6 +118,8 @@ def build_plan_prompt(
             "\ninclude_rows operation 예시:\n"
             f'{{"unit_id": {table_unit_id}, "action": "include_rows", "row_ranges": [{row_range}]}}\n'
         )
+    if any(PLAN_ROW_RANGES in unit.metadata for unit in window):
+        include_rows_example += "\n" + _ROW_WINDOW_RULES
     return _PLAN_PROMPT.replace("{max_units}", str(max_units)).replace(
         "{example_unit_id}", example_unit_id
     ).replace(
@@ -181,7 +201,20 @@ def _table_row_outline(unit: EvidenceUnit) -> dict[str, Any]:
     if unit.format != "structured_table" or not isinstance(unit.content, Mapping):
         return {}
     # The global source preview can hide later questions and actual row indexes.
-    return {"rows": [
+    bounded = PLAN_ROW_RANGES in unit.metadata
+    result = {"rows": _row_outline(unit.content.get("rows", []), include_colspan=bounded)}
+    if PLAN_ROW_RANGES in unit.metadata:
+        result["row_ranges"] = unit.metadata[PLAN_ROW_RANGES]
+        result["columns"] = [
+            {"id": column.get("id"), "text_preview": _truncate(str(column.get("text", "")), 120)}
+            for column in unit.content.get("columns", []) if isinstance(column, Mapping)
+        ]
+        result["header_rows"] = _row_outline(unit.content.get("header_rows", []), include_colspan=True)
+    return result
+
+
+def _row_outline(rows: list[Any], *, include_colspan: bool = False) -> list[dict[str, Any]]:
+    return [
         {
             "index": row.get("index"),
             "cells": [
@@ -189,12 +222,13 @@ def _table_row_outline(unit: EvidenceUnit) -> dict[str, Any]:
                     "column_id": cell.get("column_id"),
                     "rowspan": cell.get("rowspan", 1),
                     "text_preview": _truncate(str(cell.get("text", "")), 120),
+                    **({"colspan": cell.get("colspan", 1)} if include_colspan else {}),
                 }
                 for cell in row.get("cells", []) if isinstance(cell, Mapping)
             ],
         }
-        for row in unit.content.get("rows", []) if isinstance(row, Mapping)
-    ]}
+        for row in rows if isinstance(row, Mapping)
+    ]
 
 
 def _compact_table(table: Any) -> dict[str, Any]:
