@@ -14,6 +14,7 @@ from .contracts import BoundaryDecision, ChunkPlanResponse
 from .enrichment import Enricher, RagChunkEnricher
 from .materialization import (
     ChunkPlanMaterializer,
+    TableRowIndex,
     contiguous_ranges as _contiguous_ranges,
     dict_items as _dicts,
     fallback_keywords_from_text as _fallback_keywords_from_text,
@@ -800,13 +801,16 @@ def _split_large_table_chunk(
             pending_context_items.append(item)
             continue
 
+        row_index = TableRowIndex(item.content)
         first_rows = _table_row_groups(item.content)[0]
         first_table_text = _table_split_source_text(
             item, _table_context_text(item, [], units_by_id), first_rows,
+            row_index=row_index,
         )
         if len(first_rows) > 1 and _llm_token_count(first_table_text) > max_tokens_per_chunk:
             first_table_text = _table_split_source_text(
                 item, _table_context_text(item, [], units_by_id), first_rows[:1],
+                row_index=row_index,
             )
         pending_groups = _pending_groups_before_table(
             pending_context_items, first_table_text, units_by_id, max_tokens_per_chunk,
@@ -828,6 +832,7 @@ def _split_large_table_chunk(
             units_by_id,
             target_tokens_per_chunk,
             max_tokens_per_chunk,
+            row_index=row_index,
         )
         if len(table_splits) <= 1:
             pending_context_items.append(item)
@@ -956,8 +961,12 @@ def _split_table_item_by_rows(
     units_by_id: dict[str, EvidenceUnit],
     target_tokens_per_chunk: int,
     max_tokens_per_chunk: int,
+    *,
+    row_index: TableRowIndex | None = None,
 ) -> list[_TableRowSplit]:
     table = item.content if isinstance(item.content, Mapping) else {}
+    if row_index is None:
+        row_index = TableRowIndex(table)
     repeated_context_text = _table_context_text(item, context_items, units_by_id)
     first_context_text = _table_context_text(item, [], units_by_id)
     first_source_prefix_text = _table_pending_source_text(context_items, units_by_id)
@@ -969,7 +978,9 @@ def _split_table_item_by_rows(
     # group cannot fit under the hard budget, retaining carried cell context.
     budgeted_groups = []
     for group in groups:
-        if _llm_token_count(_table_split_source_text(item, repeated_context_text, group)) > max_tokens_per_chunk:
+        if _llm_token_count(_table_split_source_text(
+            item, repeated_context_text, group, row_index=row_index,
+        )) > max_tokens_per_chunk:
             budgeted_groups.extend([[row] for row in group])
         else:
             budgeted_groups.append(group)
@@ -983,6 +994,7 @@ def _split_table_item_by_rows(
             candidate_context_text,
             candidate_rows,
             source_prefix_text=candidate_source_prefix_text,
+            row_index=row_index,
         )
         if current_rows and _llm_token_count(candidate_text) > target_tokens_per_chunk:
             splits.append(
@@ -991,6 +1003,7 @@ def _split_table_item_by_rows(
                     current_rows,
                     first_context_text if not splits else repeated_context_text,
                     source_prefix_text=first_source_prefix_text if not splits else "",
+                    row_index=row_index,
                 )
             )
             current_rows = list(group)
@@ -1004,6 +1017,7 @@ def _split_table_item_by_rows(
                 current_rows,
                 first_context_text if not splits else repeated_context_text,
                 source_prefix_text=first_source_prefix_text if not splits else "",
+                row_index=row_index,
             )
         )
 
@@ -1097,13 +1111,11 @@ def _table_row_split(
     context_text: str,
     *,
     source_prefix_text: str = "",
+    row_index: TableRowIndex | None = None,
 ) -> _TableRowSplit:
     table = item.content if isinstance(item.content, Mapping) else {}
     row_ranges = _row_ranges_from_rows(rows)
-    subset = _table_subset(
-        table,
-        [(start, end) for start, end in _row_range_tuples(row_ranges)],
-    )
+    subset = (row_index or TableRowIndex(table)).subset(_row_range_tuples(row_ranges))
     subset_rows = [
         row
         for row in subset.get("rows", [])
@@ -1239,10 +1251,11 @@ def _table_split_source_text(
     rows: list[dict[str, Any]],
     *,
     source_prefix_text: str = "",
+    row_index: TableRowIndex | None = None,
 ) -> str:
     table = item.content if isinstance(item.content, Mapping) else {}
     row_ranges = _row_ranges_from_rows(rows)
-    subset = _table_subset(table, _row_range_tuples(row_ranges))
+    subset = (row_index or TableRowIndex(table)).subset(_row_range_tuples(row_ranges))
     lines = [
         f"table rows: {_row_ranges_label(row_ranges)}",
     ]
