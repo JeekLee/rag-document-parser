@@ -19,8 +19,6 @@ def q(local: str) -> str:
 def paragraph_text(paragraph: ET.Element) -> str:
     parts: list[str] = []
     for run in paragraph.findall(q("run")):
-        if run.find(q("tbl")) is not None or run.find(q("pic")) is not None:
-            continue
         parts.append(run_text(run))
     return "".join(parts)
 

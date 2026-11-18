@@ -35,6 +35,15 @@ class DrawingResult:
 _DrawingResult = DrawingResult
 
 
+def is_drawing_element(element: ET.Element) -> bool:
+    local = _local_name(element.tag)
+    return (
+        local in _DRAWING_NODE_TAGS
+        or local in _DRAWING_CONNECTOR_TAGS
+        or local in _UNSUPPORTED_DRAWING_TAGS
+    )
+
+
 @dataclass(frozen=True)
 class HwpxDiagramBuilder:
     """Builds structured diagrams from HWPX drawing and table geometry."""

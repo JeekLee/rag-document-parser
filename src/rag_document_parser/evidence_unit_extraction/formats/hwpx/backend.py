@@ -41,7 +41,7 @@ class HwpxBackend:
             for section_name in package_reader.section_names(archive):
                 root = ET.fromstring(archive.read(section_name))
                 for paragraph in expand_layout_tables(root.findall(q("p"))):
-                    table = paragraph.find(f".//{q('tbl')}")
+                    table = paragraph.find(f"{q('run')}/{q('tbl')}")
                     if table is not None:
                         structured = table_extractor.extract(
                             table,
@@ -107,7 +107,7 @@ class HwpxBackend:
                             block_index += 1
                         continue
 
-                    picture = paragraph.find(f".//{q('pic')}")
+                    picture = paragraph.find(f"{q('run')}/{q('pic')}")
                     if picture is not None:
                         image = package_reader.extract_image(
                             picture,

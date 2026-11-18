@@ -213,6 +213,9 @@ Notes:
 - HWP5/HWPX 1×1 layout tables containing nested tables are unwrapped into
   ordered body blocks before chunking. Nested tables inside multi-cell data
   tables remain cell evidence; plain text-only boxes keep their existing behavior.
+- HWPX paragraphs preserve text alongside tables, pictures and grouped drawings
+  in document order. Within table cells, text after a nested object is stored as
+  a `text` child so it follows that object in evidence and source text.
 - HWP5/HWPX header inference requires actual subdivisions of merged header
   groups. Repeated merged data rows and populated cells outside those groups
   remain in the table body.
