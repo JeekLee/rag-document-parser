@@ -91,7 +91,7 @@ def test_layout_tables_unwrap_recursively_but_keep_data_cell_nesting(parse_layou
     parsed = parse_layout(wrapper("시작", wrapper("중첩 테두리", real), "끝"))
     assert [u.type for u in parsed.units] == ["text", "text", "table", "text"]
     nested = parsed.units[2].content["rows"][0]["cells"][1]["children"]
-    assert len(nested) == 1 and nested[0]["type"] == "table"
+    assert [child["type"] for child in nested if child["type"] != "text"] == ["table"]
     assert "안쪽0" in parsed.units[2].source.text
 
 
@@ -163,7 +163,7 @@ def test_merged_cell_covering_a_larger_grid_is_not_unwrapped(rowspan, colspan):
     xml = hwpx_table(wrapper(data_table())).replace('rowSpan="1" colSpan="1"',
                                                   f'rowSpan="{rowspan}" colSpan="{colspan}"', 1)
     paragraph = ET.fromstring(f'<hp:p xmlns:hp="{HP}"><hp:run>{xml}</hp:run></hp:p>')
-    assert list(expand_xml([paragraph])) == [paragraph]
+    assert [ET.tostring(part) for part in expand_xml([paragraph])] == [ET.tostring(paragraph)]
 
 
 def test_hwpx_layout_keeps_inline_images_in_order_and_assets_once():

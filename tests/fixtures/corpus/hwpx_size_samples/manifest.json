@@ -66,9 +66,10 @@
       "sha256": "2ecc8e2a25a7a59256f9d18124887f8c3d9bf65221128ebbcd36440bebe92125",
       "expected": {
         "units": {
-          "total": 1,
+          "total": 2,
           "by_type": {
-            "table": 1
+            "table": 1,
+            "text": 1
           }
         },
         "assets": 0,
@@ -86,9 +87,10 @@
       "sha256": "f719562b1eb7bf2687163cb71bb087df39fed7f93f61c9adcd45215cb883cfdd",
       "expected": {
         "units": {
-          "total": 1,
+          "total": 2,
           "by_type": {
-            "table": 1
+            "table": 1,
+            "text": 1
           }
         },
         "assets": 0,
@@ -106,9 +108,10 @@
       "sha256": "5851f556257df121650dd82a800c7d220b87133f43e9269b5ede122be3fd5acf",
       "expected": {
         "units": {
-          "total": 1,
+          "total": 2,
           "by_type": {
-            "table": 1
+            "table": 1,
+            "text": 1
           }
         },
         "assets": 0,
@@ -231,14 +234,15 @@
       "sha256": "5764b72e400726bb4fda3efba593c40e8e71889c1fe52fe6bbb058c7f30f3178",
       "expected": {
         "units": {
-          "total": 132,
+          "total": 194,
           "by_type": {
-            "image": 31,
-            "table": 23,
-            "text": 78
+            "diagram": 3,
+            "image": 46,
+            "table": 36,
+            "text": 109
           }
         },
-        "assets": 32,
+        "assets": 60,
         "quality_warnings": []
       }
     },
@@ -253,11 +257,11 @@
       "sha256": "544859502819aeb45c5aa8381178cdc8bcfabc64d13c4f3b8ce6d90b3de91527",
       "expected": {
         "units": {
-          "total": 846,
+          "total": 855,
           "by_type": {
             "diagram": 1,
-            "table": 69,
-            "text": 776
+            "table": 71,
+            "text": 783
           }
         },
         "assets": 0,
@@ -275,10 +279,10 @@
       "sha256": "793afe1f78ed6ca76dfdebc88b041fddc1525a878822b5a886dd02b41f148a6f",
       "expected": {
         "units": {
-          "total": 385,
+          "total": 397,
           "by_type": {
-            "table": 115,
-            "text": 270
+            "table": 116,
+            "text": 281
           }
         },
         "assets": 0,
@@ -303,10 +307,10 @@
       "sha256": "ce9267d30fa93465d3f1ccd9febcf74b6baa102bcb7fd5ddb150964496e0f463",
       "expected": {
         "units": {
-          "total": 69,
+          "total": 75,
           "by_type": {
             "table": 23,
-            "text": 46
+            "text": 52
           }
         },
         "assets": 2,
@@ -324,10 +328,10 @@
       "sha256": "aa95d7c0ae31b9c6b8d1c1dd498530a2a437eedb056b0209a71b46faeadc77ef",
       "expected": {
         "units": {
-          "total": 64,
+          "total": 70,
           "by_type": {
             "table": 22,
-            "text": 42
+            "text": 48
           }
         },
         "assets": 2,

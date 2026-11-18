@@ -83,6 +83,10 @@ def _nested_child_source_texts(children: object) -> list[str]:
             continue
         child_type = child.get("type", child.get("kind"))
         content = child.get("content")
+        if child_type == "text" and isinstance(content, str):
+            if content:
+                result.append(content)
+            continue
         if child_type == "table" and isinstance(content, Mapping):
             result.append("nested table: " + _inline_table_source(content))
             continue

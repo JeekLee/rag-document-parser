@@ -56,6 +56,9 @@ def test_run_text_does_not_collect_nested_structural_text_or_references():
     )
 
     assert run_text(run) == "앞\n뒤끝"
+    paragraph = ET.Element(f"{{{HP}}}p")
+    paragraph.append(run)
+    assert paragraph_text(paragraph) == "앞\n뒤끝"
 
 
 def test_paragraph_text_preserves_mixed_content_across_runs():

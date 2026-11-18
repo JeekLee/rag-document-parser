@@ -11,6 +11,7 @@ from ...schema import structured_table as _structured_table_content
 from ...table_headers import HeaderCellSpan, refines_header_groups
 from .diagram import HwpxDiagramBuilder
 from .package_reader import HwpxPackageReader
+from .paragraph_parts import paragraph_parts
 from .xml_utils import paragraph_text as _paragraph_text
 from .xml_utils import q as _q
 
@@ -293,8 +294,8 @@ def _table_cell(
     texts: list[str] = []
     children: list[dict[str, object]] = []
     if sub_list is not None:
-        for paragraph in sub_list.findall(_q("p")):
-            nested = paragraph.find(f".//{_q('tbl')}")
+        for paragraph in paragraph_parts(sub_list.findall(_q("p"))):
+            nested = paragraph.find(f"{_q('run')}/{_q('tbl')}")
             if nested is not None:
                 children.append(
                     {
@@ -313,7 +314,7 @@ def _table_cell(
             drawing = _paragraph_drawing(paragraph, warnings)
             if drawing is not None:
                 if drawing.single_text is not None:
-                    texts.append(drawing.single_text)
+                    _append_cell_text(texts, children, drawing.single_text)
                     continue
                 if drawing.structured is not None:
                     children.append(
@@ -324,7 +325,7 @@ def _table_cell(
                         }
                     )
                     continue
-            for picture in paragraph.findall(f".//{_q('pic')}"):
+            for picture in paragraph.findall(f"{_q('run')}/{_q('pic')}"):
                 image = _extract_image(
                     picture,
                     z,
@@ -345,7 +346,7 @@ def _table_cell(
                 )
             text = _paragraph_text(paragraph).strip()
             if text:
-                texts.append(text)
+                _append_cell_text(texts, children, text)
     return {
         "text": " ".join(texts),
         "row_addr": _cell_addr(cell, "rowAddr", row_index),
@@ -354,6 +355,17 @@ def _table_cell(
         "colspan": _cell_span(cell, "colSpan"),
         "children": children,
     }
+
+
+def _append_cell_text(
+    texts: list[str], children: list[dict[str, object]], text: str,
+) -> None:
+    # Cell text is projected before children. Text following an object must
+    # therefore remain an ordered child instead of moving ahead of that object.
+    if children:
+        children.append({"type": "text", "format": "plain", "content": text})
+    else:
+        texts.append(text)
 
 
 def _cell_span(cell: ET.Element, name: str) -> int:

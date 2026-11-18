@@ -851,6 +851,130 @@ def test_hwpx_single_text_box_stays_text_unit():
     assert parsed.quality_warnings == []
 
 
+@pytest.mark.parametrize("separate_runs", [False, True])
+@pytest.mark.parametrize("in_cell", [False, True])
+def test_hwpx_mixed_objects_preserve_text_and_document_order(separate_runs, in_cell):
+    from rag_document_parser import HwpxBackend
+
+    nested = _table([_text_cell("내부 제목")], [_text_cell("내부 값")])
+    second_table = _table([_text_cell("다른 제목")], [_text_cell("다른 값")])
+    picture = '<hp:pic><hp:img binaryItemIDRef="img1"/></hp:pic>'
+    parts = [
+        "<hp:t>표 앞</hp:t>", nested, "<hp:t>표 뒤 그림 앞</hp:t>",
+        picture, "<hp:t>그림 뒤</hp:t>", picture, second_table, "<hp:t>마지막</hp:t>",
+    ]
+    content = ("</hp:run><hp:run>" if separate_runs else "").join(parts)
+    if in_cell:
+        content = _table(
+            [_text_cell("열")],
+            [_table_cell(content)],
+        )
+    xml = f'<hp:sec xmlns:hp="{HP}"><hp:p><hp:run>{content}</hp:run></hp:p></hp:sec>'
+
+    parsed = HwpxBackend().parse(_make_hwpx(xml, image_bytes=PNG_BYTES), ".hwpx")
+
+    if in_cell:
+        cell = parsed.units[0].content["rows"][0]["cells"][0]
+        assert cell["text"] == "표 앞"
+        assert [c["type"] for c in cell["children"]] == [
+            "table", "text", "image", "text", "image", "table", "text",
+        ]
+        source = parsed.units[0].source.text
+    else:
+        assert [unit.type for unit in parsed.units] == [
+            "text", "table", "text", "image", "text", "image", "table", "text",
+        ]
+        assert [u.id for u in parsed.units] == [f"b{i}" for i in range(1, 9)]
+        assert [u.metadata["table"]["table_id"] for u in parsed.units if u.type == "table"] == ["t1", "t2"]
+        source = "\n".join(unit.source.text for unit in parsed.units)
+    markers = [
+        "표 앞", "내부 값", "표 뒤 그림 앞", "image: img-0001", "그림 뒤",
+        "image: img-0002", "다른 값", "마지막",
+    ]
+    assert [source.index(marker) for marker in markers] == sorted(source.index(marker) for marker in markers)
+    assert all(source.count(marker) == 1 for marker in markers)
+    assert len(parsed.assets) == 2
+
+
+@pytest.mark.parametrize("in_cell", [False, True])
+def test_hwpx_grouped_picture_and_drawing_preserve_outer_text(in_cell):
+    from rag_document_parser import HwpxBackend
+
+    content = (
+        '<hp:t>도형 앞</hp:t><hp:container><hp:container>'
+        '<hp:pic><hp:img binaryItemIDRef="img1"/></hp:pic>'
+        f'{_rect("도형 글자", x=10, y=10, width=100, height=100)}'
+        '</hp:container></hp:container><hp:t>도형 뒤</hp:t>'
+    )
+    if in_cell:
+        content = _table([_text_cell("열")], [_table_cell(content)])
+    xml = f'<hp:sec xmlns:hp="{HP}"><hp:p><hp:run>{content}</hp:run></hp:p></hp:sec>'
+
+    parsed = HwpxBackend().parse(_make_hwpx(xml, image_bytes=PNG_BYTES), ".hwpx")
+
+    source = "\n".join(unit.source.text for unit in parsed.units)
+    markers = ["도형 앞", "image: img-0001", "도형 글자", "도형 뒤"]
+    assert all(source.count(marker) == 1 for marker in markers)
+    assert [source.index(marker) for marker in markers] == sorted(source.index(marker) for marker in markers)
+    assert len(parsed.assets) == 1
+
+
+def test_hwpx_text_survives_broken_picture_and_empty_table():
+    from rag_document_parser import HwpxBackend
+
+    xml = (
+        f'<hp:sec xmlns:hp="{HP}"><hp:p><hp:run>'
+        '<hp:t>앞</hp:t><hp:pic><hp:img binaryItemIDRef="missing"/></hp:pic>'
+        '<hp:t>중간</hp:t><hp:tbl/><hp:t>뒤</hp:t>'
+        '</hp:run></hp:p></hp:sec>'
+    )
+    parsed = HwpxBackend().parse(_make_hwpx(xml), ".hwpx")
+
+    assert [unit.source.text for unit in parsed.units] == ["앞", "중간", "뒤"]
+    assert len(parsed.quality_warnings) == 1
+
+
+@pytest.mark.parametrize("grouped", [False, True])
+def test_hwpx_drawings_keep_connections_between_surrounding_text(grouped):
+    from rag_document_parser import HwpxBackend
+
+    shapes = [
+        _rect("시작", x=100, y=100, width=200, height=100),
+        _line(x=300, y=145, width=200, height=10, arrow=True),
+        _rect("종료", x=500, y=100, width=200, height=100),
+    ]
+    if grouped:
+        drawing = f'<hp:run><hp:container>{"".join(shapes)}</hp:container></hp:run>'
+    else:
+        drawing = "".join(f"<hp:run>{shape}<hp:t/></hp:run>" for shape in shapes)
+    xml = f'<hp:sec xmlns:hp="{HP}"><hp:p>{_run("앞")}{drawing}{_run("뒤")}</hp:p></hp:sec>'
+
+    parsed = HwpxBackend().parse(_make_hwpx(xml), ".hwpx")
+
+    assert [unit.type for unit in parsed.units] == ["text", "diagram", "text"]
+    assert parsed.units[0].content == "앞"
+    assert parsed.units[2].content == "뒤"
+    diagram = parsed.units[1].content
+    assert [node["text"] for node in diagram["nodes"]] == ["시작", "종료"]
+    assert [(edge["from"], edge["to"]) for edge in diagram["edges"]] == [("n1", "n2")]
+
+
+def test_hwpx_note_objects_are_not_hoisted_into_body():
+    from rag_document_parser import HwpxBackend
+
+    note_table = _table([_text_cell("각주 내부")])
+    xml = (
+        f'<hp:sec xmlns:hp="{HP}"><hp:p><hp:run><hp:t>본문 앞</hp:t>'
+        f'<hp:ctrl><hp:footNote><hp:subList><hp:p><hp:run>{note_table}'
+        '</hp:run></hp:p></hp:subList></hp:footNote></hp:ctrl>'
+        '<hp:t> 뒤</hp:t></hp:run></hp:p></hp:sec>'
+    )
+
+    parsed = HwpxBackend().parse(_make_hwpx(xml), ".hwpx")
+
+    assert [unit.source.text for unit in parsed.units] == ["본문 앞 뒤"]
+
+
 def test_hwpx_table_cell_diagram_is_preserved_as_nested_evidence():
     from rag_document_parser import HwpxBackend
 

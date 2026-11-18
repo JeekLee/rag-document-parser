@@ -325,7 +325,11 @@ def test_hwpx_medical_fee_form_table_preserves_blank_body_rows():
     assert path.is_file()
 
     parsed = HwpxBackend().parse(path.read_bytes(), ".hwpx")
-    table = next(unit for unit in parsed.units if unit.id == "b705")
+    table = next(
+        unit for unit in parsed.units
+        if unit.type == "table" and "수급권자주민등록번호" in unit.source.text
+        and "명 세 서 일련번호" in unit.source.text
+    )
 
     assert len(table.content["columns"]) == 100
     assert len(table.content["header_rows"]) == 15
